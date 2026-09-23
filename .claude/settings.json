@@ -25,9 +25,6 @@
     "Stop": [
       { "hooks": [ { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/stop-verify.sh" } ] }
     ],
-    "Notification": [
-      { "hooks": [ { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/notify-macos.sh" } ] }
-    ],
     "PreCompact": [
       { "hooks": [ { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-compact-snapshot.sh" } ] }
     ]
