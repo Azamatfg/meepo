@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# Claude Code (personal / per-session)
+.claude/settings.local.json
+.claude/worktrees/
+
+# Secrets
+.env
+.env.*
+
+# Xcode / SwiftPM
+build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+.build/
+.swiftpm/
+
+# XcodeGen output (regenerate: xcodegen generate)
+Meepo.xcodeproj/
