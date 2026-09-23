@@ -106,6 +106,12 @@ private struct UnitCard: View {
                     ContextBar(fraction: session.id.flatMap(store.contextFraction(for:)))
                     NumberPlate(text: TokenFormat.short(session.id.flatMap { store.sessionUsage[$0]?.tokensToday } ?? 0))
                         .help("Tokens today (input + output + cache)")
+                    if let run = store.ciState(for: session) {
+                        Text(run.failed ? "CI ✗" : run.isRunning ? "CI …" : "CI ✓")
+                            .font(Fonts.mono(11))
+                            .foregroundStyle(run.failed ? Tokens.danger : run.isRunning ? Tokens.warn : Tokens.selectionSoft)
+                            .help("\(run.workflowName): \(run.conclusion ?? run.status)")
+                    }
                 }
             }
             Spacer(minLength: 0)

@@ -44,6 +44,15 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    /// Plain notice (CI results); clicking it just opens Meepo.
+    func postText(_ title: String, _ body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+    }
+
     /// Claude answers in Markdown; a notification shows raw text, so drop the markup and blank lines.
     nonisolated static func plainText(_ markdown: String, limit: Int = 180) -> String {
         var text = markdown

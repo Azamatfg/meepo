@@ -58,6 +58,8 @@ final class AppStore {
         stages = Self.load([Stage].self, Self.stagesKey, from: defaults) ?? Stage.defaults
         relayThreshold = defaults.object(forKey: Self.relayThresholdKey) as? Double ?? 0.7
         remoteControlForNewSessions = defaults.bool(forKey: Self.remoteControlKey)
+        autofixProjectIds = Set((defaults.array(forKey: Self.autofixKey) as? [Int64]) ?? [])
+        fixAttempts = (defaults.dictionary(forKey: Self.fixAttemptsKey) as? [String: Int]) ?? [:]
         screenshotHotKey = defaults.string(forKey: Self.shotHotKeyKey) ?? "⌘⇧6"
         // Processes restart with Meepo, so statuses from the previous run are stale.
         _ = try? db.write { db in
@@ -447,6 +449,88 @@ final class AppStore {
             bridgeError = error.localizedDescription
         }
         refreshProjects()
+    }
+
+    // MARK: CI guard (SPEC module 9)
+
+    private static let autofixKey = "ciAutofixProjects"
+    private static let fixAttemptsKey = "ciFixAttempts"
+
+    /// Latest run per workflow + branch, per project.
+    private(set) var ciRuns: [Int64: [CIRun]] = [:]
+    /// Projects whose failed CI Meepo reruns and fixes on its own; the rest only get notified.
+    var autofixProjectIds: Set<Int64> = [] {
+        didSet { defaults.set(Array(autofixProjectIds), forKey: Self.autofixKey) }
+    }
+    private var fixAttempts: [String: Int] = [:] {
+        didSet { defaults.set(fixAttempts, forKey: Self.fixAttemptsKey) }
+    }
+    /// Run attempts already seen as failed, so each failure is handled once.
+    private var handledFailures: Set<String> = []
+    private var isCIPrimed = false
+    /// Injected in tests; otherwise GitHub Actions via the user's `gh`.
+    var ciProvider: (any CIProvider)?
+    /// (title, body) for a macOS notification; set by the app.
+    var onCINotice: ((String, String) -> Void)?
+
+    /// A tool from the user's login shell PATH (GUI apps don't see Homebrew's bin).
+    func toolPath(_ name: String) -> String? {
+        let path = loginEnvironment?.environment["PATH"] ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+        return path.split(separator: ":").map { "\($0)/\(name)" }.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    /// Polls CI and acts on new failures. The first pass after launch only records history.
+    func refreshCI() async {
+        if ciProvider == nil, let gh = toolPath("gh") { ciProvider = GitHubActions(gh: gh) }
+        guard let provider = ciProvider else { return }
+        for project in projects where provider.handles(project) {
+            guard let projectId = project.id else { continue }
+            let runs = await provider.runs(in: project.path).sorted { $0.createdAt > $1.createdAt }
+            var latest: [String: CIRun] = [:]
+            for run in runs where latest[run.key] == nil { latest[run.key] = run }
+            ciRuns[projectId] = latest.values.sorted { $0.createdAt > $1.createdAt }
+            for run in latest.values {
+                let attemptsKey = "\(projectId)|\(run.key)"
+                if run.succeeded { fixAttempts[attemptsKey] = nil }
+                guard run.failed, handledFailures.insert("\(run.id)#\(run.attempt)").inserted, isCIPrimed else { continue }
+                let label = "\(project.name) · \(run.headBranch)"
+                switch CIGuard.action(for: run, fixAttempts: fixAttempts[attemptsKey] ?? 0,
+                                      autofix: autofixProjectIds.contains(projectId)) {
+                case .rerun:
+                    _ = await provider.rerunFailed(run, in: project.path)
+                    onCINotice?("CI failed — rerunning once", "\(label): \(run.workflowName)")
+                case .fix:
+                    await startCIFix(run, in: project, provider: provider)
+                case .giveUp:
+                    onCINotice?("CI still failing — gave up", "\(label): \(run.workflowName) after \(CIGuard.maxFixAttempts) fixes")
+                case .reportDeploy:
+                    onCINotice?("Deploy failed", "\(label): \(run.workflowName) — not fixed automatically")
+                case .none:
+                    onCINotice?("CI failed", "\(label): \(run.workflowName) — FIX in the CI tab")
+                }
+            }
+        }
+        isCIPrimed = true
+    }
+
+    /// Fix session in its own worktree with the failed step's log and guardrails in its first prompt.
+    func startCIFix(_ run: CIRun, in project: Project, provider: (any CIProvider)? = nil) async {
+        guard let provider = provider ?? ciProvider, let projectId = project.id else { return }
+        let log = await provider.failedLog(run, in: project.path)
+        fixAttempts["\(projectId)|\(run.key)", default: 0] += 1
+        let name = "ci-fix-\(ClaudeLauncher.worktreeSlug(run.headBranch))-\(run.databaseId % 100_000)"
+        do {
+            try createSession(projectId: projectId, model: nil, prompt: CIGuard.fixPrompt(run, log: log), worktree: name)
+            onCINotice?("Fixing CI", "\(project.name) · \(run.headBranch): \(run.workflowName) — new session \(name)")
+        } catch {
+            bridgeError = error.localizedDescription
+        }
+    }
+
+    /// Worst CI state on the session's branch: failed, running, passed; nil when CI knows nothing about it.
+    func ciState(for session: Session) -> CIRun? {
+        let runs = (ciRuns[session.projectId] ?? []).filter { $0.headBranch == session.branch }
+        return runs.first(where: \.failed) ?? runs.first(where: \.isRunning) ?? runs.first(where: \.succeeded)
     }
 
     // MARK: Tasks, morning and evening (SPEC module 7)

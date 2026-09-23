@@ -34,6 +34,12 @@ struct MeepoApp: App {
                     await services.requestNotificationPermission(store: store)
                     services.bindScreenshotHotKey(store.screenshotHotKey, store: store)
                     await store.restoreSessions()
+                    Task { // CI changes slowly; once a minute is plenty and cheap on the GitHub API
+                        while !Task.isCancelled {
+                            await store.refreshCI()
+                            try? await Task.sleep(for: .seconds(60))
+                        }
+                    }
                     // JSONL is appended continuously; Stop events also trigger a refresh.
                     while !Task.isCancelled {
                         await store.refreshUsage()
@@ -118,6 +124,7 @@ final class LiveServices {
             }
         }
         store.refreshBridge()
+        store.onCINotice = { [weak self] title, body in self?.notifier.postText(title, body) }
         notifier.onOpen = { [weak store] id in
             store?.selectedSessionId = id
             NSApp.activate(ignoringOtherApps: true)

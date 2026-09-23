@@ -6,7 +6,7 @@ struct EventFeedView: View {
 
     @State private var tab = Tab.events
 
-    enum Tab: String, CaseIterable { case events = "EVENTS", tasks = "TASKS", ports = "PORTS" }
+    enum Tab: String, CaseIterable { case events = "EVENTS", tasks = "TASKS", ci = "CI", ports = "PORTS" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -22,6 +22,7 @@ struct EventFeedView: View {
             switch tab {
             case .events: feed
             case .tasks: TasksView()
+            case .ci: CIView()
             case .ports: PortsView()
             }
         }
@@ -129,5 +130,67 @@ private struct PortsView: View {
             return (dir, "\(project.name) · \(session.branch ?? "")")
         }
         return candidates.filter { cwd == $0.0 || cwd.hasPrefix($0.0 + "/") }.max { $0.0.count < $1.0.count }?.1
+    }
+}
+
+/// CI per project (SPEC module 9): latest run per workflow and branch, rerun / fix, autofix switch.
+private struct CIView: View {
+    @Environment(AppStore.self) private var store
+
+    var body: some View {
+        let projects = store.projects.filter { store.ciRuns[$0.id!] != nil }
+        List {
+            if projects.isEmpty {
+                Text("No CI yet. GitHub projects are checked once a minute through gh.")
+                    .font(.caption).foregroundStyle(Tokens.textDim).listRowBackground(Tokens.dirt)
+            }
+            ForEach(projects) { project in
+                HStack {
+                    Text(project.name.uppercased()).font(Fonts.title(16)).foregroundStyle(Tokens.text)
+                    Spacer()
+                    let on = store.autofixProjectIds.contains(project.id!)
+                    Button(on ? "AUTOFIX ON" : "AUTOFIX OFF") {
+                        if on { store.autofixProjectIds.remove(project.id!) } else { store.autofixProjectIds.insert(project.id!) }
+                    }
+                    .buttonStyle(PixelButtonStyle())
+                    .help("On: rerun a failure once, then fix it in a new session with a PR (max 3). Deploy workflows only notify.")
+                }
+                .listRowBackground(Tokens.dirt)
+                ForEach((store.ciRuns[project.id!] ?? []).prefix(8)) { run in
+                    CIRunRow(run: run, project: project).listRowBackground(Tokens.dirt)
+                }
+            }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+    }
+}
+
+private struct CIRunRow: View {
+    @Environment(AppStore.self) private var store
+    let run: CIRun
+    let project: Project
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text(run.failed ? "✗" : run.isRunning ? "…" : run.succeeded ? "✓" : "–")
+                    .font(Fonts.mono(13))
+                    .foregroundStyle(run.failed ? Tokens.danger : run.isRunning ? Tokens.warn : Tokens.selectionSoft)
+                Text(run.workflowName).foregroundStyle(Tokens.text).lineLimit(1)
+                if run.isDeploy { Text("DEPLOY").font(.caption2).foregroundStyle(Tokens.warn) }
+                Spacer()
+                Link("↗", destination: URL(string: run.url)!).foregroundStyle(Tokens.screen)
+            }
+            Text(run.headBranch).font(Fonts.mono(11)).foregroundStyle(Tokens.textDim).lineLimit(1)
+            if run.failed && !run.isDeploy {
+                HStack {
+                    Button("RERUN") { Task { _ = await store.ciProvider?.rerunFailed(run, in: project.path) } }
+                    Button("FIX") { Task { await store.startCIFix(run, in: project) } }
+                        .help("New session in a worktree with the failed step's log; it opens a PR, never pushes to main")
+                }
+                .buttonStyle(PixelButtonStyle())
+            }
+        }
     }
 }
