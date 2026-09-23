@@ -10,6 +10,7 @@ struct MeepoApp: App {
     private let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
     init() {
+        Fonts.register()
         do {
             let db = isTesting ? try DatabaseQueue() : try AppDatabase.openShared()
             if isTesting { try AppDatabase.migrator.migrate(db) }
@@ -33,22 +34,24 @@ struct MeepoApp: App {
                     await store.restoreSessions()
                 }
         }
+        // Own Win95-style title bar in MainView instead of the system one (design §5).
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(after: .appInfo) {
                 if store.isBridgeInstalled {
-                    Button("Удалить мост хуков") { store.uninstallBridge() }
+                    Button("Remove Hook Bridge") { store.uninstallBridge() }
                 } else {
-                    Button("Установить мост хуков") { store.installBridge() }
+                    Button("Install Hook Bridge") { store.installBridge() }
                 }
             }
             CommandGroup(replacing: .newItem) {
-                Button("Новая сессия") { store.presentNewSession() }
+                Button("New Session") { store.presentNewSession() }
                     .keyboardShortcut("n")
                     .disabled(store.projects.isEmpty)
             }
-            CommandMenu("Сессии") {
+            CommandMenu("Sessions") {
                 ForEach(1...9, id: \.self) { number in
-                    Button("Сессия \(number)") { store.selectSession(number: number) }
+                    Button("Session \(number)") { store.selectSession(number: number) }
                         .keyboardShortcut(KeyEquivalent(Character("\(number)")))
                 }
             }
@@ -61,7 +64,7 @@ struct MeepoApp: App {
             // Badge: sessions waiting for the user.
             let waiting = store.waitingCount
             HStack {
-                Image(systemName: waiting > 0 ? "square.stack.3d.up.fill" : "square.stack.3d.up")
+                Image(nsImage: MenuBarIcon.hood)
                 if waiting > 0 { Text("\(waiting)") }
             }
         }

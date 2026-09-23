@@ -56,7 +56,7 @@ final class EventServer {
         listener.stateUpdateHandler = { [weak self] state in
             guard case .failed(let error) = state else { return }
             MainActor.assumeIsolated {
-                self?.onFailure?("Порт \(port) недоступен: \(error.localizedDescription)")
+                self?.onFailure?("Port \(port) unavailable: \(error.localizedDescription)")
             }
         }
         listener.start(queue: .main)

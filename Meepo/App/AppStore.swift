@@ -8,7 +8,7 @@ enum AddProjectError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .alreadyAdded(let name): "Проект «\(name)» уже добавлен"
+        case .alreadyAdded(let name): "Project “\(name)” is already added"
         }
     }
 }
@@ -22,6 +22,8 @@ final class AppStore {
     /// First prompt of a freshly created session; used once, never stored.
     private var initialPrompts: [Int64: String] = [:]
     private var loginEnvironment: ClaudeLauncher.LoginEnvironment?
+    /// Sessions wait for the login environment (~0.6 s at launch) so they never race into the shell fallback.
+    private var isLoginResolved = false
 
     private(set) var projects: [Project] = []
     private(set) var sessions: [Session] = []
@@ -65,6 +67,7 @@ final class AppStore {
     /// in the background so switching to it is instant.
     func restoreSessions() async {
         loginEnvironment = await Task.detached { ClaudeLauncher.resolveLoginEnvironment() }.value
+        isLoginResolved = true
         for session in orderedSessions {
             if let id = session.id { startTerminalIfNeeded(id) }
         }
@@ -223,9 +226,10 @@ final class AppStore {
 
     /// Starts `claude` for the session: `--resume` if Claude Code already has its transcript
     /// (e.g. after Meepo restarted), otherwise a fresh start with the same session id.
-    /// Before `restoreSessions` resolves the login environment, falls back to a shell launch.
+    /// Waits for `restoreSessions` to resolve the login environment (it then starts every session);
+    /// only if that resolution failed does claude go through the shell fallback.
     func startTerminalIfNeeded(_ sessionId: Int64) {
-        guard terminals.view(for: sessionId) == nil,
+        guard isLoginResolved, terminals.view(for: sessionId) == nil,
               let session = sessions.first(where: { $0.id == sessionId }),
               let project = project(for: session) else { return }
         terminals.start(session, in: project.path, initialPrompt: initialPrompts.removeValue(forKey: sessionId),

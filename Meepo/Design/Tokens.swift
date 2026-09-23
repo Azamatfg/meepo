@@ -1,29 +1,36 @@
 import AppKit
 import SwiftUI
 
-/// All app colors live here so the palette can be swapped in one place.
-/// Placeholder palette from SPEC.md §5 (dark values); light values are derived.
+/// All app colors, from design/MEEPO_DESIGN.md §3 (sampled from assets/ref). Change the palette here only.
+/// The look is a fixed dark "RTS map", so there are no light variants.
 enum Tokens {
-    static let background = Color(light: 0xECE7DC, dark: 0x1B1F24) // stone
-    static let surface    = Color(light: 0xDCD5C6, dark: 0x262B32)
-    static let text       = Color(light: 0x1B1F24, dark: 0xECE7DC)
-    static let gold       = Color(light: 0xA8832F, dark: 0xC9A24A)
-    static let moss       = Color(light: 0x3E6A2C, dark: 0x4E7A3A)
-    static let glow       = Color(light: 0x2A8F88, dark: 0x3FB8AF)
-    static let fire       = Color(light: 0xC45F1E, dark: 0xE0762F)
-    static let danger     = Color(light: 0x9E2B25, dark: 0xD0554B)
+    static let grass         = Color(hex: 0x2C4B1E) // panel background
+    static let grassLight    = Color(hex: 0x427F41) // hovers, light areas
+    static let grassDeep     = Color(hex: 0x233624) // empty states, dark areas
+    static let dirt          = Color(hex: 0x3F2F1D) // paths, dividers, list underlays
+    static let hood          = Color(hex: 0x7B4B2C) // secondary warm accent
+    static let selection     = Color(hex: 0x11F10F) // selected / active only
+    static let selectionSoft = Color(hex: 0x44922D) // unselected rings, inactive bars
+    static let alert         = Color(hex: 0xF16704) // "waiting for you" only
+    static let screen        = Color(hex: 0x1EC8EC) // terminal and code
+    static let screenDeep    = Color(hex: 0x336C81)
+    static let frameLight    = Color(hex: 0xB3B3B2)
+    static let frameMid      = Color(hex: 0x636363)
+    static let frameDark     = Color(hex: 0x404040)
+    static let terminalBg    = Color(hex: 0x0E1710)
+    static let danger        = Color(hex: 0xE0402A)
+    static let warn          = Color(hex: 0xF2C230) // time to sync
+    static let text          = Color(hex: 0xE8F0E0)
+    static let textDim       = Color(hex: 0xE8F0E0).opacity(0.65)
 }
 
 extension Color {
-    init(light: UInt32, dark: UInt32) {
-        self.init(nsColor: NSColor(name: nil) { appearance in
-            let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            return NSColor(hex: isDark ? dark : light)
-        })
+    init(hex: UInt32) {
+        self.init(nsColor: NSColor(hex: hex))
     }
 }
 
-private extension NSColor {
+extension NSColor {
     convenience init(hex: UInt32) {
         self.init(
             srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
@@ -31,5 +38,23 @@ private extension NSColor {
             blue: CGFloat(hex & 0xFF) / 255,
             alpha: 1
         )
+    }
+}
+
+/// Bundled OFL fonts (Meepo/Resources/Fonts): Silkscreen for titles/badges/buttons (16 pt and up only),
+/// JetBrains Mono for terminal, branches and numbers; the system font for small print.
+enum Fonts {
+    static func register() {
+        for url in Bundle.main.urls(forResourcesWithExtension: "ttf", subdirectory: nil) ?? [] {
+            CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+        }
+    }
+
+    static func title(_ size: CGFloat = 16) -> Font { .custom("Silkscreen", size: max(size, 16)) }
+    static func mono(_ size: CGFloat = 13) -> Font { .custom("JetBrains Mono", size: size) }
+
+    static func terminal(_ size: CGFloat = 13) -> NSFont {
+        NSFontManager.shared.font(withFamily: "JetBrains Mono", traits: [], weight: 5, size: size)
+            ?? .monospacedSystemFont(ofSize: size, weight: .regular)
     }
 }

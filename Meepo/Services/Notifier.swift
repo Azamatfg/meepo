@@ -30,10 +30,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let content = UNMutableNotificationContent()
         content.title = [project?.name, session.branch].compactMap { $0 }.joined(separator: " · ")
         content.subtitle = switch attention {
-        case .permission: "Ждёт разрешения"
-        case .question: "Задаёт вопрос"
-        case .done: "Готово — ждёт тебя"
-        case .error: "Ошибка"
+        case .permission: "Needs permission"
+        case .question: "Asks a question"
+        case .done: "Done — waiting for you"
+        case .error: "Error"
         }
         content.body = Self.plainText(summary ?? "")
         content.sound = .default

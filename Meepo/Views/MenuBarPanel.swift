@@ -7,8 +7,8 @@ struct MenuBarPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if store.sessions.isEmpty {
-                Text("Нет активных сессий")
-                    .foregroundStyle(Tokens.text.opacity(0.6))
+                Text("No active sessions")
+                    .foregroundStyle(Tokens.textDim)
             }
             ForEach(store.orderedSessions) { session in
                 Button {
@@ -20,12 +20,16 @@ struct MenuBarPanel: View {
                 .buttonStyle(.plain)
             }
             Divider()
-            Button("Открыть Meepo") { open() }
-            Button("Выйти") { NSApp.terminate(nil) }
+            HStack {
+                Button("Open Meepo") { open() }
+                Button("Quit") { NSApp.terminate(nil) }
+            }
+            .buttonStyle(PixelButtonStyle())
         }
         .padding(12)
-        .frame(width: 260)
-        .background(Tokens.background)
+        .frame(width: 280)
+        .background(Tokens.grass)
+        .preferredColorScheme(.dark)
     }
 
     private func open() {

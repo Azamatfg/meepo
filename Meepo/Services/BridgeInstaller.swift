@@ -5,7 +5,7 @@ enum BridgeError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unreadableSettings(let path): "Не удалось прочитать \(path) как JSON — файл не изменён"
+        case .unreadableSettings(let path): "Couldn’t read \(path) as JSON — file left unchanged"
         }
     }
 }
@@ -30,7 +30,7 @@ struct BridgeInstaller {
     static let script = """
     #!/bin/bash
     # Meepo hook bridge: forwards Claude Code hook events to Meepo (https://github.com/Azamatfg/meepo).
-    # Installed by Meepo; remove it from Meepo ("Удалить мост"), not by hand.
+    # Installed by Meepo; remove it from Meepo ("Remove Hook Bridge"), not by hand.
     [ -z "$MEEPO_SESSION_ID" ] && exit 0
     TOKEN=$(cat "$HOME/.meepo/token" 2>/dev/null) || exit 0
     curl -s -m 2 -X POST "http://127.0.0.1:${MEEPO_PORT:-47800}/event" \\

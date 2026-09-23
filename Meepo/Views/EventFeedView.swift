@@ -5,19 +5,35 @@ struct EventFeedView: View {
     @Environment(AppStore.self) private var store
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("EVENTS")
+                .font(Fonts.title(16))
+                .foregroundStyle(Tokens.text)
+                .padding(8)
+            Rectangle().fill(Tokens.grassDeep).frame(height: 2)
+            feed
+        }
+        .background(Tokens.dirt)
+    }
+
+    @ViewBuilder
+    private var feed: some View {
         Group {
             if store.selectedEvents.isEmpty {
-                Text(store.isBridgeInstalled ? "Событий пока нет" : "Установите мост, чтобы видеть события")
-                    .foregroundStyle(Tokens.text.opacity(0.6))
+                Text(store.isBridgeInstalled ? "No events yet" : "Install the bridge to see events")
+                    .foregroundStyle(Tokens.textDim)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(store.selectedEvents) { event in
                     EventRow(event: event)
+                        .listRowBackground(Tokens.dirt)
+                        .listRowSeparatorTint(Tokens.grassDeep)
                 }
                 .listStyle(.plain)
+                .scrollContentBackground(.hidden)
             }
         }
-        .background(Tokens.background)
+        .background(Tokens.dirt)
     }
 }
 
@@ -32,13 +48,13 @@ private struct EventRow: View {
                     .foregroundStyle(event.isFailure ? Tokens.danger : Tokens.text)
                 Spacer()
                 Text(event.createdAt, format: .dateTime.hour().minute().second())
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(Tokens.text.opacity(0.5))
+                    .font(Fonts.mono(11))
+                    .foregroundStyle(Tokens.textDim)
             }
             if let summary = event.summary, !summary.isEmpty {
-                Text(summary)
+                Text(Notifier.plainText(summary, limit: 300))
                     .font(.caption)
-                    .foregroundStyle(Tokens.text.opacity(0.7))
+                    .foregroundStyle(Tokens.textDim)
                     .lineLimit(3)
             }
         }
@@ -47,18 +63,18 @@ private struct EventRow: View {
 
     private static func title(for name: String) -> String {
         switch name {
-        case "SessionStart": "Сессия запущена"
-        case "SessionEnd": "Сессия завершена"
-        case "UserPromptSubmit": "Промпт"
-        case "PreToolUse": "Инструмент"
-        case "PostToolUse": "Инструмент выполнен"
-        case "PostToolUseFailure": "Инструмент упал"
-        case "PermissionRequest": "Запрос разрешения"
-        case "PermissionDenied": "Отказано"
-        case "Notification": "Уведомление"
-        case "Stop": "Ответ готов"
-        case "StopFailure": "Сбой ответа"
-        case "PreCompact": "Сжатие контекста"
+        case "SessionStart": "Session started"
+        case "SessionEnd": "Session ended"
+        case "UserPromptSubmit": "Prompt"
+        case "PreToolUse": "Tool"
+        case "PostToolUse": "Tool done"
+        case "PostToolUseFailure": "Tool failed"
+        case "PermissionRequest": "Permission request"
+        case "PermissionDenied": "Denied"
+        case "Notification": "Notification"
+        case "Stop": "Reply ready"
+        case "StopFailure": "Reply failed"
+        case "PreCompact": "Compacting context"
         default: name
         }
     }

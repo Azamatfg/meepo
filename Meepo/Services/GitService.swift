@@ -5,7 +5,7 @@ enum GitError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .notARepository(let path): "Папка не является git-репозиторием: \(path)"
+        case .notARepository(let path): "Not a git repository: \(path)"
         }
     }
 }

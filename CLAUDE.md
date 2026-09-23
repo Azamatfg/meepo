@@ -58,5 +58,5 @@ Subagents: `code-reviewer`, `security-auditor`.
 ## Conventions
 
 - Коммиты на английском: feat/fix/chore prefix; коммит/push — только по явной просьбе
-- UI на русском
+- UI на английском (решение 2026-09-23: пиксельный шрифт Silkscreen без кириллицы); общение с пользователем — по-русски
 - Следуй правилам из `~/.claude/CLAUDE.md` (simplicity, surgical changes)
