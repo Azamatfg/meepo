@@ -54,6 +54,9 @@ struct StagePanel: View {
                     }
             }
             Spacer()
+            Button("PHONE") { store.type("/remote-control\r", into: session.id!) }
+                .buttonStyle(PixelButtonStyle())
+                .help("Turn on Claude Code Remote Control: follow and answer this session from the Claude app or claude.ai")
             if let port = session.portBase {
                 NumberPlate(text: "PORT \(port)").help("PORT / MEEPO_PORT_BASE for this session: \(port)–\(port + Ports.blockSize - 1)")
             }

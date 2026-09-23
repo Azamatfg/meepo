@@ -12,7 +12,7 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     func start(_ session: Session, projectPath: String, initialPrompt: String?,
-               login: ClaudeLauncher.LoginEnvironment?) {
+               login: ClaudeLauncher.LoginEnvironment?, remoteControlName: String? = nil) {
         guard let id = session.id, views[id] == nil else { return }
         let (directory, createWorktree) = ClaudeLauncher.location(worktreeName: session.worktreeName, projectPath: projectPath)
         // Sessions start before they're on screen; a zero frame would start claude in a 0-column terminal.
@@ -28,6 +28,7 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
             model: session.model,
             effort: session.effort,
             worktree: createWorktree,
+            remoteControl: remoteControlName,
             prompt: initialPrompt
         )
         // Lets meepo-bridge.sh tag every hook event with this session, even after /clear changes the claude id.

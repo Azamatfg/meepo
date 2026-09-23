@@ -9,10 +9,13 @@ enum ClaudeLauncher {
 
     /// New session: `--session-id <uuid>` so Meepo knows the id up front.
     /// Existing transcript: `--resume <uuid>`; the initial prompt is never re-sent.
+    /// `remoteControl`: session name shown in the Claude app / claude.ai (`--remote-control <name>`),
+    /// so the session can be followed and answered from the phone. Verified on 2.1.280.
     static func claudeArguments(sessionId: String, resume: Bool, model: String?, effort: String? = nil,
-                                worktree: String? = nil, prompt: String?) -> [String] {
+                                worktree: String? = nil, remoteControl: String? = nil, prompt: String?) -> [String] {
         var args = resume ? ["--resume", sessionId] : ["--session-id", sessionId]
         if let worktree { args += ["--worktree", worktree] }
+        if let remoteControl { args += ["--remote-control", remoteControl] }
         if let model, !model.isEmpty { args += ["--model", model] }
         if let effort, !effort.isEmpty { args += ["--effort", effort] }
         if !resume, let prompt, !prompt.isEmpty { args.append(prompt) }

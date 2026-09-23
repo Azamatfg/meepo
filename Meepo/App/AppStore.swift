@@ -57,6 +57,7 @@ final class AppStore {
         contextWindows = Self.load([String: Int].self, Self.contextWindowsKey, from: defaults) ?? [:]
         stages = Self.load([Stage].self, Self.stagesKey, from: defaults) ?? Stage.defaults
         relayThreshold = defaults.object(forKey: Self.relayThresholdKey) as? Double ?? 0.7
+        remoteControlForNewSessions = defaults.bool(forKey: Self.remoteControlKey)
         // Processes restart with Meepo, so statuses from the previous run are stale.
         _ = try? db.write { db in
             try db.execute(sql: "UPDATE session SET status = ?", arguments: [SessionStatus.idle])
@@ -275,11 +276,20 @@ final class AppStore {
     }
 
     /// Models seen in the last 30 days, for the context window settings.
+    /// "<synthetic>" is Claude Code's marker for messages that never hit the API, not a model.
     func recentModels() -> [String] {
         (try? db.read { db in
-            try String.fetchAll(db, sql: "SELECT DISTINCT model FROM usageRecord WHERE createdAt >= ? ORDER BY model",
+            try String.fetchAll(db, sql: "SELECT DISTINCT model FROM usageRecord WHERE createdAt >= ? AND model NOT LIKE '<%' ORDER BY model",
                                 arguments: [Date.now.addingTimeInterval(-30 * 24 * 3600)])
         }) ?? []
+    }
+
+    /// Aliases `claude --model` documents (latest of each family), then full names the user has actually used.
+    static let modelAliases = ["fable", "opus", "sonnet", "haiku"]
+
+    /// ("" = Claude Code's default, value for --model, title).
+    func modelChoices() -> [(value: String, title: String)] {
+        [("", "Default")] + Self.modelAliases.map { ($0, $0.capitalized) } + recentModels().map { ($0, $0) }
     }
 
     // MARK: Stages and relay (SPEC module 4)
@@ -290,6 +300,14 @@ final class AppStore {
     /// The user's workflow, set once for all projects.
     var stages: [Stage] {
         didSet { defaults.set(try? JSONEncoder().encode(stages), forKey: Self.stagesKey) }
+    }
+
+    private static let remoteControlKey = "remoteControl"
+
+    /// Start sessions with Claude Code's Remote Control (phone app / claude.ai). Off by default:
+    /// it needs a claude.ai login and shares the session with the user's Claude account.
+    var remoteControlForNewSessions: Bool {
+        didSet { defaults.set(remoteControlForNewSessions, forKey: Self.remoteControlKey) }
     }
 
     /// Context fill at which a session is marked "time to sync" and offers a relay.
@@ -566,7 +584,8 @@ final class AppStore {
         if existing.portBase == nil { assignPortBase(sessionId) } // sessions from before module 5
         guard let session = sessions.first(where: { $0.id == sessionId }) else { return }
         terminals.start(session, projectPath: project.path, initialPrompt: initialPrompts.removeValue(forKey: sessionId),
-                        login: loginEnvironment)
+                        login: loginEnvironment,
+                        remoteControlName: remoteControlForNewSessions ? [project.name, session.branch].compactMap { $0 }.joined(separator: " · ") : nil)
         runningSessionIds.insert(sessionId)
     }
 

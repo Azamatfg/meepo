@@ -10,8 +10,6 @@ struct NewSessionSheet: View {
     @State private var useWorktree = false
     @State private var featureName = ""
 
-    /// Aliases accepted by `claude --model`; empty = Claude Code's default.
-    private let models = [("", "Default"), ("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -39,9 +37,9 @@ struct NewSessionSheet: View {
                     .sunken()
             }
             FieldRow("Model") {
-                PixelMenu(selection: models.first { $0.0 == model }?.1 ?? "Default") {
-                    ForEach(models, id: \.0) { option in
-                        Button(option.1) { model = option.0 }
+                PixelMenu(selection: store.modelChoices().first { $0.value == model }?.title ?? model) {
+                    ForEach(store.modelChoices(), id: \.value) { option in
+                        Button(option.title) { model = option.value }
                     }
                 }
             }

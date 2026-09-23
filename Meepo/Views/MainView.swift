@@ -83,6 +83,8 @@ private struct TitleBar: View {
                 .padding(.leading, 12)
             Button(isFeedShown ? "Hide Events" : "Events") { isFeedShown.toggle() }
             Button("Stats") { isStatsShown = true }
+            SettingsLink { Text("Settings") }
+                .help("Context windows, relay threshold, Remote Control, stages (⌘,)")
             if store.waitingCount > 0 {
                 Text("! \(store.waitingCount)")
                     .font(Fonts.title(16))

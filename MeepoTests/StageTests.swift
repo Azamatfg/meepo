@@ -24,6 +24,11 @@ final class CommandCatalogTests: XCTestCase {
         XCTAssertEqual(byName["qa"]!, "QA via browser")
     }
 
+    func testRemoteControlFlagCarriesReadableName() {
+        XCTAssertEqual(ClaudeLauncher.claudeArguments(sessionId: "id", resume: true, model: nil, remoteControl: "MDS · main", prompt: "x"),
+                       ["--resume", "id", "--remote-control", "MDS · main"])
+    }
+
     func testEffortFlag() {
         XCTAssertEqual(ClaudeLauncher.claudeArguments(sessionId: "id", resume: false, model: "opus", effort: "max", prompt: nil),
                        ["--session-id", "id", "--model", "opus", "--effort", "max"])

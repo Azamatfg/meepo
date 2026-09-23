@@ -11,7 +11,7 @@ final class NavigationTests: XCTestCase {
     override func setUp() async throws {
         db = try DatabaseQueue()
         try AppDatabase.migrator.migrate(db)
-        store = AppStore(db: db)
+        store = makeIsolatedStore(db: db)
     }
 
     /// Adds repos named so that sidebar order (by name) differs from insertion order.
@@ -92,7 +92,7 @@ final class NavigationTests: XCTestCase {
         let p = try addProjects(["alpha"])[0]
         try store.createSession(projectId: p, model: "haiku", prompt: nil)
         let before = store.sessions
-        let restarted = AppStore(db: db)
+        let restarted = makeIsolatedStore(db: db)
         XCTAssertEqual(restarted.sessions.map(\.claudeSessionId), before.map(\.claudeSessionId))
         XCTAssertEqual(restarted.selectedSessionId, before.first?.id)
     }

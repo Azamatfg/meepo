@@ -111,6 +111,11 @@ struct SettingsView: View {
                     }
                 }
             }
+            FieldRow("Remote Control for new sessions") {
+                Button(store.remoteControlForNewSessions ? "ON" : "OFF") { store.remoteControlForNewSessions.toggle() }
+                    .buttonStyle(PixelButtonStyle())
+                    .help("claude --remote-control \"project · branch\": sessions show up in the Claude app and claude.ai (needs a claude.ai login)")
+            }
             StagesEditor()
         }
         .padding(16)
@@ -124,7 +129,6 @@ struct SettingsView: View {
 /// Workflow order and the model/effort a new session gets in each stage.
 private struct StagesEditor: View {
     @Environment(AppStore.self) private var store
-    private let models = [("", "Default"), ("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")]
     private let efforts = ["", "low", "medium", "high", "xhigh", "max"]
 
     var body: some View {
@@ -139,9 +143,10 @@ private struct StagesEditor: View {
                 HStack(spacing: 6) {
                     Text(stage.command.map { "/\($0)" } ?? "code").font(Fonts.mono(13)).foregroundStyle(Tokens.text)
                         .frame(width: 90, alignment: .leading)
-                    PixelMenu(selection: models.first { $0.0 == (stage.model ?? "") }?.1 ?? stage.model ?? "Default") {
-                        ForEach(models, id: \.0) { option in
-                            Button(option.1) { store.stages[index].model = option.0.isEmpty ? nil : option.0 }
+                    let choices = store.modelChoices()
+                    PixelMenu(selection: choices.first { $0.value == (stage.model ?? "") }?.title ?? stage.model ?? "Default") {
+                        ForEach(choices, id: \.value) { option in
+                            Button(option.title) { store.stages[index].model = option.value.isEmpty ? nil : option.value }
                         }
                     }
                     PixelMenu(selection: stage.effort ?? "effort") {

@@ -238,8 +238,7 @@ final class HookHandlingTests: XCTestCase {
     override func setUp() async throws {
         db = try DatabaseQueue()
         try AppDatabase.migrator.migrate(db)
-        let tmp = FileManager.default.temporaryDirectory.appending(path: "hh-\(UUID().uuidString)")
-        store = AppStore(db: db, bridge: BridgeInstaller(settingsURL: tmp.appending(path: "s.json"), meepoHome: tmp))
+        store = makeIsolatedStore(db: db)
         try store.addProject(at: try makeTempRepo())
         try store.createSession(projectId: store.projects[0].id!, model: nil, prompt: nil)
         sessionId = store.sessions[0].id
@@ -283,7 +282,7 @@ final class HookHandlingTests: XCTestCase {
 
     func testStatusesResetWhenMeepoRestarts() {
         store.handleHookEvent(event("PermissionRequest"), sessionId: sessionId)
-        let restarted = AppStore(db: db, bridge: BridgeInstaller(settingsURL: URL(filePath: "/nonexistent"), meepoHome: URL(filePath: "/nonexistent")))
+        let restarted = makeIsolatedStore(db: db)
         XCTAssertEqual(restarted.sessions[0].status, .idle)
         XCTAssertEqual(restarted.waitingCount, 0)
     }
@@ -358,8 +357,7 @@ final class QuestionTests: XCTestCase {
     func testQuestionNotifiesAsQuestionNotAsDone() throws {
         let db = try DatabaseQueue()
         try AppDatabase.migrator.migrate(db)
-        let tmp = FileManager.default.temporaryDirectory.appending(path: "q-\(UUID().uuidString)")
-        let store = AppStore(db: db, bridge: BridgeInstaller(settingsURL: tmp.appending(path: "s.json"), meepoHome: tmp))
+        let store = makeIsolatedStore(db: db)
         try store.addProject(at: try makeTempRepo())
         try store.createSession(projectId: store.projects[0].id!, model: nil, prompt: nil)
         let id = store.sessions[0].id!

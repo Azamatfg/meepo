@@ -137,7 +137,7 @@ final class SessionUsageTests: XCTestCase {
         let tmp = FileManager.default.temporaryDirectory.appending(path: "su-\(UUID().uuidString)")
         let root = tmp.appending(path: "projects")
         let store = AppStore(db: db, bridge: BridgeInstaller(settingsURL: tmp.appending(path: "s.json"), meepoHome: tmp),
-                             usageRoot: root)
+                             usageRoot: root, defaults: UserDefaults(suiteName: "meepo-tests-\(UUID().uuidString)")!)
         let repo = try makeTempRepo()
         try store.addProject(at: repo)
         try store.createSession(projectId: store.projects[0].id!, model: nil, prompt: nil)

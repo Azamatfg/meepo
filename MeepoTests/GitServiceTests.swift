@@ -13,6 +13,14 @@ func makeTempRepo(remote: String? = nil) throws -> URL {
     return dir
 }
 
+/// A store that never touches the user's settings, ~/.claude or ~/.meepo (tests run inside the app).
+@MainActor
+func makeIsolatedStore(db: DatabaseQueue) -> AppStore {
+    let tmp = FileManager.default.temporaryDirectory.appending(path: "store-\(UUID().uuidString)")
+    return AppStore(db: db, bridge: BridgeInstaller(settingsURL: tmp.appending(path: "settings.json"), meepoHome: tmp),
+                    usageRoot: tmp, defaults: UserDefaults(suiteName: "meepo-tests-\(UUID().uuidString)")!)
+}
+
 func git(_ args: [String], in dir: URL) throws {
     let p = Process()
     p.executableURL = URL(filePath: "/usr/bin/git")
@@ -54,7 +62,7 @@ final class AppStoreTests: XCTestCase {
     private func makeStore() throws -> AppStore {
         let db = try DatabaseQueue()
         try AppDatabase.migrator.migrate(db)
-        return AppStore(db: db)
+        return makeIsolatedStore(db: db)
     }
 
     func testAddProjectStoresRootNameAndRemote() throws {
