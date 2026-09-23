@@ -116,6 +116,13 @@ struct SettingsView: View {
                     .buttonStyle(PixelButtonStyle())
                     .help("claude --remote-control \"project · branch\": sessions show up in the Claude app and claude.ai (needs a claude.ai login)")
             }
+            FieldRow("Screenshot to a session") {
+                PixelMenu(selection: store.screenshotHotKey.isEmpty ? "OFF" : store.screenshotHotKey) {
+                    ForEach(GlobalHotKey.combos) { combo in Button(combo.title) { store.screenshotHotKey = combo.title } }
+                    Button("Off") { store.screenshotHotKey = "" }
+                }
+                .help("Global hotkey: select an area, pick a session with ↑↓, Enter pastes the image into it")
+            }
             StagesEditor()
         }
         .padding(16)

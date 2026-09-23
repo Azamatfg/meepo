@@ -58,6 +58,7 @@ final class AppStore {
         stages = Self.load([Stage].self, Self.stagesKey, from: defaults) ?? Stage.defaults
         relayThreshold = defaults.object(forKey: Self.relayThresholdKey) as? Double ?? 0.7
         remoteControlForNewSessions = defaults.bool(forKey: Self.remoteControlKey)
+        screenshotHotKey = defaults.string(forKey: Self.shotHotKeyKey) ?? "⌘⇧6"
         // Processes restart with Meepo, so statuses from the previous run are stale.
         _ = try? db.write { db in
             try db.execute(sql: "UPDATE session SET status = ?", arguments: [SessionStatus.idle])
@@ -308,6 +309,12 @@ final class AppStore {
     }
 
     private static let remoteControlKey = "remoteControl"
+    private static let shotHotKeyKey = "screenshotHotKey"
+
+    /// Global screenshot hotkey (a `GlobalHotKey.combos` title); "" = off.
+    var screenshotHotKey: String {
+        didSet { defaults.set(screenshotHotKey, forKey: Self.shotHotKeyKey) }
+    }
 
     /// Start sessions with Claude Code's Remote Control (phone app / claude.ai). Off by default:
     /// it needs a claude.ai login and shares the session with the user's Claude account.

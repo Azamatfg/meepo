@@ -27,10 +27,12 @@ struct MeepoApp: App {
         Window("Meepo", id: "main") {
             MainView()
                 .environment(store)
+                .onChange(of: store.screenshotHotKey) { services?.bindScreenshotHotKey(store.screenshotHotKey, store: store) }
                 .task {
                     guard let services else { return }
                     // Asking in App.init is too early: macOS answers "not allowed" before launch finishes.
                     await services.requestNotificationPermission(store: store)
+                    services.bindScreenshotHotKey(store.screenshotHotKey, store: store)
                     await store.restoreSessions()
                     // JSONL is appended continuously; Stop events also trigger a refresh.
                     while !Task.isCancelled {
@@ -87,12 +89,26 @@ struct MeepoApp: App {
 final class LiveServices {
     private let notifier = Notifier()
     private var server: EventServer?
+    private let screenshots: ScreenshotFlow
+    private var shotHotKey: GlobalHotKey?
+
+    /// (Re)binds the screenshot hotkey from Settings.
+    func bindScreenshotHotKey(_ title: String, store: AppStore) {
+        shotHotKey?.unregister()
+        shotHotKey = GlobalHotKey.combos.first { $0.title == title }.map { combo in
+            GlobalHotKey(combo) { [weak self] in self?.screenshots.start() }
+        }
+        if let status = shotHotKey?.status, status != noErr {
+            store.bridgeError = "Screenshot hotkey \(title) is taken (error \(status)). Pick another in Settings."
+        }
+    }
 
     func requestNotificationPermission(store: AppStore) async {
         store.notificationsAllowed = await notifier.requestAuthorization()
     }
 
     init(store: AppStore) {
+        screenshots = ScreenshotFlow(store: store)
         // The user may have just turned notifications on in System Settings and come back.
         NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
                                                object: nil, queue: .main) { [weak self, weak store] _ in
