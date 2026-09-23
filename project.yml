@@ -1,0 +1,58 @@
+name: Meepo
+options:
+  bundleIdPrefix: com.azamatfg
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+packages:
+  GRDB:
+    url: https://github.com/groue/GRDB.swift
+    from: 7.11.1
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    exactVersion: 1.19.0
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: 1
+    CODE_SIGN_IDENTITY: "-"
+
+targets:
+  Meepo:
+    type: application
+    platform: macOS
+    sources: [Meepo]
+    dependencies:
+      - package: GRDB
+      - package: SwiftTerm
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.azamatfg.meepo
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Meepo
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        ENABLE_HARDENED_RUNTIME: YES
+        # No App Sandbox: Meepo spawns claude/git/gh and reads ~/.claude.
+
+  MeepoTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [MeepoTests]
+    dependencies:
+      - target: Meepo
+      - package: GRDB
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  Meepo:
+    build:
+      targets:
+        Meepo: all
+        MeepoTests: [test]
+    test:
+      targets: [MeepoTests]
