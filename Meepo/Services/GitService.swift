@@ -57,6 +57,13 @@ enum GitService {
         return nil
     }
 
+    /// "abc1234 subject" of today's commits on all local branches (worktrees included), newest first.
+    static func commits(since start: Date, in path: String, limit: Int = 30) -> [String] {
+        let since = ISO8601DateFormatter().string(from: start)
+        return run(["log", "--all", "--no-merges", "--since=\(since)", "--format=%h %s", "-n", String(limit)], in: path)?
+            .split(separator: "\n").map(String.init) ?? []
+    }
+
     static func hasUncommittedChanges(in path: String) -> Bool {
         run(["status", "--porcelain"], in: path) != nil
     }

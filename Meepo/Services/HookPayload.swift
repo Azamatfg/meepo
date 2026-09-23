@@ -15,6 +15,8 @@ struct HookPayload: Equatable {
     var lastAssistantMessage: String?
     /// Slash command name from UserPromptExpansion, e.g. "plan" for "/plan add login".
     var commandName: String?
+    /// TODO/FIXME/HACK/XXX lines an Edit/Write/MultiEdit put into a code file.
+    var todoLines: [String] = []
 
     init(event: String, claudeSessionId: String, source: String? = nil, notificationType: String? = nil,
          message: String? = nil, prompt: String? = nil, toolName: String? = nil, toolTarget: String? = nil,
@@ -37,6 +39,9 @@ struct HookPayload: Equatable {
               let sessionId = obj["session_id"] as? String else { return nil }
         let input = obj["tool_input"] as? [String: Any]
         let question = (input?["questions"] as? [[String: Any]])?.first?["question"] as? String
+        let written = [input?["new_string"], input?["content"]].compactMap { $0 as? String }
+            + ((input?["edits"] as? [[String: Any]]) ?? []).compactMap { $0["new_string"] as? String }
+        let path = input?["file_path"] as? String
         self.init(
             event: event,
             claudeSessionId: sessionId,
@@ -50,6 +55,17 @@ struct HookPayload: Equatable {
             lastAssistantMessage: obj["last_assistant_message"] as? String,
             commandName: obj["command_name"] as? String
         )
+        if event == "PostToolUse", let path { todoLines = Self.todoLines(in: written, file: path) }
+    }
+
+    /// Same rule as the common todo-tracker hook: markers in code files only (not docs, not task lists).
+    static func todoLines(in texts: [String], file: String) -> [String] {
+        let code: Set = ["go", "ts", "tsx", "js", "jsx", "py", "dart", "swift", "kt", "kts", "rs", "java", "rb", "php",
+                         "c", "h", "cc", "cpp", "hpp", "m", "mm", "cs", "vue", "svelte", "sql", "sh", "scala", "ex", "exs"]
+        guard code.contains(URL(filePath: file).pathExtension.lowercased()) else { return [] }
+        return texts.flatMap { $0.split(separator: "\n") }
+            .filter { $0.range(of: #"\b(TODO|FIXME|HACK|XXX)\b"#, options: .regularExpression) != nil }
+            .map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
     /// Claude asks the user a multiple-choice question: it arrives as a permission request for this tool.

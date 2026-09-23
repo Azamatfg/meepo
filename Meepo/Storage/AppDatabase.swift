@@ -84,6 +84,27 @@ enum AppDatabase {
             }
         }
 
+        migrator.registerMigration("v7-tasks") { db in
+            try db.create(table: "task") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.belongsTo("project", onDelete: .setNull)
+                t.column("text", .text).notNull()
+                t.column("note", .text).notNull().defaults(to: "")
+                t.column("attachments", .jsonText).notNull().defaults(to: "[]")
+                t.column("isDone", .boolean).notNull().defaults(to: false)
+                t.column("createdAt", .datetime).notNull()
+                t.column("doneAt", .datetime)
+                t.belongsTo("session", onDelete: .setNull)
+            }
+            try db.create(table: "agentTodo") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.belongsTo("project", onDelete: .cascade).notNull()
+                t.column("file", .text).notNull()
+                t.column("line", .text).notNull()
+                t.column("createdAt", .datetime).notNull().indexed()
+            }
+        }
+
         return migrator
     }
 }

@@ -10,10 +10,13 @@ struct MainView: View {
     @State private var isPickingFolder = false
     @State private var addError: String?
     @State private var isStatsShown = false
+    @State private var isMorningShown = false
+    @State private var isDayShown = false
 
     var body: some View {
         VStack(spacing: 0) {
-            TitleBar(isFeedShown: $isFeedShown, isStatsShown: $isStatsShown) { isPickingFolder = true }
+            TitleBar(isFeedShown: $isFeedShown, isStatsShown: $isStatsShown,
+                     isMorningShown: $isMorningShown, isDayShown: $isDayShown) { isPickingFolder = true }
             HStack(spacing: 6) {
                 SidebarView()
                     .frame(width: 290)
@@ -48,6 +51,8 @@ struct MainView: View {
             NewSessionSheet()
         }
         .sheet(isPresented: $isStatsShown) { StatsView() }
+        .sheet(isPresented: $isMorningShown) { MorningView() }
+        .sheet(isPresented: $isDayShown) { DayView() }
         .fileImporter(isPresented: $isPickingFolder, allowedContentTypes: [.folder]) { result in
             do {
                 try store.addProject(at: result.get())
@@ -71,6 +76,8 @@ private struct TitleBar: View {
     @Environment(AppStore.self) private var store
     @Binding var isFeedShown: Bool
     @Binding var isStatsShown: Bool
+    @Binding var isMorningShown: Bool
+    @Binding var isDayShown: Bool
     let onAddProject: () -> Void
     @State private var isFullScreen = false
 
@@ -82,6 +89,10 @@ private struct TitleBar: View {
             Button("+ Project", action: onAddProject)
                 .padding(.leading, 12)
             Button(isFeedShown ? "Hide Events" : "Events") { isFeedShown.toggle() }
+            Button("Morning") { isMorningShown = true }
+                .help("Start today's sessions from the task list")
+            Button("Day") { isDayShown = true }
+                .help("End-of-day summary per project")
             Button("Stats") { isStatsShown = true }
             SettingsLink { Text("Settings") }
                 .help("Context windows, relay threshold, Remote Control, stages (⌘,)")

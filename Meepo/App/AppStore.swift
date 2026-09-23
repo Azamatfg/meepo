@@ -65,6 +65,7 @@ final class AppStore {
                            arguments: [Date.now.addingTimeInterval(-Self.eventRetention)])
         }
         reload()
+        reloadTasks()
         selectedSessionId = orderedSessions.first?.id
         isBridgeInstalled = bridge.isInstalled()
         terminals.onExit = { [weak self] id in
@@ -102,6 +103,9 @@ final class AppStore {
         // `/clear` starts a new conversation in the same process; resume that one after a restart.
         if payload.event == "SessionStart" { session.claudeSessionId = payload.claudeSessionId }
         if let stage = nextStage(after: session.stage, for: payload) { session.stage = stage }
+        let todos = payload.todoLines.map {
+            AgentTodo(projectId: session.projectId, file: payload.toolTarget ?? "", line: $0, createdAt: .now)
+        }
         // A Notification is a delayed echo (~6 s) of a prompt already reported by PermissionRequest;
         // it must not turn a question (waiting for input) into a permission request.
         let isEcho = payload.event == "Notification" && (old == .waitingInput || old == .waitingPermission)
@@ -113,6 +117,7 @@ final class AppStore {
             try db.write { db in
                 try session.update(db)
                 try event.insert(db)
+                for var todo in todos { try todo.insert(db) }
             }
         } catch {
             return nil
@@ -435,6 +440,153 @@ final class AppStore {
             bridgeError = error.localizedDescription
         }
         refreshProjects()
+    }
+
+    // MARK: Tasks, morning and evening (SPEC module 7)
+
+    private(set) var tasks: [TaskItem] = []
+
+    func reloadTasks() {
+        tasks = (try? db.read { try TaskItem.order(Column("isDone"), Column("createdAt")).fetchAll($0) }) ?? []
+    }
+
+    @discardableResult
+    func addTask(_ text: String, projectId: Int64?) -> TaskItem? {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        var task = TaskItem(projectId: projectId, text: text)
+        try? db.write { try task.insert($0) }
+        reloadTasks()
+        return task
+    }
+
+    func updateTask(_ task: TaskItem) {
+        var task = task
+        task.doneAt = task.isDone ? (task.doneAt ?? .now) : nil
+        try? db.write { try task.update($0) }
+        reloadTasks()
+    }
+
+    func deleteTask(_ id: Int64) {
+        _ = try? db.write { try TaskItem.deleteOne($0, id: id) }
+        reloadTasks()
+    }
+
+    /// Project whose name or repo name the text mentions as a word; nil when none or ambiguous.
+    func guessProject(for text: String) -> Int64? {
+        let words = Set(text.lowercased().split { !$0.isLetter && !$0.isNumber && $0 != "-" && $0 != "_" }.map(String.init))
+        let hits = projects.filter { project in
+            var names = [project.name.lowercased()]
+            if let repo = project.remote?.split(separator: "/").last { names.append(repo.lowercased().replacingOccurrences(of: ".git", with: "")) }
+            return names.contains { words.contains($0) }
+        }
+        return hits.count == 1 ? hits[0].id : nil
+    }
+
+    /// Pasted list → one task per line, bullets and numbering stripped.
+    static func taskLines(_ text: String) -> [String] {
+        text.split(separator: "\n")
+            .map { $0.replacingOccurrences(of: #"^\s*(?:(?:[-*•]|\[.?\]|\d+[.)])\s*)+"#, with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Morning: one session per task, the task as its first prompt. A project's second and later
+    /// sessions get their own worktree so parallel tasks don't edit the same files (module 5).
+    func launchMorning(_ taskIds: [Int64]) throws {
+        var busy = Set(sessions.map(\.projectId))
+        var worktreeNames = Set(sessions.compactMap(\.worktreeName))
+        for id in taskIds {
+            guard var task = tasks.first(where: { $0.id == id }), let projectId = task.projectId else { continue }
+            var worktree: String?
+            if busy.contains(projectId) {
+                let base = ClaudeLauncher.worktreeSlug(task.text.split(separator: " ").prefix(4).joined(separator: " "))
+                var name = base.isEmpty ? "task" : base
+                var n = 2
+                while worktreeNames.contains(name) { name = "\(base)-\(n)"; n += 1 }
+                worktreeNames.insert(name)
+                worktree = name
+            }
+            try createSession(projectId: projectId, model: nil, prompt: task.prompt, worktree: worktree)
+            busy.insert(projectId)
+            task.sessionId = selectedSessionId
+            try db.write { try task.update($0) }
+        }
+        reloadTasks()
+    }
+
+    struct ProjectDay {
+        var project: Project
+        var commits: [String]
+        var stages: [String]
+        var tokens: Int
+        var todos: [AgentTodo]
+        var nextSteps: String?
+        var doneTasks: [String]
+        var openTasks: [String]
+    }
+
+    /// Evening summary per project with any activity today.
+    func daySummary(now: Date = .now) -> [ProjectDay] {
+        let start = Calendar.current.startOfDay(for: now)
+        let tokens = Dictionary(usageStats(since: start).byProject.map { ($0.name, $0.totals.total) }, uniquingKeysWith: +)
+        return projects.compactMap { project in
+            guard let projectId = project.id else { return nil }
+            let sessionIds = sessions.filter { $0.projectId == projectId }.compactMap(\.id)
+            let marks = sessionIds.map { _ in "?" }.joined(separator: ",")
+            let (stages, nextSteps, todos) = (try? db.read { db -> ([String], String?, [AgentTodo]) in
+                let todos = try AgentTodo.filter(Column("projectId") == projectId && Column("createdAt") >= start)
+                    .order(Column("createdAt")).fetchAll(db)
+                guard !sessionIds.isEmpty else { return ([], nil, todos) }
+                var args = StatementArguments(sessionIds)
+                args += [start]
+                let commands = try String.fetchAll(db, sql: """
+                    SELECT summary FROM hookEvent WHERE sessionId IN (\(marks)) AND name = 'UserPromptExpansion' AND createdAt >= ?
+                    ORDER BY createdAt
+                    """, arguments: args)
+                // The reply to the day's last /sync or /retro holds the next steps.
+                let wrapUp = try Row.fetchOne(db, sql: """
+                    SELECT sessionId, createdAt FROM hookEvent WHERE sessionId IN (\(marks)) AND name = 'UserPromptExpansion'
+                    AND createdAt >= ? AND (summary LIKE '/sync%' OR summary LIKE '/retro%') ORDER BY createdAt DESC LIMIT 1
+                    """, arguments: args)
+                let reply = try wrapUp.flatMap { row in
+                    try String.fetchOne(db, sql: """
+                        SELECT summary FROM hookEvent WHERE sessionId = ? AND name = 'Stop' AND createdAt >= ? ORDER BY createdAt LIMIT 1
+                        """, arguments: [row["sessionId"] as Int64, row["createdAt"] as Date])
+                }
+                let names = commands.compactMap { $0.split(separator: " ").first.map { String($0.dropFirst()) } }
+                return (names.reduce(into: []) { if $0.last != $1 { $0.append($1) } }, reply, todos)
+            }) ?? ([], nil, [])
+            let projectTasks = tasks.filter { $0.projectId == projectId }
+            let day = ProjectDay(
+                project: project,
+                commits: GitService.commits(since: start, in: project.path),
+                stages: stages,
+                tokens: tokens[project.name] ?? 0,
+                todos: todos,
+                nextSteps: nextSteps,
+                doneTasks: projectTasks.filter { $0.isDone && ($0.doneAt ?? .distantPast) >= start }.map(\.text),
+                openTasks: projectTasks.filter { !$0.isDone }.map(\.text)
+            )
+            let active = !day.commits.isEmpty || !day.stages.isEmpty || day.tokens > 0 || !day.todos.isEmpty || !day.doneTasks.isEmpty
+            return active ? day : nil
+        }
+    }
+
+    /// Plain text for copying or sharing.
+    static func dayText(_ days: [ProjectDay], date: Date = .now) -> String {
+        var lines = ["Meepo — \(date.formatted(date: .abbreviated, time: .omitted))"]
+        for day in days {
+            lines.append("")
+            lines.append("■ \(day.project.name) — \(TokenFormat.short(day.tokens)) tokens")
+            if !day.stages.isEmpty { lines.append("Stages: " + day.stages.joined(separator: " → ")) }
+            if !day.doneTasks.isEmpty { lines.append("Done:"); lines += day.doneTasks.map { "  ✓ \($0)" } }
+            if !day.commits.isEmpty { lines.append("Commits:"); lines += day.commits.map { "  \($0)" } }
+            if !day.todos.isEmpty { lines.append("TODOs left by the agent:"); lines += day.todos.map { "  \(URL(filePath: $0.file).lastPathComponent): \($0.line)" } }
+            if let next = day.nextSteps { lines.append("Next steps:"); lines.append(next) }
+            if !day.openTasks.isEmpty { lines.append("Open tasks → tomorrow:"); lines += day.openTasks.map { "  ☐ \($0)" } }
+        }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: Worktrees and ports (SPEC module 5)

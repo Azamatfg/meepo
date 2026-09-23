@@ -6,7 +6,7 @@ struct EventFeedView: View {
 
     @State private var tab = Tab.events
 
-    enum Tab: String, CaseIterable { case events = "EVENTS", ports = "PORTS" }
+    enum Tab: String, CaseIterable { case events = "EVENTS", tasks = "TASKS", ports = "PORTS" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -19,7 +19,11 @@ struct EventFeedView: View {
             }
             .padding(8)
             Rectangle().fill(Tokens.grassDeep).frame(height: 2)
-            if tab == .events { feed } else { PortsView() }
+            switch tab {
+            case .events: feed
+            case .tasks: TasksView()
+            case .ports: PortsView()
+            }
         }
         .background(Tokens.dirt)
     }
