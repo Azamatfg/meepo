@@ -25,6 +25,7 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
             sessionId: session.claudeSessionId,
             resume: ClaudeLauncher.hasTranscript(sessionId: session.claudeSessionId),
             model: session.model,
+            effort: session.effort,
             prompt: initialPrompt
         )
         // Lets meepo-bridge.sh tag every hook event with this session, even after /clear changes the claude id.
@@ -41,6 +42,11 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
                               currentDirectory: directory)
         }
         views[id] = view
+    }
+
+    /// Types into the session's terminal as if the user did ("\r" = Enter).
+    func send(_ text: String, to sessionId: Int64) {
+        views[sessionId]?.send(txt: text)
     }
 
     func close(_ sessionId: Int64) {

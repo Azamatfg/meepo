@@ -27,6 +27,10 @@ enum GitService {
         run(["branch", "--show-current"], in: path)
     }
 
+    static func hasUncommittedChanges(in path: String) -> Bool {
+        run(["status", "--porcelain"], in: path) != nil
+    }
+
     /// Runs git and returns trimmed stdout, or nil on failure or empty output.
     private static func run(_ args: [String], in path: String) -> String? {
         let process = Process()

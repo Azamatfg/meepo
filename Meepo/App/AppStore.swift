@@ -20,8 +20,10 @@ final class AppStore {
     private let terminals = TerminalRegistry()
     private let bridge: BridgeInstaller
     private let usageRoot: URL
+    /// Injected so tests (which run inside the app, same bundle id) never touch the user's settings.
+    private let defaults: UserDefaults
     /// First prompt of a freshly created session; used once, never stored.
-    private var initialPrompts: [Int64: String] = [:]
+    private(set) var initialPrompts: [Int64: String] = [:]
     private var loginEnvironment: ClaudeLauncher.LoginEnvironment?
     /// Sessions wait for the login environment (~0.6 s at launch) so they never race into the shell fallback.
     private var isLoginResolved = false
@@ -46,10 +48,15 @@ final class AppStore {
     private static let eventRetention: TimeInterval = 7 * 24 * 3600
     private static let feedLimit = 200
 
-    init(db: DatabaseQueue, bridge: BridgeInstaller = BridgeInstaller(), usageRoot: URL = UsageScanner.defaultRoot) {
+    init(db: DatabaseQueue, bridge: BridgeInstaller = BridgeInstaller(), usageRoot: URL = UsageScanner.defaultRoot,
+         defaults: UserDefaults = .standard) {
         self.db = db
         self.bridge = bridge
         self.usageRoot = usageRoot
+        self.defaults = defaults
+        contextWindows = Self.load([String: Int].self, Self.contextWindowsKey, from: defaults) ?? [:]
+        stages = Self.load([Stage].self, Self.stagesKey, from: defaults) ?? Stage.defaults
+        relayThreshold = defaults.object(forKey: Self.relayThresholdKey) as? Double ?? 0.7
         // Processes restart with Meepo, so statuses from the previous run are stale.
         _ = try? db.write { db in
             try db.execute(sql: "UPDATE session SET status = ?", arguments: [SessionStatus.idle])
@@ -93,6 +100,7 @@ final class AppStore {
         let old = session.status
         // `/clear` starts a new conversation in the same process; resume that one after a restart.
         if payload.event == "SessionStart" { session.claudeSessionId = payload.claudeSessionId }
+        if let stage = nextStage(after: session.stage, for: payload) { session.stage = stage }
         // A Notification is a delayed echo (~6 s) of a prompt already reported by PermissionRequest;
         // it must not turn a question (waiting for input) into a permission request.
         let isEcho = payload.event == "Notification" && (old == .waitingInput || old == .waitingPermission)
@@ -110,6 +118,10 @@ final class AppStore {
         }
         reload()
         if sessionId == selectedSessionId { reloadEvents() }
+        if payload.event == "Stop", relayingSessionIds.contains(sessionId) {
+            finishRelay(sessionId, summary: payload.lastAssistantMessage)
+            return nil
+        }
         let attention = Attention.from(old, to: session.status)
         return payload.isQuestion && attention != nil ? .question : attention
     }
@@ -152,6 +164,7 @@ final class AppStore {
     func refreshBridge() {
         guard isBridgeInstalled else { return }
         try? bridge.writeScript()
+        if !bridge.isUpToDate() { _ = try? bridge.install() } // a newer Meepo subscribes to more events
         try? bridge.setNotifyGuard(true, projectPaths: projects.map(\.path))
     }
 
@@ -182,9 +195,12 @@ final class AppStore {
     private var isScanning = false
 
     /// Context window per model (design: "sizes in settings"); unknown models get 200K.
-    var contextWindows: [String: Int] = (UserDefaults.standard.data(forKey: contextWindowsKey))
-        .flatMap { try? JSONDecoder().decode([String: Int].self, from: $0) } ?? [:] {
-        didSet { UserDefaults.standard.set(try? JSONEncoder().encode(contextWindows), forKey: Self.contextWindowsKey) }
+    var contextWindows: [String: Int] {
+        didSet { defaults.set(try? JSONEncoder().encode(contextWindows), forKey: Self.contextWindowsKey) }
+    }
+
+    private static func load<T: Decodable>(_ type: T.Type, _ key: String, from defaults: UserDefaults) -> T? {
+        defaults.data(forKey: key).flatMap { try? JSONDecoder().decode(type, from: $0) }
     }
 
     func contextWindow(for model: String?) -> Int {
@@ -205,6 +221,7 @@ final class AppStore {
         let (db, root) = (self.db, usageRoot)
         _ = try? await Task.detached { try UsageScanner.scan(root: root, into: db) }.value
         reloadUsage()
+        refreshProjects()
     }
 
     func reloadUsage() {
@@ -265,6 +282,156 @@ final class AppStore {
         }) ?? []
     }
 
+    // MARK: Stages and relay (SPEC module 4)
+
+    private static let stagesKey = "stages"
+    private static let relayThresholdKey = "relayThreshold"
+
+    /// The user's workflow, set once for all projects.
+    var stages: [Stage] {
+        didSet { defaults.set(try? JSONEncoder().encode(stages), forKey: Self.stagesKey) }
+    }
+
+    /// Context fill at which a session is marked "time to sync" and offers a relay.
+    var relayThreshold: Double {
+        didSet { defaults.set(relayThreshold, forKey: Self.relayThresholdKey) }
+    }
+
+    private(set) var commandsByProject: [Int64: [SlashCommand]] = [:]
+    private(set) var dirtyProjectIds: Set<Int64> = []
+    private(set) var relayingSessionIds: Set<Int64> = []
+
+    /// Stages the project can run: command-less ones (code) and those whose command exists there.
+    func stages(for projectId: Int64) -> [Stage] {
+        let names = Set((commandsByProject[projectId] ?? []).map(\.name))
+        return stages.filter { $0.command == nil || names.contains($0.command!) }
+    }
+
+    /// A slash command enters its stage; a plain prompt right after a stage moves on to a following
+    /// command-less stage (plan → code).
+    func nextStage(after current: String?, for payload: HookPayload) -> String? {
+        if payload.event == "UserPromptExpansion", let command = payload.commandName {
+            return stages.first { $0.command == command }?.name
+        }
+        guard payload.event == "UserPromptSubmit", !(payload.prompt ?? "").hasPrefix("/"),
+              let index = stages.firstIndex(where: { $0.name == current }),
+              index + 1 < stages.count, stages[index + 1].command == nil else { return nil }
+        return stages[index + 1].name
+    }
+
+    /// Types text into a session's terminal ("\r" = Enter).
+    func type(_ text: String, into sessionId: Int64) {
+        terminals.send(text, to: sessionId)
+    }
+
+    /// Code was edited after the last QA stage ran in this session (reminder before ship).
+    func codeChangedSinceQA(_ sessionId: Int64) -> Bool {
+        let qa = stages.first { $0.name == "qa" }?.command ?? "qa"
+        return (try? db.read { db in
+            let lastEdit = try Date.fetchOne(db, sql: """
+                SELECT MAX(createdAt) FROM hookEvent WHERE sessionId = ? AND name = 'PostToolUse'
+                AND (summary LIKE 'Edit:%' OR summary LIKE 'Write:%' OR summary LIKE 'MultiEdit:%' OR summary LIKE 'NotebookEdit:%')
+                """, arguments: [sessionId])
+            let lastQA = try Date.fetchOne(db, sql: """
+                SELECT MAX(createdAt) FROM hookEvent WHERE sessionId = ? AND name = 'UserPromptExpansion' AND summary LIKE ?
+                """, arguments: [sessionId, "/\(qa)%"])
+            guard let lastEdit else { return false }
+            return lastEdit > (lastQA ?? .distantPast)
+        }) ?? false
+    }
+
+    /// The plan is ready when the plan stage's reply is in and the session waits for the user.
+    func canStartImplementation(_ session: Session) -> Bool {
+        session.stage == stages.first(where: { $0.command == "plan" })?.name && session.status == .waitingInput
+    }
+
+    /// Plan → code: a fresh session on the code stage's model, with the plan as its first message.
+    /// `notes`: the user's answers to the plan's open questions, and any extra instructions.
+    func startImplementation(from sessionId: Int64, notes: String = "") throws {
+        guard let session = sessions.first(where: { $0.id == sessionId }),
+              let plan = latestReply(of: sessionId) else { return }
+        let code = stages.first { $0.command == nil }
+        let decisions = notes.isEmpty ? "" : "\n\nMy decisions and notes (they override the plan where they differ):\n\(notes)"
+        try createSession(projectId: session.projectId, model: code?.model ?? session.model,
+                          prompt: "Implement the plan below, prepared in a previous session.\n\n\(plan)\(decisions)",
+                          effort: code?.effort, stage: code?.name)
+    }
+
+    /// Relay: `/sync` (or a handoff request) in the old session; its reply seeds a fresh session in the
+    /// same project, and the old one closes (SPEC module 4 "эстафета"). Finishes on that reply's Stop event.
+    func relay(_ sessionId: Int64) {
+        guard let session = sessions.first(where: { $0.id == sessionId }) else { return }
+        relayingSessionIds.insert(sessionId)
+        let sync = stages.first { $0.name == "sync" }?.command
+        if let sync, (commandsByProject[session.projectId] ?? []).contains(where: { $0.name == sync }) {
+            type("/\(sync)\r", into: sessionId)
+        } else {
+            type("Summarize for a fresh session taking over: the task, what is done, what is next, key files and decisions.\r",
+                 into: sessionId)
+        }
+    }
+
+    private func finishRelay(_ sessionId: Int64, summary: String?) {
+        relayingSessionIds.remove(sessionId)
+        guard let old = sessions.first(where: { $0.id == sessionId }) else { return }
+        let handoff = summary.map { "\n\nHandoff from the previous session:\n\n\($0)" } ?? ""
+        do {
+            try createSession(projectId: old.projectId, model: old.model,
+                              prompt: "Continue the task of the previous session (its context was full).\(handoff)",
+                              effort: old.effort, stage: old.stage)
+            closeSession(sessionId)
+        } catch {
+            bridgeError = error.localizedDescription
+        }
+    }
+
+    private func latestReply(of sessionId: Int64) -> String? {
+        try? db.read { db in
+            try String.fetchOne(db, sql: """
+                SELECT summary FROM hookEvent WHERE sessionId = ? AND name = 'Stop' ORDER BY createdAt DESC, id DESC LIMIT 1
+                """, arguments: [sessionId])
+        }
+    }
+
+    /// Where a missing command could be copied from: other Meepo projects that have it as a file.
+    func commandSources(_ command: String, excluding projectId: Int64) -> [Project] {
+        let relative = ".claude/commands/\(command.replacingOccurrences(of: ":", with: "/")).md"
+        return projects.filter { project in
+            project.id != projectId && FileManager.default.fileExists(atPath: URL(filePath: project.path).appending(path: relative).path)
+        }
+    }
+
+    /// Copies a command file into one project, or into `~/.claude/commands` for every project.
+    /// Never overwrites: an existing file there wins. The user picks both source and target.
+    func copyCommand(_ command: String, from source: Project, toProject target: Project?,
+                     home: URL = FileManager.default.homeDirectoryForCurrentUser) {
+        let relative = "commands/\(command.replacingOccurrences(of: ":", with: "/")).md"
+        let from = URL(filePath: source.path).appending(path: ".claude/\(relative)")
+        let to = (target.map { URL(filePath: $0.path).appending(path: ".claude") } ?? home.appending(path: ".claude"))
+            .appending(path: relative)
+        do {
+            guard !FileManager.default.fileExists(atPath: to.path) else { return }
+            try FileManager.default.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: from, to: to)
+        } catch {
+            bridgeError = error.localizedDescription
+        }
+        refreshProjects()
+    }
+
+    /// Commands and uncommitted changes per project; cheap, refreshed with usage.
+    func refreshProjects() {
+        var commands: [Int64: [SlashCommand]] = [:]
+        var dirty: Set<Int64> = []
+        for project in projects {
+            guard let id = project.id else { continue }
+            commands[id] = CommandCatalog.commands(projectPath: project.path)
+            if GitService.hasUncommittedChanges(in: project.path) { dirty.insert(id) }
+        }
+        commandsByProject = commands
+        dirtyProjectIds = dirty
+    }
+
     // MARK: Projects
 
     func addProject(at url: URL) throws {
@@ -299,13 +466,15 @@ final class AppStore {
         newSessionProjectId = projectId ?? selectedSession?.projectId ?? projects.first?.id
     }
 
-    func createSession(projectId: Int64, model: String?, prompt: String?) throws {
+    func createSession(projectId: Int64, model: String?, prompt: String?, effort: String? = nil, stage: String? = nil) throws {
         guard let project = projects.first(where: { $0.id == projectId }) else { return }
         var session = Session(
             projectId: projectId,
             claudeSessionId: UUID().uuidString.lowercased(),
             model: model,
+            effort: effort,
             branch: GitService.currentBranch(in: project.path),
+            stage: stage,
             status: .idle,
             createdAt: .now,
             lastActiveAt: .now

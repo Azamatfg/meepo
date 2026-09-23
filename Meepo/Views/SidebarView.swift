@@ -51,6 +51,9 @@ extension AppStore {
         guard let id = session.id else { return (nil, "") }
         if exitedSessionIds.contains(id) { return (nil, "Exited") }
         guard runningSessionIds.contains(id) else { return (nil, "Not running") }
+        if relayingSessionIds.contains(id) { return (.sync, "Relaying…") }
+        let full = (contextFraction(for: id) ?? 0) >= relayThreshold
+        if full, session.status == .idle || session.status == .thinking { return (.sync, "Time to sync") }
         return switch session.status {
         case .thinking: (.working, "Working")
         case .waitingPermission: (.waiting, "Needs permission")
@@ -95,7 +98,7 @@ private struct UnitCard: View {
                     .font(Fonts.mono(13))
                     .foregroundStyle(Tokens.text)
                     .lineLimit(1)
-                Text("\(look.text) · \(session.model ?? "default")")
+                Text([look.text, session.stage?.uppercased(), session.model].compactMap { $0 }.joined(separator: " · "))
                     .font(.caption)
                     .foregroundStyle(look.ring == .waiting ? Tokens.alert : Tokens.textDim)
                     .lineLimit(1)

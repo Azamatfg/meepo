@@ -20,6 +20,7 @@ struct BridgeInstaller {
     static let events = [
         "SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
         "PermissionRequest", "PermissionDenied", "Notification", "Stop", "StopFailure", "PreCompact",
+        "UserPromptExpansion",
     ]
     static let scriptName = "meepo-bridge.sh"
 
@@ -44,6 +45,16 @@ struct BridgeInstaller {
         guard let hooks = (try? readSettings())?["hooks"] as? [String: Any] else { return false }
         return hooks.values.contains { value in
             (value as? [[String: Any]] ?? []).contains { group in
+                (group["hooks"] as? [[String: Any]] ?? []).contains { Self.isBridge($0) }
+            }
+        }
+    }
+
+    /// True when every event Meepo needs has the bridge (a newer Meepo may subscribe to more events).
+    func isUpToDate() -> Bool {
+        guard let hooks = (try? readSettings())?["hooks"] as? [String: Any] else { return false }
+        return Self.events.allSatisfy { event in
+            (hooks[event] as? [[String: Any]] ?? []).contains { group in
                 (group["hooks"] as? [[String: Any]] ?? []).contains { Self.isBridge($0) }
             }
         }

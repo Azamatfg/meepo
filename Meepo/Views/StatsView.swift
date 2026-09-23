@@ -104,11 +104,61 @@ struct SettingsView: View {
                 }
                 .font(Fonts.mono(13))
             }
+            FieldRow("Relay at context") {
+                PixelMenu(selection: "\(Int(store.relayThreshold * 100))%") {
+                    ForEach([0.6, 0.7, 0.8, 0.9], id: \.self) { value in
+                        Button("\(Int(value * 100))%") { store.relayThreshold = value }
+                    }
+                }
+            }
+            StagesEditor()
         }
         .padding(16)
-        .frame(width: 460, alignment: .leading)
+        .frame(width: 560, alignment: .leading)
         .background(Tokens.grass)
         .pixelFrame(6)
         .preferredColorScheme(.dark)
+    }
+}
+
+/// Workflow order and the model/effort a new session gets in each stage.
+private struct StagesEditor: View {
+    @Environment(AppStore.self) private var store
+    private let models = [("", "Default"), ("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")]
+    private let efforts = ["", "low", "medium", "high", "xhigh", "max"]
+
+    var body: some View {
+        @Bindable var store = store
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("STAGES").font(Fonts.title(16)).foregroundStyle(Tokens.text)
+                Spacer()
+                Button("Reset") { store.stages = Stage.defaults }.buttonStyle(PixelButtonStyle())
+            }
+            ForEach(Array(store.stages.enumerated()), id: \.element.id) { index, stage in
+                HStack(spacing: 6) {
+                    Text(stage.command.map { "/\($0)" } ?? "code").font(Fonts.mono(13)).foregroundStyle(Tokens.text)
+                        .frame(width: 90, alignment: .leading)
+                    PixelMenu(selection: models.first { $0.0 == (stage.model ?? "") }?.1 ?? stage.model ?? "Default") {
+                        ForEach(models, id: \.0) { option in
+                            Button(option.1) { store.stages[index].model = option.0.isEmpty ? nil : option.0 }
+                        }
+                    }
+                    PixelMenu(selection: stage.effort ?? "effort") {
+                        ForEach(efforts, id: \.self) { level in
+                            Button(level.isEmpty ? "Default" : level) { store.stages[index].effort = level.isEmpty ? nil : level }
+                        }
+                    }
+                    Spacer()
+                    Button("▲") { store.stages.swapAt(index, index - 1) }.disabled(index == 0)
+                    Button("▼") { store.stages.swapAt(index, index + 1) }.disabled(index == store.stages.count - 1)
+                    Button("✕") { store.stages.remove(at: index) }
+                }
+                .buttonStyle(PixelButtonStyle())
+            }
+        }
+        .padding(8)
+        .background(Tokens.dirt)
+        .sunken()
     }
 }

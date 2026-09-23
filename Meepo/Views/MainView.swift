@@ -119,6 +119,17 @@ private struct SessionDetailView: View {
     let sessionId: Int64
 
     var body: some View {
+        VStack(spacing: 0) {
+            terminal
+            if let session = store.sessions.first(where: { $0.id == sessionId }) {
+                StagePanel(session: session)
+            }
+        }
+        // Launch lazily when a session is first shown (also after Meepo restarts).
+        .task(id: sessionId) { store.startTerminalIfNeeded(sessionId) }
+    }
+
+    private var terminal: some View {
         ZStack(alignment: .bottom) {
             Tokens.terminalBg
             if let view = store.terminalView(for: sessionId), store.runningSessionIds.contains(sessionId) || store.exitedSessionIds.contains(sessionId) {
@@ -139,8 +150,6 @@ private struct SessionDetailView: View {
         }
         // Terminal sits in a pressed-in well (design §5).
         .sunken()
-        // Launch lazily when a session is first shown (also after Meepo restarts).
-        .task(id: sessionId) { store.startTerminalIfNeeded(sessionId) }
     }
 }
 

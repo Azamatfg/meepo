@@ -75,6 +75,7 @@ private struct EventRow: View {
         case "Stop": "Reply ready"
         case "StopFailure": "Reply failed"
         case "PreCompact": "Compacting context"
+        case "UserPromptExpansion": "Command"
         default: name
         }
     }

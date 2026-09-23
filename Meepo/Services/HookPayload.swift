@@ -13,10 +13,12 @@ struct HookPayload: Equatable {
     var toolName: String?
     var toolTarget: String?
     var lastAssistantMessage: String?
+    /// Slash command name from UserPromptExpansion, e.g. "plan" for "/plan add login".
+    var commandName: String?
 
     init(event: String, claudeSessionId: String, source: String? = nil, notificationType: String? = nil,
          message: String? = nil, prompt: String? = nil, toolName: String? = nil, toolTarget: String? = nil,
-         lastAssistantMessage: String? = nil) {
+         lastAssistantMessage: String? = nil, commandName: String? = nil) {
         self.event = event
         self.claudeSessionId = claudeSessionId
         self.source = source
@@ -26,6 +28,7 @@ struct HookPayload: Equatable {
         self.toolName = toolName
         self.toolTarget = toolTarget
         self.lastAssistantMessage = lastAssistantMessage
+        self.commandName = commandName
     }
 
     init?(json: Data) {
@@ -44,7 +47,8 @@ struct HookPayload: Equatable {
             toolName: obj["tool_name"] as? String,
             // The most telling argument of common tools: Bash command, file path, URL, search pattern.
             toolTarget: question ?? ["command", "file_path", "url", "pattern"].lazy.compactMap { input?[$0] as? String }.first,
-            lastAssistantMessage: obj["last_assistant_message"] as? String
+            lastAssistantMessage: obj["last_assistant_message"] as? String,
+            commandName: obj["command_name"] as? String
         )
     }
 

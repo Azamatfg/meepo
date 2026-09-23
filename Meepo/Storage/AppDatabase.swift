@@ -69,6 +69,13 @@ enum AppDatabase {
             try db.execute(sql: "DELETE FROM usageRecord; DELETE FROM scanState")
         }
 
+        migrator.registerMigration("v5-stages") { db in
+            try db.alter(table: "session") { t in
+                t.add(column: "effort", .text)
+                t.add(column: "stage", .text)
+            }
+        }
+
         return migrator
     }
 }
