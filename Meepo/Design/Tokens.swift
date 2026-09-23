@@ -11,6 +11,7 @@ enum Tokens {
     static let moss       = Color(light: 0x3E6A2C, dark: 0x4E7A3A)
     static let glow       = Color(light: 0x2A8F88, dark: 0x3FB8AF)
     static let fire       = Color(light: 0xC45F1E, dark: 0xE0762F)
+    static let danger     = Color(light: 0x9E2B25, dark: 0xD0554B)
 }
 
 extension Color {

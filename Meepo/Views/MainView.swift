@@ -3,6 +3,7 @@ import SwiftUI
 
 struct MainView: View {
     @Environment(AppStore.self) private var store
+    @State private var isFeedShown = true
 
     var body: some View {
         NavigationSplitView {
@@ -19,6 +20,13 @@ struct MainView: View {
                 }
             }
             .background(Tokens.background)
+            .inspector(isPresented: $isFeedShown) {
+                EventFeedView()
+                    .inspectorColumnWidth(min: 220, ideal: 280, max: 420)
+            }
+            .toolbar {
+                Button("Лента событий", systemImage: "sidebar.right") { isFeedShown.toggle() }
+            }
         }
         .frame(minWidth: 800, minHeight: 500)
         .sheet(isPresented: Binding(

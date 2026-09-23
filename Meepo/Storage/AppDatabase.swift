@@ -4,7 +4,7 @@ import GRDB
 enum AppDatabase {
     /// Opens `~/.meepo/meepo.sqlite`, creating it and applying migrations.
     static func openShared() throws -> DatabaseQueue {
-        let dir = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".meepo")
+        let dir = MeepoHome.url
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let db = try DatabaseQueue(path: dir.appending(path: "meepo.sqlite").path)
         try migrator.migrate(db)
@@ -31,6 +31,17 @@ enum AppDatabase {
                 t.column("status", .text).notNull()
                 t.column("createdAt", .datetime).notNull()
                 t.column("lastActiveAt", .datetime).notNull()
+            }
+        }
+
+        migrator.registerMigration("v2") { db in
+            try db.create(table: "hookEvent") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.belongsTo("session", onDelete: .cascade).notNull()
+                t.column("name", .text).notNull()
+                t.column("summary", .text)
+                t.column("isFailure", .boolean).notNull()
+                t.column("createdAt", .datetime).notNull().indexed()
             }
         }
 

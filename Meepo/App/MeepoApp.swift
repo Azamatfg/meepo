@@ -5,6 +5,7 @@ import SwiftUI
 struct MeepoApp: App {
     @State private var store: AppStore
     private let hotkeys: HotkeyMonitor
+    private let services: LiveServices?
     /// Unit tests host the app: keep them off the real database and away from real sessions.
     private let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
@@ -15,6 +16,7 @@ struct MeepoApp: App {
             let store = AppStore(db: db)
             _store = State(initialValue: store)
             hotkeys = HotkeyMonitor(store: store)
+            services = isTesting ? nil : LiveServices(store: store)
         } catch {
             fatalError("Cannot open ~/.meepo/meepo.sqlite: \(error)")
         }
@@ -24,9 +26,21 @@ struct MeepoApp: App {
         Window("Meepo", id: "main") {
             MainView()
                 .environment(store)
-                .task { if !isTesting { await store.restoreSessions() } }
+                .task {
+                    guard let services else { return }
+                    // Asking in App.init is too early: macOS answers "not allowed" before launch finishes.
+                    await services.requestNotificationPermission(store: store)
+                    await store.restoreSessions()
+                }
         }
         .commands {
+            CommandGroup(after: .appInfo) {
+                if store.isBridgeInstalled {
+                    Button("Удалить мост хуков") { store.uninstallBridge() }
+                } else {
+                    Button("Установить мост хуков") { store.installBridge() }
+                }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Новая сессия") { store.presentNewSession() }
                     .keyboardShortcut("n")
@@ -40,10 +54,61 @@ struct MeepoApp: App {
             }
         }
 
-        MenuBarExtra("Meepo", systemImage: "square.stack.3d.up") {
+        MenuBarExtra {
             MenuBarPanel()
                 .environment(store)
+        } label: {
+            // Badge: sessions waiting for the user.
+            let waiting = store.waitingCount
+            HStack {
+                Image(systemName: waiting > 0 ? "square.stack.3d.up.fill" : "square.stack.3d.up")
+                if waiting > 0 { Text("\(waiting)") }
+            }
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+/// Event server and notifications; not created while unit tests host the app.
+@MainActor
+final class LiveServices {
+    private let notifier = Notifier()
+    private var server: EventServer?
+
+    func requestNotificationPermission(store: AppStore) async {
+        store.notificationsAllowed = await notifier.requestAuthorization()
+    }
+
+    init(store: AppStore) {
+        // The user may have just turned notifications on in System Settings and come back.
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
+                                               object: nil, queue: .main) { [weak self, weak store] _ in
+            MainActor.assumeIsolated {
+                guard let self, let store else { return }
+                Task { store.notificationsAllowed = await self.notifier.isAuthorized() }
+            }
+        }
+        store.refreshBridge()
+        notifier.onOpen = { [weak store] id in
+            store?.selectedSessionId = id
+            NSApp.activate(ignoringOtherApps: true)
+            NSApp.windows.first { $0.canBecomeMain }?.makeKeyAndOrderFront(nil)
+        }
+        do {
+            let server = EventServer(token: try MeepoHome.token()) { [weak self, weak store] sessionId, body in
+                guard let store, let payload = HookPayload(json: body),
+                      let attention = store.handleHookEvent(payload, sessionId: sessionId),
+                      let session = store.sessions.first(where: { $0.id == sessionId }) else { return }
+                // The user is already looking at this session.
+                if NSApp.isActive && store.selectedSessionId == sessionId { return }
+                self?.notifier.post(attention, session: session, project: store.project(for: session),
+                                    summary: payload.summary)
+            }
+            server.onFailure = { [weak store] message in store?.bridgeError = message }
+            try server.start()
+            self.server = server
+        } catch {
+            store.bridgeError = error.localizedDescription
+        }
     }
 }

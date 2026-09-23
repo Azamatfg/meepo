@@ -82,8 +82,9 @@ enum ClaudeLauncher {
         return env.filter { entry in !keys.contains(entry.key) && !prefixes.contains { entry.key.hasPrefix($0) } }
     }
 
-    static func environment(base: [String: String]) -> [String] {
-        var env = base
+    /// `extra` carries MEEPO_SESSION_ID / MEEPO_PORT, which hook commands inherit (checked on 2.1.280).
+    static func environment(base: [String: String], extra: [String: String] = [:]) -> [String] {
+        var env = base.merging(extra) { _, new in new }
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         if env["LANG"] == nil { env["LANG"] = "en_US.UTF-8" }

@@ -33,6 +33,11 @@ struct SidebarView: View {
             store.selectSession(offset: press.modifiers.contains(.shift) ? -1 : 1)
             return .handled
         }
+        .safeAreaInset(edge: .bottom) {
+            if !store.isBridgeInstalled || store.bridgeError != nil || !store.notificationsAllowed {
+                BridgeBanner()
+            }
+        }
         .toolbar {
             Button("Добавить проект", systemImage: "plus") { isPickingFolder = true }
         }
@@ -97,16 +102,34 @@ struct SessionLabel: View {
         .help(statusText)
     }
 
+    private var isRunning: Bool {
+        guard let id = session.id else { return false }
+        return store.runningSessionIds.contains(id) && !store.exitedSessionIds.contains(id)
+    }
+
     private var statusColor: Color {
-        guard let id = session.id else { return .gray }
-        if store.exitedSessionIds.contains(id) { return Tokens.fire }
-        return store.runningSessionIds.contains(id) ? Tokens.moss : .gray
+        guard isRunning else { return Tokens.text.opacity(0.3) }
+        return switch session.status {
+        case .thinking: Tokens.glow
+        case .waitingPermission: Tokens.fire
+        case .waitingInput, .needsSync: Tokens.gold
+        case .error: Tokens.danger
+        case .idle: Tokens.moss
+        }
     }
 
     private var statusText: String {
         guard let id = session.id else { return "" }
         if store.exitedSessionIds.contains(id) { return "Завершена" }
-        return store.runningSessionIds.contains(id) ? "Запущена" : "Не запущена — откройте, чтобы продолжить"
+        guard isRunning else { return "Не запущена" }
+        return switch session.status {
+        case .thinking: "Работает"
+        case .waitingPermission: "Ждёт разрешения"
+        case .waitingInput: "Ждёт тебя"
+        case .needsSync: "Пора sync"
+        case .error: "Ошибка"
+        case .idle: "Запущена"
+        }
     }
 }
 
@@ -133,5 +156,37 @@ private struct ProjectHeader: View {
                 .buttonStyle(.borderless)
         }
         .help(project.path)
+    }
+}
+
+/// Shown until the hook bridge is installed, or when it/the event server has a problem.
+private struct BridgeBanner: View {
+    @Environment(AppStore.self) private var store
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let error = store.bridgeError {
+                Text(error)
+                    .foregroundStyle(Tokens.danger)
+            }
+            if !store.notificationsAllowed {
+                Text("Уведомления Meepo выключены в настройках macOS.")
+                    .foregroundStyle(Tokens.text.opacity(0.7))
+                Button("Открыть настройки уведомлений") {
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!)
+                }
+            }
+            if !store.isBridgeInstalled {
+                Text("Мост хуков не установлен: нет статусов и уведомлений.")
+                    .foregroundStyle(Tokens.text.opacity(0.7))
+                Button("Установить мост") { store.installBridge() }
+                    .help("Добавит meepo-bridge.sh в ~/.claude/settings.json рядом с вашими хуками, а ваши Notification-хуки будут молчать в сессиях Meepo. Бэкапы — в ~/.meepo/backups")
+            }
+        }
+        .font(.caption)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 8))
+        .padding(10)
     }
 }

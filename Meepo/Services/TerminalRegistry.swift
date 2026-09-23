@@ -23,13 +23,17 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
             model: session.model,
             prompt: initialPrompt
         )
+        // Lets meepo-bridge.sh tag every hook event with this session, even after /clear changes the claude id.
+        let meepo = ["MEEPO_SESSION_ID": String(id), "MEEPO_PORT": String(EventServer.defaultPort)]
         if let login {
             view.startProcess(executable: login.claudePath, args: args,
-                              environment: ClaudeLauncher.environment(base: login.environment), currentDirectory: directory)
+                              environment: ClaudeLauncher.environment(base: login.environment, extra: meepo),
+                              currentDirectory: directory)
         } else {
             let launch = ClaudeLauncher.shellLaunch(claudeArgs: args)
             view.startProcess(executable: launch.executable, args: launch.args,
-                              environment: ClaudeLauncher.environment(base: ClaudeLauncher.scrubbed(ProcessInfo.processInfo.environment)),
+                              environment: ClaudeLauncher.environment(
+                                  base: ClaudeLauncher.scrubbed(ProcessInfo.processInfo.environment), extra: meepo),
                               currentDirectory: directory)
         }
         views[id] = view

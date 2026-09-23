@@ -18,6 +18,7 @@ enum AddProjectError: LocalizedError, Equatable {
 final class AppStore {
     private let db: DatabaseQueue
     private let terminals = TerminalRegistry()
+    private let bridge: BridgeInstaller
     /// First prompt of a freshly created session; used once, never stored.
     private var initialPrompts: [Int64: String] = [:]
     private var loginEnvironment: ClaudeLauncher.LoginEnvironment?
@@ -26,14 +27,34 @@ final class AppStore {
     private(set) var sessions: [Session] = []
     private(set) var runningSessionIds: Set<Int64> = []
     private(set) var exitedSessionIds: Set<Int64> = []
-    var selectedSessionId: Int64?
+    var selectedSessionId: Int64? {
+        didSet { reloadEvents() }
+    }
     /// Non-nil while the "new session" sheet is shown; the project preselected in it.
     var newSessionProjectId: Int64?
+    /// Feed of the selected session, newest first.
+    private(set) var selectedEvents: [HookEvent] = []
+    private(set) var isBridgeInstalled = false
+    /// Last bridge/event-server problem to show the user.
+    var bridgeError: String?
+    /// False when macOS refuses Meepo's notifications (turned off in System Settings).
+    var notificationsAllowed = true
 
-    init(db: DatabaseQueue) {
+    private static let eventRetention: TimeInterval = 7 * 24 * 3600
+    private static let feedLimit = 200
+
+    init(db: DatabaseQueue, bridge: BridgeInstaller = BridgeInstaller()) {
         self.db = db
+        self.bridge = bridge
+        // Processes restart with Meepo, so statuses from the previous run are stale.
+        _ = try? db.write { db in
+            try db.execute(sql: "UPDATE session SET status = ?", arguments: [SessionStatus.idle])
+            try db.execute(sql: "DELETE FROM hookEvent WHERE createdAt < ?",
+                           arguments: [Date.now.addingTimeInterval(-Self.eventRetention)])
+        }
         reload()
         selectedSessionId = orderedSessions.first?.id
+        isBridgeInstalled = bridge.isInstalled()
         terminals.onExit = { [weak self] id in
             self?.runningSessionIds.remove(id)
             self?.exitedSessionIds.insert(id)
@@ -54,6 +75,81 @@ final class AppStore {
         sessions = (try? db.read { try Session.order(Column("createdAt")).fetchAll($0) }) ?? []
     }
 
+    // MARK: Hook events
+
+    var waitingCount: Int {
+        sessions.filter { $0.status == .waitingInput || $0.status == .waitingPermission }.count
+    }
+
+    /// Applies a hook event to its session; returns what (if anything) the user should be told.
+    @discardableResult
+    func handleHookEvent(_ payload: HookPayload, sessionId: Int64) -> Attention? {
+        guard var session = sessions.first(where: { $0.id == sessionId }) else { return nil }
+        let old = session.status
+        // `/clear` starts a new conversation in the same process; resume that one after a restart.
+        if payload.event == "SessionStart" { session.claudeSessionId = payload.claudeSessionId }
+        // A Notification is a delayed echo (~6 s) of a prompt already reported by PermissionRequest;
+        // it must not turn a question (waiting for input) into a permission request.
+        let isEcho = payload.event == "Notification" && (old == .waitingInput || old == .waitingPermission)
+        if let status = payload.status, !isEcho { session.status = status }
+        session.lastActiveAt = .now
+        var event = HookEvent(sessionId: sessionId, name: payload.event, summary: payload.summary,
+                              isFailure: payload.isFailure, createdAt: .now)
+        do {
+            try db.write { db in
+                try session.update(db)
+                try event.insert(db)
+            }
+        } catch {
+            return nil
+        }
+        reload()
+        if sessionId == selectedSessionId { reloadEvents() }
+        let attention = Attention.from(old, to: session.status)
+        return payload.isQuestion && attention != nil ? .question : attention
+    }
+
+    private func reloadEvents() {
+        guard let id = selectedSessionId else { selectedEvents = []; return }
+        selectedEvents = (try? db.read {
+            try HookEvent.filter(Column("sessionId") == id)
+                .order(Column("createdAt").desc, Column("id").desc)
+                .limit(Self.feedLimit).fetchAll($0)
+        }) ?? []
+    }
+
+    // MARK: Bridge
+
+    func installBridge() {
+        do {
+            try bridge.install()
+            try bridge.setNotifyGuard(true, projectPaths: projects.map(\.path))
+            bridgeError = nil
+        } catch {
+            bridgeError = error.localizedDescription
+        }
+        isBridgeInstalled = bridge.isInstalled()
+    }
+
+    func uninstallBridge() {
+        do {
+            try bridge.setNotifyGuard(false, projectPaths: projects.map(\.path))
+            try bridge.uninstall()
+            bridgeError = nil
+        } catch {
+            bridgeError = error.localizedDescription
+        }
+        isBridgeInstalled = bridge.isInstalled()
+    }
+
+    /// While the bridge is installed: keep its script in sync with this Meepo version and
+    /// the user's own Notification hooks quiet in Meepo sessions (no-op when already done).
+    func refreshBridge() {
+        guard isBridgeInstalled else { return }
+        try? bridge.writeScript()
+        try? bridge.setNotifyGuard(true, projectPaths: projects.map(\.path))
+    }
+
     // MARK: Projects
 
     func addProject(at url: URL) throws {
@@ -65,6 +161,7 @@ final class AppStore {
         } catch let error as DatabaseError where error.extendedResultCode == .SQLITE_CONSTRAINT_UNIQUE {
             throw AddProjectError.alreadyAdded(name)
         }
+        if isBridgeInstalled { try? bridge.setNotifyGuard(true, projectPaths: [root]) }
         reload()
     }
 
