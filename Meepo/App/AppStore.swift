@@ -19,6 +19,7 @@ final class AppStore {
     private let db: DatabaseQueue
     private let terminals = TerminalRegistry()
     private let bridge: BridgeInstaller
+    private let usageRoot: URL
     /// First prompt of a freshly created session; used once, never stored.
     private var initialPrompts: [Int64: String] = [:]
     private var loginEnvironment: ClaudeLauncher.LoginEnvironment?
@@ -45,9 +46,10 @@ final class AppStore {
     private static let eventRetention: TimeInterval = 7 * 24 * 3600
     private static let feedLimit = 200
 
-    init(db: DatabaseQueue, bridge: BridgeInstaller = BridgeInstaller()) {
+    init(db: DatabaseQueue, bridge: BridgeInstaller = BridgeInstaller(), usageRoot: URL = UsageScanner.defaultRoot) {
         self.db = db
         self.bridge = bridge
+        self.usageRoot = usageRoot
         // Processes restart with Meepo, so statuses from the previous run are stale.
         _ = try? db.write { db in
             try db.execute(sql: "UPDATE session SET status = ?", arguments: [SessionStatus.idle])
@@ -151,6 +153,116 @@ final class AppStore {
         guard isBridgeInstalled else { return }
         try? bridge.writeScript()
         try? bridge.setNotifyGuard(true, projectPaths: projects.map(\.path))
+    }
+
+    // MARK: Usage (tokens, context)
+
+    struct SessionUsage: Equatable {
+        var tokensToday = 0
+        /// Tokens in the window at the latest main-conversation response.
+        var contextTokens = 0
+        var model: String?
+    }
+
+    struct UsageTotals: Equatable {
+        var input = 0, output = 0, cacheWrite = 0, cacheRead = 0
+        var total: Int { input + output + cacheWrite + cacheRead }
+    }
+
+    struct UsageStats {
+        var total = UsageTotals()
+        var byProject: [(name: String, totals: UsageTotals)] = []
+        var byModel: [(name: String, totals: UsageTotals)] = []
+    }
+
+    static let defaultContextWindow = 200_000
+    private static let contextWindowsKey = "contextWindows"
+
+    private(set) var sessionUsage: [Int64: SessionUsage] = [:]
+    private var isScanning = false
+
+    /// Context window per model (design: "sizes in settings"); unknown models get 200K.
+    var contextWindows: [String: Int] = (UserDefaults.standard.data(forKey: contextWindowsKey))
+        .flatMap { try? JSONDecoder().decode([String: Int].self, from: $0) } ?? [:] {
+        didSet { UserDefaults.standard.set(try? JSONEncoder().encode(contextWindows), forKey: Self.contextWindowsKey) }
+    }
+
+    func contextWindow(for model: String?) -> Int {
+        model.flatMap { contextWindows[$0] } ?? Self.defaultContextWindow
+    }
+
+    /// 0…1 (can exceed 1 if the window setting is too small); nil before the first response.
+    func contextFraction(for sessionId: Int64) -> Double? {
+        guard let usage = sessionUsage[sessionId], usage.contextTokens > 0 else { return nil }
+        return Double(usage.contextTokens) / Double(contextWindow(for: usage.model))
+    }
+
+    /// Reads new JSONL lines in the background, then refreshes per-session numbers.
+    func refreshUsage() async {
+        guard !isScanning else { return }
+        isScanning = true
+        defer { isScanning = false }
+        let (db, root) = (self.db, usageRoot)
+        _ = try? await Task.detached { try UsageScanner.scan(root: root, into: db) }.value
+        reloadUsage()
+    }
+
+    func reloadUsage() {
+        let startOfDay = Calendar.current.startOfDay(for: .now)
+        var result: [Int64: SessionUsage] = [:]
+        try? db.read { db in
+            for session in sessions {
+                guard let id = session.id else { continue }
+                let today = try Int.fetchOne(db, sql: """
+                    SELECT SUM(inputTokens + outputTokens + cacheCreationTokens + cacheReadTokens)
+                    FROM usageRecord WHERE claudeSessionId = ? AND createdAt >= ?
+                    """, arguments: [session.claudeSessionId, startOfDay]) ?? 0
+                let last = try UsageRecord
+                    .filter(Column("claudeSessionId") == session.claudeSessionId && Column("isSidechain") == false)
+                    .order(Column("createdAt").desc)
+                    .fetchOne(db)
+                result[id] = SessionUsage(tokensToday: today, contextTokens: last?.contextTokens ?? 0, model: last?.model)
+            }
+        }
+        sessionUsage = result
+    }
+
+    /// Everything Claude Code spent since `start`, all sessions on this Mac; projects outside Meepo go to "Other".
+    func usageStats(since start: Date) -> UsageStats {
+        let sums = "SUM(inputTokens) AS i, SUM(outputTokens) AS o, SUM(cacheCreationTokens) AS w, SUM(cacheReadTokens) AS r"
+        func totals(_ row: Row) -> UsageTotals {
+            UsageTotals(input: row["i"] ?? 0, output: row["o"] ?? 0, cacheWrite: row["w"] ?? 0, cacheRead: row["r"] ?? 0)
+        }
+        func add(_ a: UsageTotals, _ b: UsageTotals) -> UsageTotals {
+            UsageTotals(input: a.input + b.input, output: a.output + b.output,
+                        cacheWrite: a.cacheWrite + b.cacheWrite, cacheRead: a.cacheRead + b.cacheRead)
+        }
+        var stats = UsageStats()
+        try? db.read { db in
+            let byModel = try Row.fetchAll(db, sql: "SELECT model, \(sums) FROM usageRecord WHERE createdAt >= ? GROUP BY model",
+                                           arguments: [start])
+            stats.byModel = byModel.map { (name: $0["model"] as String, totals: totals($0)) }
+            var byProject: [String: UsageTotals] = [:]
+            for row in try Row.fetchAll(db, sql: "SELECT cwd, \(sums) FROM usageRecord WHERE createdAt >= ? GROUP BY cwd",
+                                        arguments: [start]) {
+                let cwd: String = row["cwd"]
+                let name = projects.first { cwd == $0.path || cwd.hasPrefix($0.path + "/") }?.name ?? "Other"
+                byProject[name] = add(byProject[name] ?? UsageTotals(), totals(row))
+            }
+            stats.byProject = byProject.map { (name: $0.key, totals: $0.value) }
+        }
+        stats.byModel.sort { $0.totals.total > $1.totals.total }
+        stats.byProject.sort { $0.totals.total > $1.totals.total }
+        stats.total = stats.byModel.reduce(UsageTotals()) { add($0, $1.totals) }
+        return stats
+    }
+
+    /// Models seen in the last 30 days, for the context window settings.
+    func recentModels() -> [String] {
+        (try? db.read { db in
+            try String.fetchAll(db, sql: "SELECT DISTINCT model FROM usageRecord WHERE createdAt >= ? ORDER BY model",
+                                arguments: [Date.now.addingTimeInterval(-30 * 24 * 3600)])
+        }) ?? []
     }
 
     // MARK: Projects

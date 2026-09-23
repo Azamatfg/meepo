@@ -93,3 +93,42 @@ struct SelectedRing: View {
             .shadow(color: Tokens.selection.opacity(0.7), radius: 3)
     }
 }
+
+/// Pixel context bar (design §5): 4 px segments with 1 px gaps in a sunken well.
+/// Up to 50% `selection`, up to 70% `warn`, beyond that `alert`.
+struct ContextBar: View {
+    /// nil = no response yet.
+    let fraction: Double?
+
+    var body: some View {
+        Canvas { context, size in
+            let count = Int((size.width - 4) / 5)
+            let lit = Int((min(max(fraction ?? 0, 0), 1) * Double(count)).rounded(.up))
+            for i in 0..<count {
+                let rect = CGRect(x: 2 + CGFloat(i) * 5, y: 2, width: 4, height: size.height - 4)
+                let share = Double(i + 1) / Double(count)
+                let color = i >= lit ? Tokens.grassDeep : share <= 0.5 ? Tokens.selection : share <= 0.7 ? Tokens.warn : Tokens.alert
+                context.fill(Path(rect), with: .color(color))
+            }
+        }
+        .frame(height: 10)
+        .background(Tokens.terminalBg)
+        .sunken()
+        .help(fraction.map { "Context \(Int(($0 * 100).rounded()))%" } ?? "Context: no reply yet")
+    }
+}
+
+/// Small dark plate with a number, e.g. tokens today.
+struct NumberPlate: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(Fonts.mono(11))
+            .foregroundStyle(Tokens.text)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(Tokens.frameDark)
+            .sunken()
+    }
+}

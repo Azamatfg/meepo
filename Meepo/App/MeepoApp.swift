@@ -32,6 +32,11 @@ struct MeepoApp: App {
                     // Asking in App.init is too early: macOS answers "not allowed" before launch finishes.
                     await services.requestNotificationPermission(store: store)
                     await store.restoreSessions()
+                    // JSONL is appended continuously; Stop events also trigger a refresh.
+                    while !Task.isCancelled {
+                        await store.refreshUsage()
+                        try? await Task.sleep(for: .seconds(10))
+                    }
                 }
         }
         // Own Win95-style title bar in MainView instead of the system one (design §5).
@@ -55,6 +60,11 @@ struct MeepoApp: App {
                         .keyboardShortcut(KeyEquivalent(Character("\(number)")))
                 }
             }
+        }
+
+        Settings {
+            SettingsView()
+                .environment(store)
         }
 
         MenuBarExtra {
@@ -99,8 +109,10 @@ final class LiveServices {
         }
         do {
             let server = EventServer(token: try MeepoHome.token()) { [weak self, weak store] sessionId, body in
-                guard let store, let payload = HookPayload(json: body),
-                      let attention = store.handleHookEvent(payload, sessionId: sessionId),
+                guard let store, let payload = HookPayload(json: body) else { return }
+                let attention = store.handleHookEvent(payload, sessionId: sessionId)
+                if payload.event == "Stop" { Task { await store.refreshUsage() } }
+                guard let attention,
                       let session = store.sessions.first(where: { $0.id == sessionId }) else { return }
                 // The user is already looking at this session.
                 if NSApp.isActive && store.selectedSessionId == sessionId { return }

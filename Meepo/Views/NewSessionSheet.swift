@@ -12,30 +12,49 @@ struct NewSessionSheet: View {
     private let models = [("", "Default"), ("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")]
 
     var body: some View {
-        Form {
-            Picker("Project", selection: $projectId) {
-                ForEach(store.projects) { Text($0.name).tag($0.id) }
+        VStack(alignment: .leading, spacing: 12) {
+            Text("NEW SESSION").font(Fonts.title(18)).foregroundStyle(Tokens.text)
+            FieldRow("Project") {
+                PixelMenu(selection: store.projects.first { $0.id == projectId }?.name ?? "—") {
+                    ForEach(store.projects) { project in
+                        Button(project.name) { projectId = project.id }
+                    }
+                }
             }
-            Picker("Model", selection: $model) {
-                ForEach(models, id: \.0) { Text($0.1).tag($0.0) }
+            FieldRow("Model") {
+                PixelMenu(selection: models.first { $0.0 == model }?.1 ?? "Default") {
+                    ForEach(models, id: \.0) { option in
+                        Button(option.1) { model = option.0 }
+                    }
+                }
             }
-            TextField("First prompt (optional)", text: $prompt, axis: .vertical)
-                .lineLimit(3...8)
+            Text("First prompt (optional)").font(.caption).foregroundStyle(Tokens.textDim)
+            TextEditor(text: $prompt)
+                .font(Fonts.mono(13))
+                .foregroundStyle(Tokens.text)
+                .scrollContentBackground(.hidden)
+                .padding(6)
+                .frame(height: 110)
+                .background(Tokens.terminalBg)
+                .sunken()
             if let error {
                 Text(error).foregroundStyle(Tokens.danger)
             }
-        }
-        .formStyle(.grouped)
-        .frame(width: 460)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
+            HStack {
+                Spacer()
                 Button("Cancel") { dismiss() }
-            }
-            ToolbarItem(placement: .confirmationAction) {
+                    .keyboardShortcut(.cancelAction)
                 Button("Start") { create() }
+                    .keyboardShortcut(.defaultAction)
                     .disabled(projectId == nil)
             }
+            .buttonStyle(PixelButtonStyle())
         }
+        .padding(16)
+        .frame(width: 460)
+        .background(Tokens.grass)
+        .pixelFrame(6)
+        .preferredColorScheme(.dark)
         .onAppear { projectId = store.newSessionProjectId }
     }
 
@@ -48,5 +67,45 @@ struct NewSessionSheet: View {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+}
+
+/// Label on the left, control on the right.
+struct FieldRow<Content: View>: View {
+    let label: String
+    @ViewBuilder let content: Content
+
+    init(_ label: String, @ViewBuilder content: () -> Content) {
+        self.label = label
+        self.content = content()
+    }
+
+    var body: some View {
+        HStack {
+            Text(label).foregroundStyle(Tokens.text)
+            Spacer()
+            content
+        }
+    }
+}
+
+/// Drop-down in the pixel button look instead of the system pop-up.
+struct PixelMenu<Items: View>: View {
+    let selection: String
+    @ViewBuilder let items: Items
+
+    var body: some View {
+        Menu {
+            items
+        } label: {
+            HStack(spacing: 6) {
+                Text(selection)
+                Text("▾")
+            }
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(PixelButtonStyle())
+        .fixedSize()
     }
 }

@@ -45,6 +45,30 @@ enum AppDatabase {
             }
         }
 
+        migrator.registerMigration("v3") { db in
+            try db.create(table: "usageRecord") { t in
+                t.primaryKey("messageId", .text)
+                t.column("claudeSessionId", .text).notNull().indexed()
+                t.column("cwd", .text).notNull()
+                t.column("model", .text).notNull()
+                t.column("createdAt", .datetime).notNull().indexed()
+                t.column("isSidechain", .boolean).notNull()
+                t.column("inputTokens", .integer).notNull()
+                t.column("outputTokens", .integer).notNull()
+                t.column("cacheCreationTokens", .integer).notNull()
+                t.column("cacheReadTokens", .integer).notNull()
+            }
+            try db.create(table: "scanState") { t in
+                t.primaryKey("path", .text)
+                t.column("offset", .integer).notNull()
+            }
+        }
+
+        // v3 kept the first streamed line of a response (undercounted output); rescan with max-per-field.
+        migrator.registerMigration("v4-rescan-usage") { db in
+            try db.execute(sql: "DELETE FROM usageRecord; DELETE FROM scanState")
+        }
+
         return migrator
     }
 }

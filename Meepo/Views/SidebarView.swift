@@ -99,6 +99,11 @@ private struct UnitCard: View {
                     .font(.caption)
                     .foregroundStyle(look.ring == .waiting ? Tokens.alert : Tokens.textDim)
                     .lineLimit(1)
+                HStack(spacing: 6) {
+                    ContextBar(fraction: session.id.flatMap(store.contextFraction(for:)))
+                    NumberPlate(text: TokenFormat.short(session.id.flatMap { store.sessionUsage[$0]?.tokensToday } ?? 0))
+                        .help("Tokens today (input + output + cache)")
+                }
             }
             Spacer(minLength: 0)
         }

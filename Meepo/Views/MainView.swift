@@ -9,10 +9,11 @@ struct MainView: View {
     @AppStorage("feedShown") private var isFeedShown = true
     @State private var isPickingFolder = false
     @State private var addError: String?
+    @State private var isStatsShown = false
 
     var body: some View {
         VStack(spacing: 0) {
-            TitleBar(isFeedShown: $isFeedShown) { isPickingFolder = true }
+            TitleBar(isFeedShown: $isFeedShown, isStatsShown: $isStatsShown) { isPickingFolder = true }
             HStack(spacing: 6) {
                 SidebarView()
                     .frame(width: 290)
@@ -46,6 +47,7 @@ struct MainView: View {
         )) {
             NewSessionSheet()
         }
+        .sheet(isPresented: $isStatsShown) { StatsView() }
         .fileImporter(isPresented: $isPickingFolder, allowedContentTypes: [.folder]) { result in
             do {
                 try store.addProject(at: result.get())
@@ -68,6 +70,7 @@ struct MainView: View {
 private struct TitleBar: View {
     @Environment(AppStore.self) private var store
     @Binding var isFeedShown: Bool
+    @Binding var isStatsShown: Bool
     let onAddProject: () -> Void
     @State private var isFullScreen = false
 
@@ -79,6 +82,7 @@ private struct TitleBar: View {
             Button("+ Project", action: onAddProject)
                 .padding(.leading, 12)
             Button(isFeedShown ? "Hide Events" : "Events") { isFeedShown.toggle() }
+            Button("Stats") { isStatsShown = true }
             if store.waitingCount > 0 {
                 Text("! \(store.waitingCount)")
                     .font(Fonts.title(16))
