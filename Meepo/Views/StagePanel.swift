@@ -10,6 +10,7 @@ struct StagePanel: View {
     @State private var isPlanAsked = false
     @State private var missingStage: Stage?
     @State private var isHandoffShown = false
+    @State private var isRemoveAsked = false
     @State private var handoffNotes = ""
     @State private var planTask = ""
 
@@ -53,6 +54,20 @@ struct StagePanel: View {
                     }
             }
             Spacer()
+            if let port = session.portBase {
+                NumberPlate(text: "PORT \(port)").help("PORT / MEEPO_PORT_BASE for this session: \(port)–\(port + Ports.blockSize - 1)")
+            }
+            if store.mergedWorktreeSessionIds.contains(session.id!) {
+                Button("REMOVE WORKTREE") { isRemoveAsked = true }
+                    .buttonStyle(PixelButtonStyle())
+                    .overlay { Rectangle().stroke(Tokens.selection, lineWidth: 2) }
+                    .help("The branch is merged: delete the worktree and its branch, close this session")
+                    .confirmationDialog("Remove worktree \(session.worktreeName ?? "")?", isPresented: $isRemoveAsked) {
+                        Button("Remove worktree and branch", role: .destructive) { store.removeWorktree(of: session.id!) }
+                    } message: {
+                        Text("Branch \(session.branch ?? "") is merged. The session closes.")
+                    }
+            }
             if store.dirtyProjectIds.contains(session.projectId) {
                 Text("✎ UNCOMMITTED")
                     .font(Fonts.title(16))

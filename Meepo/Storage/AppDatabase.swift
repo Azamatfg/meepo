@@ -76,6 +76,14 @@ enum AppDatabase {
             }
         }
 
+        migrator.registerMigration("v6-worktrees-ports") { db in
+            try db.alter(table: "session") { t in
+                t.add(column: "worktreeName", .text)
+                t.add(column: "worktreeBase", .text)
+                t.add(column: "portBase", .integer)
+            }
+        }
+
         return migrator
     }
 }

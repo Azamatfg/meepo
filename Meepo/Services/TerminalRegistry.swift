@@ -11,9 +11,10 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
         views[sessionId]
     }
 
-    func start(_ session: Session, in directory: String, initialPrompt: String?,
+    func start(_ session: Session, projectPath: String, initialPrompt: String?,
                login: ClaudeLauncher.LoginEnvironment?) {
         guard let id = session.id, views[id] == nil else { return }
+        let (directory, createWorktree) = ClaudeLauncher.location(worktreeName: session.worktreeName, projectPath: projectPath)
         // Sessions start before they're on screen; a zero frame would start claude in a 0-column terminal.
         let view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700))
         view.font = Fonts.terminal(13)
@@ -26,10 +27,15 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
             resume: ClaudeLauncher.hasTranscript(sessionId: session.claudeSessionId),
             model: session.model,
             effort: session.effort,
+            worktree: createWorktree,
             prompt: initialPrompt
         )
         // Lets meepo-bridge.sh tag every hook event with this session, even after /clear changes the claude id.
-        let meepo = ["MEEPO_SESSION_ID": String(id), "MEEPO_PORT": String(EventServer.defaultPort)]
+        var meepo = ["MEEPO_SESSION_ID": String(id), "MEEPO_PORT": String(EventServer.defaultPort)]
+        if let base = session.portBase { // SPEC module 5: the session's own port range
+            meepo["PORT"] = String(base)
+            meepo["MEEPO_PORT_BASE"] = String(base)
+        }
         if let login {
             view.startProcess(executable: login.claudePath, args: args,
                               environment: ClaudeLauncher.environment(base: login.environment, extra: meepo),

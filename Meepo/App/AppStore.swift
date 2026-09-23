@@ -419,8 +419,51 @@ final class AppStore {
         refreshProjects()
     }
 
+    // MARK: Worktrees and ports (SPEC module 5)
+
+    private(set) var mergedWorktreeSessionIds: Set<Int64> = []
+
+    private func nextPortBase() -> Int {
+        Ports.nextBase(taken: Set(sessions.compactMap(\.portBase)),
+                       listening: Set(Ports.listening().map(\.port)))
+    }
+
+    private func assignPortBase(_ sessionId: Int64) {
+        guard var session = sessions.first(where: { $0.id == sessionId }) else { return }
+        session.portBase = nextPortBase()
+        _ = try? db.write { try session.update($0) }
+        reload()
+    }
+
+    /// Folder a session works in: its worktree, or the project itself.
+    func workdir(of session: Session) -> String? {
+        guard let project = project(for: session) else { return nil }
+        return session.worktreeName.map { ClaudeLauncher.worktreePath($0, projectPath: project.path) } ?? project.path
+    }
+
+    /// After the feature is merged: remove the worktree and its branch, close the session.
+    func removeWorktree(of sessionId: Int64) {
+        guard let session = sessions.first(where: { $0.id == sessionId }), let name = session.worktreeName,
+              let project = project(for: session) else { return }
+        terminals.close(sessionId) // claude keeps the worktree locked while it runs
+        if let error = GitService.removeWorktree(at: ClaudeLauncher.worktreePath(name, projectPath: project.path),
+                                                 branch: "worktree-\(name)", in: project.path) {
+            bridgeError = error
+            startTerminalIfNeeded(sessionId)
+            return
+        }
+        closeSession(sessionId)
+    }
+
     /// Commands and uncommitted changes per project; cheap, refreshed with usage.
     func refreshProjects() {
+        var merged: Set<Int64> = []
+        for session in sessions {
+            guard let id = session.id, let name = session.worktreeName, let base = session.worktreeBase,
+                  let project = project(for: session) else { continue }
+            if GitService.isMerged(branch: "worktree-\(name)", startedAt: base, in: project.path) { merged.insert(id) }
+        }
+        mergedWorktreeSessionIds = merged
         var commands: [Int64: [SlashCommand]] = [:]
         var dirty: Set<Int64> = []
         for project in projects {
@@ -466,15 +509,22 @@ final class AppStore {
         newSessionProjectId = projectId ?? selectedSession?.projectId ?? projects.first?.id
     }
 
-    func createSession(projectId: Int64, model: String?, prompt: String?, effort: String? = nil, stage: String? = nil) throws {
+    /// `worktree`: a feature name — the session runs in its own git worktree (`claude -w`), SPEC module 5.
+    func createSession(projectId: Int64, model: String?, prompt: String?, effort: String? = nil, stage: String? = nil,
+                       worktree: String? = nil) throws {
         guard let project = projects.first(where: { $0.id == projectId }) else { return }
+        let worktreeName = worktree.map(ClaudeLauncher.worktreeSlug).flatMap { $0.isEmpty ? nil : $0 }
+        if worktreeName != nil { GitService.ensureWorktreesIgnored(in: project.path) }
         var session = Session(
             projectId: projectId,
             claudeSessionId: UUID().uuidString.lowercased(),
             model: model,
             effort: effort,
-            branch: GitService.currentBranch(in: project.path),
+            branch: worktreeName.map { "worktree-\($0)" } ?? GitService.currentBranch(in: project.path),
             stage: stage,
+            worktreeName: worktreeName,
+            worktreeBase: worktreeName.flatMap { _ in GitService.headCommit(in: project.path) },
+            portBase: nextPortBase(),
             status: .idle,
             createdAt: .now,
             lastActiveAt: .now
@@ -511,9 +561,11 @@ final class AppStore {
     /// only if that resolution failed does claude go through the shell fallback.
     func startTerminalIfNeeded(_ sessionId: Int64) {
         guard isLoginResolved, terminals.view(for: sessionId) == nil,
-              let session = sessions.first(where: { $0.id == sessionId }),
-              let project = project(for: session) else { return }
-        terminals.start(session, in: project.path, initialPrompt: initialPrompts.removeValue(forKey: sessionId),
+              let existing = sessions.first(where: { $0.id == sessionId }),
+              let project = project(for: existing) else { return }
+        if existing.portBase == nil { assignPortBase(sessionId) } // sessions from before module 5
+        guard let session = sessions.first(where: { $0.id == sessionId }) else { return }
+        terminals.start(session, projectPath: project.path, initialPrompt: initialPrompts.removeValue(forKey: sessionId),
                         login: loginEnvironment)
         runningSessionIds.insert(sessionId)
     }

@@ -7,6 +7,8 @@ struct NewSessionSheet: View {
     @State private var model = ""
     @State private var prompt = ""
     @State private var error: String?
+    @State private var useWorktree = false
+    @State private var featureName = ""
 
     /// Aliases accepted by `claude --model`; empty = Claude Code's default.
     private let models = [("", "Default"), ("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")]
@@ -20,6 +22,21 @@ struct NewSessionSheet: View {
                         Button(project.name) { projectId = project.id }
                     }
                 }
+            }
+            FieldRow("Worktree") {
+                Button(useWorktree ? "ON" : "OFF") { useWorktree.toggle() }
+                    .buttonStyle(PixelButtonStyle())
+                    .overlay { if useWorktree { Rectangle().stroke(Tokens.selection, lineWidth: 2) } }
+                    .help("Separate git worktree and branch (claude -w), so parallel features don't touch each other's files")
+            }
+            if useWorktree {
+                TextField("Feature name, e.g. login-google", text: $featureName)
+                    .textFieldStyle(.plain)
+                    .font(Fonts.mono(13))
+                    .foregroundStyle(Tokens.text)
+                    .padding(6)
+                    .background(Tokens.terminalBg)
+                    .sunken()
             }
             FieldRow("Model") {
                 PixelMenu(selection: models.first { $0.0 == model }?.1 ?? "Default") {
@@ -46,7 +63,7 @@ struct NewSessionSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Start") { create() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(projectId == nil)
+                    .disabled(projectId == nil || (useWorktree && ClaudeLauncher.worktreeSlug(featureName).isEmpty))
             }
             .buttonStyle(PixelButtonStyle())
         }
@@ -56,13 +73,16 @@ struct NewSessionSheet: View {
         .pixelFrame(6)
         .preferredColorScheme(.dark)
         .onAppear { projectId = store.newSessionProjectId }
+        // SPEC module 5: a second session in the same project defaults to its own worktree.
+        .onChange(of: projectId, initial: true) { useWorktree = store.sessions.contains { $0.projectId == projectId } }
     }
 
     private func create() {
         guard let projectId else { return }
         do {
             try store.createSession(projectId: projectId, model: model.isEmpty ? nil : model,
-                                    prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines))
+                                    prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines),
+                                    worktree: useWorktree ? featureName : nil)
             dismiss()
         } catch {
             self.error = error.localizedDescription

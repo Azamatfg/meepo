@@ -21,6 +21,12 @@ struct Session: Codable, Identifiable, Hashable, FetchableRecord, MutablePersist
     var branch: String?
     /// Workflow stage (a stage name from Settings), from the last slash command run in the session.
     var stage: String?
+    /// Set for a parallel feature: `claude -w <name>` works in `<repo>/.claude/worktrees/<name>`.
+    var worktreeName: String?
+    /// Commit the worktree branched from; "merged" only counts once the branch moved past it.
+    var worktreeBase: String?
+    /// First of the session's 10 ports (PORT, MEEPO_PORT_BASE).
+    var portBase: Int?
     var status: SessionStatus
     var createdAt: Date
     var lastActiveAt: Date

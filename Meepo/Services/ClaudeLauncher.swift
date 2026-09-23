@@ -10,12 +10,33 @@ enum ClaudeLauncher {
     /// New session: `--session-id <uuid>` so Meepo knows the id up front.
     /// Existing transcript: `--resume <uuid>`; the initial prompt is never re-sent.
     static func claudeArguments(sessionId: String, resume: Bool, model: String?, effort: String? = nil,
-                                prompt: String?) -> [String] {
+                                worktree: String? = nil, prompt: String?) -> [String] {
         var args = resume ? ["--resume", sessionId] : ["--session-id", sessionId]
+        if let worktree { args += ["--worktree", worktree] }
         if let model, !model.isEmpty { args += ["--model", model] }
         if let effort, !effort.isEmpty { args += ["--effort", effort] }
         if !resume, let prompt, !prompt.isEmpty { args.append(prompt) }
         return args
+    }
+
+    /// Where claude runs and whether it must create the worktree: `claude -w` makes
+    /// `<repo>/.claude/worktrees/<name>` (branch `worktree-<name>`) on first start, honouring the user's
+    /// worktree settings and hooks; afterwards the session runs inside that folder (its transcript lives there).
+    static func location(worktreeName: String?, projectPath: String) -> (directory: String, createWorktree: String?) {
+        guard let name = worktreeName else { return (projectPath, nil) }
+        let path = worktreePath(name, projectPath: projectPath)
+        return FileManager.default.fileExists(atPath: path) ? (path, nil) : (projectPath, name)
+    }
+
+    static func worktreePath(_ name: String, projectPath: String) -> String {
+        URL(filePath: projectPath).appending(path: ".claude/worktrees/\(name)").path
+    }
+
+    /// Feature name → safe worktree/branch name: "Login via Google!" → "login-via-google".
+    static func worktreeSlug(_ name: String) -> String {
+        name.lowercased()
+            .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
     }
 
     /// What the user's interactive login shell sees: GUI apps don't inherit PATH,
