@@ -58,7 +58,7 @@ jobs:
           xcodebuild -project Meepo.xcodeproj -scheme Meepo -configuration Release -skipPackagePluginValidation \
             -derivedDataPath build ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
             MARKETING_VERSION="${VERSION:-0.0.0}" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
-            CODE_SIGN_IDENTITY="Developer ID Application" DEVELOPMENT_TEAM="$TEAM_ID" OTHER_CODE_SIGN_FLAGS="--timestamp" \
+            OTHER_CODE_SIGN_FLAGS="--timestamp" \
             build
 
       - name: Notarize
