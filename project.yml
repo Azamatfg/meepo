@@ -33,10 +33,13 @@ targets:
     platform: macOS
     sources:
       - path: Meepo
-        excludes: ["Resources/Monaco/**"]
+        excludes: ["Resources/Monaco/**", "Resources/meepo"]
       # A folder reference keeps Monaco's vs/ tree intact in the bundle (its loader resolves by path).
       - path: Meepo/Resources/Monaco
         type: folder
+        buildPhase: resources
+      # The `meepo` command; the cask links it into PATH (keeps its executable bit in the bundle).
+      - path: Meepo/Resources/meepo
         buildPhase: resources
     dependencies:
       - package: GRDB
@@ -46,6 +49,13 @@ targets:
       path: Meepo/Meepo.entitlements
       properties:
         com.apple.security.application-groups: [ZKXQWVLBRG.com.azamatfg.meepo]
+    # meepo:// — the `meepo` command (Resources/meepo) hands folders to the running app through it.
+    info:
+      path: Meepo/Info.plist
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLName: com.azamatfg.meepo
+            CFBundleURLSchemes: [meepo]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.azamatfg.meepo

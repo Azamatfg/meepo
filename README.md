@@ -39,6 +39,8 @@ brew trust azamatfg/meepo     # newer Homebrew asks you to trust third-party tap
 brew install --cask meepo
 ```
 
+Then `meepo` opens it from any terminal, and `meepo .` adds the current folder as a project with a Claude session in it.
+
 Or download `Meepo.zip` from [Releases](https://github.com/Azamatfg/meepo/releases), unzip it and move `Meepo.app` to Applications. Builds are signed and notarized by Apple, so macOS opens them without warnings.
 
 ### Build from source

@@ -27,6 +27,10 @@ struct MeepoApp: App {
         Window("Meepo", id: "main") {
             MainView()
                 .environment(store)
+                .onOpenURL { url in
+                    store.openFromCommandLine(url)
+                    NSApp.activate(ignoringOtherApps: true)
+                }
                 .onChange(of: store.screenshotHotKey) { services?.bindScreenshotHotKey(store.screenshotHotKey, store: store) }
                 .task {
                     guard let services else { return }

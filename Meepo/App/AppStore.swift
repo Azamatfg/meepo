@@ -989,6 +989,23 @@ final class AppStore {
         selectedSessionId = session.id
     }
 
+    /// `meepo <folder>` (via meepo://open?path=…): the folder's project — added if new — with a session open in it.
+    func openFromCommandLine(_ url: URL) {
+        guard url.scheme == "meepo", url.host() == "open",
+              let path = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "path" })?.value
+        else { return }
+        let root = (try? GitService.repositoryRoot(of: path)) ?? URL(filePath: path).standardizedFileURL.path
+        if !projects.contains(where: { $0.path == root }) {
+            do { try addProject(at: URL(filePath: path)) } catch { bridgeError = error.localizedDescription; return }
+        }
+        guard let project = projects.first(where: { $0.path == root }), let projectId = project.id else { return }
+        if let latest = orderedSessions.last(where: { $0.projectId == projectId }) {
+            selectedSessionId = latest.id
+        } else {
+            try? createSession(projectId: projectId, model: nil, prompt: nil)
+        }
+    }
+
     /// A fresh claude in the same folder — same worktree, branch and ports — and the old session closed.
     /// The old conversation stays in ~/.claude (claude --resume can still open it).
     func replaceSession(_ id: Int64) throws {

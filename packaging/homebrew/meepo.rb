@@ -12,6 +12,7 @@ cask "meepo" do
   depends_on macos: :sonoma
 
   app "Meepo.app"
+  binary "#{appdir}/Meepo.app/Contents/Resources/meepo"
 
   zap trash: [
     "~/.meepo",
