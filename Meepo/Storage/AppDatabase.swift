@@ -105,6 +105,16 @@ enum AppDatabase {
             }
         }
 
+        migrator.registerMigration("v8-release-notes") { db in
+            try db.create(table: "releaseNote") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.belongsTo("project", onDelete: .cascade).notNull()
+                t.column("sha", .text).notNull()
+                t.column("text", .text).notNull()
+                t.column("createdAt", .datetime).notNull()
+            }
+        }
+
         return migrator
     }
 }

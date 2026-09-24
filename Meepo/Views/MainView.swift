@@ -13,11 +13,13 @@ struct MainView: View {
     @State private var isMorningShown = false
     @State private var isDayShown = false
     @State private var isToolsShown = false
+    @State private var isNotesShown = false
 
     var body: some View {
         VStack(spacing: 0) {
             TitleBar(isFeedShown: $isFeedShown, isStatsShown: $isStatsShown,
-                     isMorningShown: $isMorningShown, isDayShown: $isDayShown, isToolsShown: $isToolsShown) { isPickingFolder = true }
+                     isMorningShown: $isMorningShown, isDayShown: $isDayShown, isToolsShown: $isToolsShown,
+                     isNotesShown: $isNotesShown) { isPickingFolder = true }
             HStack(spacing: 6) {
                 SidebarView()
                     .frame(width: 290)
@@ -55,6 +57,7 @@ struct MainView: View {
         .sheet(isPresented: $isMorningShown) { MorningView() }
         .sheet(isPresented: $isDayShown) { DayView() }
         .sheet(isPresented: $isToolsShown) { ToolsView() }
+        .sheet(isPresented: $isNotesShown) { NotesView() }
         .fileImporter(isPresented: $isPickingFolder, allowedContentTypes: [.folder]) { result in
             do {
                 try store.addProject(at: result.get())
@@ -81,6 +84,7 @@ private struct TitleBar: View {
     @Binding var isMorningShown: Bool
     @Binding var isDayShown: Bool
     @Binding var isToolsShown: Bool
+    @Binding var isNotesShown: Bool
     let onAddProject: () -> Void
     @State private var isFullScreen = false
 
@@ -99,6 +103,8 @@ private struct TitleBar: View {
             Button("Stats") { isStatsShown = true }
             Button("Tools") { isToolsShown = true }
                 .help("Shared commands/hooks across projects, Docker cleanup")
+            Button("Notes") { isNotesShown = true }
+                .help("Release note drafts from recent commits, in your voice")
             SettingsLink { Text("Settings") }
                 .help("Context windows, relay threshold, Remote Control, stages (⌘,)")
             if store.waitingCount > 0 {

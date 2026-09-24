@@ -64,6 +64,11 @@ enum GitService {
             .split(separator: "\n").map(String.init) ?? []
     }
 
+    /// Trimmed stdout of any git command; nil on failure or empty output.
+    static func output(_ args: [String], in path: String) -> String? {
+        run(args, in: path)
+    }
+
     static func hasUncommittedChanges(in path: String) -> Bool {
         run(["status", "--porcelain"], in: path) != nil
     }

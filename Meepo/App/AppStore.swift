@@ -71,6 +71,7 @@ final class AppStore {
         }
         reload()
         reloadTasks()
+        reloadReleaseNotes()
         selectedSessionId = orderedSessions.first?.id
         isBridgeInstalled = bridge.isInstalled()
         terminals.onExit = { [weak self] id in
@@ -564,6 +565,65 @@ final class AppStore {
     func ciState(for session: Session) -> CIRun? {
         let runs = (ciRuns[session.projectId] ?? []).filter { $0.headBranch == session.branch }
         return runs.first(where: \.failed) ?? runs.first(where: \.isRunning) ?? runs.first(where: \.succeeded)
+    }
+
+    // MARK: Release notes (SPEC module 12)
+
+    private(set) var releaseNotes: [ReleaseNote] = []
+    /// Projects whose note `claude -p` is writing right now.
+    private(set) var writingNotes: Set<Int64> = []
+
+    func reloadReleaseNotes() {
+        releaseNotes = (try? db.read { try ReleaseNote.order(Column("createdAt").desc).fetchAll($0) }) ?? []
+    }
+
+    /// Drafts a note about the commits since the project's last note, in the style of the user's samples.
+    func writeReleaseNote(for project: Project) async {
+        guard let projectId = project.id, !writingNotes.contains(projectId) else { return }
+        guard let login = loginEnvironment else { bridgeError = "claude isn't found in the login shell"; return }
+        let last = releaseNotes.first { $0.projectId == projectId }
+        guard let head = GitService.headCommit(in: project.path),
+              let commits = ReleaseNotes.commits(after: last?.sha, in: project.path) else {
+            bridgeError = "No new commits in \(project.name) since the last note"
+            return
+        }
+        let style = (try? String(contentsOf: ReleaseNotes.styleURL, encoding: .utf8)) ?? ""
+        let prompt = ReleaseNotes.prompt(project: project.name, commits: commits,
+                                         shipReport: lastShipReport(projectId, after: last?.createdAt), style: style)
+        writingNotes.insert(projectId)
+        defer { writingNotes.remove(projectId) }
+        do {
+            let text = try await ReleaseNotes.generate(prompt, claude: login.claudePath, environment: login.environment)
+            let note = ReleaseNote(projectId: projectId, sha: head, text: text)
+            _ = try await db.write { try note.inserted($0) }
+            reloadReleaseNotes()
+        } catch {
+            bridgeError = error.localizedDescription
+        }
+    }
+
+    func updateReleaseNote(_ note: ReleaseNote) {
+        try? db.write { try note.update($0) }
+        reloadReleaseNotes()
+    }
+
+    func deleteReleaseNote(_ id: Int64) {
+        _ = try? db.write { try ReleaseNote.deleteOne($0, id: id) }
+        reloadReleaseNotes()
+    }
+
+    /// What Claude answered to the project's latest ship command (the first Stop after it), if newer than `date`.
+    func lastShipReport(_ projectId: Int64, after date: Date?) -> String? {
+        let ship = stages.first { $0.name == "ship" }?.command ?? "ship"
+        return try? db.read { db in
+            try String.fetchOne(db, sql: """
+                SELECT e.summary FROM hookEvent e JOIN session s ON s.id = e.sessionId
+                WHERE s.projectId = ? AND e.name = 'Stop' AND e.createdAt > ? AND e.createdAt > (
+                    SELECT MAX(e2.createdAt) FROM hookEvent e2 JOIN session s2 ON s2.id = e2.sessionId
+                    WHERE s2.projectId = ? AND e2.name = 'UserPromptExpansion' AND e2.summary LIKE ?)
+                ORDER BY e.createdAt LIMIT 1
+                """, arguments: [projectId, date ?? .distantPast, projectId, "/\(ship)%"])
+        }
     }
 
     // MARK: Tasks, morning and evening (SPEC module 7)
