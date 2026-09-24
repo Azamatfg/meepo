@@ -61,6 +61,8 @@ final class AppStore {
         autofixProjectIds = Set((defaults.array(forKey: Self.autofixKey) as? [Int64]) ?? [])
         fixAttempts = (defaults.dictionary(forKey: Self.fixAttemptsKey) as? [String: Int]) ?? [:]
         screenshotHotKey = defaults.string(forKey: Self.shotHotKeyKey) ?? "⌘⇧6"
+        libraryFolder = defaults.string(forKey: Self.libraryKey)
+            ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude").path
         // Processes restart with Meepo, so statuses from the previous run are stale.
         _ = try? db.write { db in
             try db.execute(sql: "UPDATE session SET status = ?", arguments: [SessionStatus.idle])
@@ -312,6 +314,14 @@ final class AppStore {
 
     private static let remoteControlKey = "remoteControl"
     private static let shotHotKeyKey = "screenshotHotKey"
+    private static let libraryKey = "libraryFolder"
+
+    /// Where shared practices live (SPEC module 11); default: the user's global ~/.claude.
+    var libraryFolder: String {
+        didSet { defaults.set(libraryFolder, forKey: Self.libraryKey) }
+    }
+
+    var libraryURL: URL { Library.resolve(URL(filePath: libraryFolder)) }
 
     /// Global screenshot hotkey (a `GlobalHotKey.combos` title); "" = off.
     var screenshotHotKey: String {

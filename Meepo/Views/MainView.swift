@@ -12,11 +12,12 @@ struct MainView: View {
     @State private var isStatsShown = false
     @State private var isMorningShown = false
     @State private var isDayShown = false
+    @State private var isToolsShown = false
 
     var body: some View {
         VStack(spacing: 0) {
             TitleBar(isFeedShown: $isFeedShown, isStatsShown: $isStatsShown,
-                     isMorningShown: $isMorningShown, isDayShown: $isDayShown) { isPickingFolder = true }
+                     isMorningShown: $isMorningShown, isDayShown: $isDayShown, isToolsShown: $isToolsShown) { isPickingFolder = true }
             HStack(spacing: 6) {
                 SidebarView()
                     .frame(width: 290)
@@ -53,6 +54,7 @@ struct MainView: View {
         .sheet(isPresented: $isStatsShown) { StatsView() }
         .sheet(isPresented: $isMorningShown) { MorningView() }
         .sheet(isPresented: $isDayShown) { DayView() }
+        .sheet(isPresented: $isToolsShown) { ToolsView() }
         .fileImporter(isPresented: $isPickingFolder, allowedContentTypes: [.folder]) { result in
             do {
                 try store.addProject(at: result.get())
@@ -78,6 +80,7 @@ private struct TitleBar: View {
     @Binding var isStatsShown: Bool
     @Binding var isMorningShown: Bool
     @Binding var isDayShown: Bool
+    @Binding var isToolsShown: Bool
     let onAddProject: () -> Void
     @State private var isFullScreen = false
 
@@ -94,6 +97,8 @@ private struct TitleBar: View {
             Button("Day") { isDayShown = true }
                 .help("End-of-day summary per project")
             Button("Stats") { isStatsShown = true }
+            Button("Tools") { isToolsShown = true }
+                .help("Shared commands/hooks across projects, Docker cleanup")
             SettingsLink { Text("Settings") }
                 .help("Context windows, relay threshold, Remote Control, stages (⌘,)")
             if store.waitingCount > 0 {

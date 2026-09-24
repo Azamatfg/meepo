@@ -132,3 +132,50 @@ struct NumberPlate: View {
             .sunken()
     }
 }
+
+/// A pending yes/no question for `pixelConfirm` — the Meepo-styled stand-in for `confirmationDialog`.
+struct PixelConfirmation {
+    let title: String
+    var message: String?
+    let action: String
+    let perform: () -> Void
+}
+
+extension View {
+    /// Shows `confirmation` as a framed box over this view. Attach at the window root so it covers the whole window.
+    func pixelConfirm(_ confirmation: Binding<PixelConfirmation?>) -> some View {
+        overlay {
+            if let pending = confirmation.wrappedValue {
+                ZStack {
+                    Tokens.terminalBg.opacity(0.6)
+                        .onTapGesture { confirmation.wrappedValue = nil }
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(pending.title).font(Fonts.title(16)).foregroundStyle(Tokens.text)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let message = pending.message {
+                            Text(message).foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
+                        }
+                        HStack {
+                            Spacer()
+                            Button("CANCEL") { confirmation.wrappedValue = nil }
+                                .keyboardShortcut(.cancelAction)
+                            Button {
+                                confirmation.wrappedValue = nil
+                                pending.perform()
+                            } label: {
+                                Text(pending.action).foregroundStyle(Tokens.danger)
+                            }
+                            .keyboardShortcut(.defaultAction)
+                        }
+                        .buttonStyle(PixelButtonStyle())
+                    }
+                    .padding(16)
+                    .frame(maxWidth: 460)
+                    .background(Tokens.grass)
+                    .pixelFrame(6)
+                    .padding(12)
+                }
+            }
+        }
+    }
+}
