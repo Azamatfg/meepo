@@ -39,6 +39,8 @@ protocol CIProvider: Sendable {
     func runs(in path: String) async -> [CIRun]
     func failedLog(_ run: CIRun, in path: String) async -> String
     func rerunFailed(_ run: CIRun, in path: String) async -> Bool
+    /// How a fix session opens its review request: a PR on GitHub, a merge request on GitLab.
+    var reviewRequest: String { get }
     /// The default branch's latest commit as a chain of steps; `runs` are this poll's `runs(in:)`.
     func pipeline(runs: [CIRun], in path: String) async -> Pipeline?
     /// Starts a manual step (deploy). Returns an error message, nil on success.
@@ -73,6 +75,8 @@ struct GitHubActions: CIProvider {
     let gh: String
 
     func handles(_ project: Project) -> Bool { project.remote?.contains("github.com") == true }
+
+    var reviewRequest: String { "a PR into %@ with `gh pr create`" }
 
     func runs(in path: String) async -> [CIRun] {
         let fields = "databaseId,workflowName,headBranch,headSha,status,conclusion,createdAt,attempt,url,event"
@@ -164,6 +168,8 @@ struct GitLabCI: CIProvider {
     let glab: String
 
     func handles(_ project: Project) -> Bool { project.remote?.contains("gitlab") == true }
+
+    var reviewRequest: String { "a merge request into %@ with `glab mr create --target-branch %@`" }
 
     func runs(in path: String) async -> [CIRun] {
         guard let data = await api(["projects/:fullpath/pipelines?per_page=30"], in: path),
@@ -346,7 +352,7 @@ enum CIGuard {
     }
 
     /// The fix session's first message: context in, guardrails on (never main/master, never force).
-    static func fixPrompt(_ run: CIRun, log: String) -> String {
+    static func fixPrompt(_ run: CIRun, log: String, reviewRequest: String) -> String {
         let branch = "ci-fix/\(run.headBranch)-\(run.databaseId)"
         return """
             CI failed and needs a fix.
@@ -363,7 +369,7 @@ enum CIGuard {
             Fix only what makes CI fail:
             1. git fetch origin \(run.headBranch) && git checkout -B \(branch) origin/\(run.headBranch)
             2. Reproduce locally if you can, fix, run the relevant tests.
-            3. Commit, push \(branch), and open a PR into \(run.headBranch) with `gh pr create`.
+            3. Commit, push \(branch), and open \(reviewRequest.replacingOccurrences(of: "%@", with: run.headBranch)).
             Never push to main, master or \(run.headBranch) directly, never force-push. If it isn't fixable from code \
             (secrets, infrastructure, flaky service), stop and explain why.
             """

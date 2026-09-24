@@ -38,14 +38,16 @@ enum GitService {
     }
 
     /// `.claude/worktrees/` must not show up as untracked; uses the local, uncommitted exclude file.
-    static func ensureWorktreesIgnored(in path: String) {
+    static func ensureWorktreesIgnored(in path: String, backups: URL) {
         guard !succeeds(["check-ignore", "-q", ".claude/worktrees/x"], in: path),
               let exclude = run(["rev-parse", "--git-path", "info/exclude"], in: path) else { return }
         let url = exclude.hasPrefix("/") ? URL(filePath: exclude) : URL(filePath: path).appending(path: exclude)
         let current = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         let line = (current.isEmpty || current.hasSuffix("\n") ? "" : "\n") + ".claude/worktrees/\n"
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? Data((current + line).utf8).write(to: url)
+        let backup = try? ChangeLog.backup(url, folder: "git-exclude", backups: backups)
+        guard (try? Data((current + line).utf8).write(to: url)) != nil else { return }
+        ChangeLog.record("Ignore .claude/worktrees", file: url, backup: backup, backups: backups)
     }
 
     /// `git worktree remove` refuses a dirty worktree; `branch -d` refuses an unmerged branch. Nil = done.
@@ -62,6 +64,11 @@ enum GitService {
         let since = ISO8601DateFormatter().string(from: start)
         return run(["log", "--all", "--no-merges", "--since=\(since)", "--format=%h %s", "-n", String(limit)], in: path)?
             .split(separator: "\n").map(String.init) ?? []
+    }
+
+    /// The file is committed or staged in the repository (not just present on disk).
+    static func isTracked(_ file: String, in path: String) -> Bool {
+        succeeds(["ls-files", "--error-unmatch", "--", file], in: path)
     }
 
     /// Trimmed stdout of any git command; nil on failure or empty output.

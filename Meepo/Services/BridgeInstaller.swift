@@ -88,10 +88,17 @@ struct BridgeInstaller {
     }
 
     /// Quiets the user's own Notification hooks (global and per project) in Meepo sessions, or restores them.
+    /// A project's settings file under git is never guarded (and an earlier guard is taken back): Meepo's
+    /// edit would show up in the user's diff and could be committed for the whole team. Hooks from all
+    /// settings files add up, so settings.local.json can't silence it either; such a project notifies twice.
     func setNotifyGuard(_ enabled: Bool, projectPaths: [String]) throws {
-        let files = [settingsURL] + projectPaths.flatMap(NotifyGuard.settingsFiles(ofProject:))
-        for file in files {
-            try NotifyGuard.apply(enabled, to: file, backupDir: meepoHome.appending(path: "backups"))
+        let backups = meepoHome.appending(path: "backups")
+        try NotifyGuard.apply(enabled, to: settingsURL, backupDir: backups)
+        for path in projectPaths {
+            for file in NotifyGuard.settingsFiles(ofProject: path) {
+                let tracked = GitService.isTracked(file.path, in: path)
+                try NotifyGuard.apply(enabled && !tracked, to: file, backupDir: backups)
+            }
         }
     }
 
@@ -147,6 +154,7 @@ struct BridgeInstaller {
         let data = try JSONSerialization.data(withJSONObject: settings,
                                               options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         try data.write(to: target, options: .atomic)
+        ChangeLog.record("Hook bridge", file: target, backup: backup, backups: meepoHome.appending(path: "backups"))
         return backup
     }
 }

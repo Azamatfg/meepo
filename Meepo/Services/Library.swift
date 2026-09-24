@@ -88,16 +88,18 @@ enum Library {
     /// Backup, then copy keeping the source's permissions (hooks must stay executable).
     private static func replace(_ target: URL, with source: URL, backups: URL, label: String) throws {
         let fm = FileManager.default
+        var backup: URL?
         if fm.fileExists(atPath: target.path) {
             let stamp = Int(Date.now.timeIntervalSince1970)
-            let backup = backups.appending(path: "practices/\(label)/\(target.lastPathComponent)-\(stamp)-\(UUID().uuidString.prefix(4))")
-            try fm.createDirectory(at: backup.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try fm.copyItem(at: target, to: backup)
+            backup = backups.appending(path: "practices/\(label)/\(target.lastPathComponent)-\(stamp)-\(UUID().uuidString.prefix(4))")
+            try fm.createDirectory(at: backup!.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.copyItem(at: target, to: backup!)
             try fm.removeItem(at: target)
         } else {
             try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
         }
         try fm.copyItem(at: source, to: target)
+        ChangeLog.record(label == "library" ? "Lift into library" : "Update from library", file: target, backup: backup, backups: backups)
     }
 
     /// Regular files under a folder by relative path; symlinks and symlinked folders (worktree links) are skipped.

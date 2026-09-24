@@ -75,12 +75,18 @@ final class CIGuardTests: XCTestCase {
     }
 
     func testFixPromptCarriesContextAndGuardrails() {
-        let prompt = CIGuard.fixPrompt(ciRun(42, branch: "TransactionsService", attempt: 2), log: "KeyError: 'since'")
+        let run = ciRun(42, branch: "TransactionsService", attempt: 2)
+        let prompt = CIGuard.fixPrompt(run, log: "KeyError: 'since'", reviewRequest: GitHubActions(gh: "").reviewRequest)
         XCTAssertTrue(prompt.contains("KeyError: 'since'"))
         XCTAssertTrue(prompt.contains("git checkout -B ci-fix/TransactionsService-42 origin/TransactionsService"))
-        XCTAssertTrue(prompt.contains("gh pr create"))
+        XCTAssertTrue(prompt.contains("a PR into TransactionsService with `gh pr create`"))
         XCTAssertTrue(prompt.contains("Never push to main, master"))
         XCTAssertTrue(prompt.contains("never force-push"))
+
+        // GitLab has merge requests, not PRs: a gh command would fail there.
+        let gitlab = CIGuard.fixPrompt(run, log: "", reviewRequest: GitLabCI(glab: "").reviewRequest)
+        XCTAssertTrue(gitlab.contains("`glab mr create --target-branch TransactionsService`"))
+        XCTAssertFalse(gitlab.contains("gh pr"))
     }
 }
 
@@ -91,6 +97,7 @@ private final class FakeCI: CIProvider, @unchecked Sendable {
     func runs(in path: String) async -> [CIRun] { runs }
     func failedLog(_ run: CIRun, in path: String) async -> String { "KeyError: 'since'" }
     func rerunFailed(_ run: CIRun, in path: String) async -> Bool { reruns.append(run.id); return true }
+    var reviewRequest: String { GitHubActions(gh: "").reviewRequest }
     func pipeline(runs: [CIRun], in path: String) async -> Pipeline? { nil }
     func start(_ step: Pipeline.Step, of pipeline: Pipeline, in path: String) async -> String? { nil }
 }

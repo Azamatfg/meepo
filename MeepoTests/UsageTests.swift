@@ -164,3 +164,43 @@ final class SessionUsageTests: XCTestCase {
         XCTAssertEqual(stats.total.total, usage.tokensToday)
     }
 }
+
+final class HookBlockTests: XCTestCase {
+    /// The tool_result Claude Code 2.1.281 wrote when a PreToolUse hook exited 2 (captured live).
+    func testBlockedToolCallIsReadFromTheTranscript() throws {
+        let line = #"{"type":"user","sessionId":"s-1","timestamp":"2026-09-24T06:10:00.123Z","message":{"role":"user","content":[{"type":"tool_result","content":"PreToolUse:Bash hook error: [/Users/me/p/.claude/hooks/pre-bash-safety.sh]: Blocked: rm is not allowed\n","is_error":true,"tool_use_id":"toolu_1"}]}}"#
+        let ok = #"{"type":"user","sessionId":"s-1","timestamp":"2026-09-24T06:11:00Z","message":{"role":"user","content":[{"type":"tool_result","content":"PreToolUse:Bash is in the output of a grep","is_error":false,"tool_use_id":"toolu_2"}]}}"#
+        let blocks = UsageScanner.parseBlocks(Data((line + "\n" + ok + "\n").utf8))
+        XCTAssertEqual(blocks.count, 1)                                   // a successful result mentioning it is not a block
+        XCTAssertEqual(blocks[0].claudeSessionId, "s-1")
+        XCTAssertEqual(blocks[0].summary, "Bash blocked by pre-bash-safety.sh: Blocked: rm is not allowed")
+    }
+    @MainActor
+    func testBlockLandsInItsSessionsFeedOnceAndOthersAreSkipped() async throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let tmp = FileManager.default.temporaryDirectory.appending(path: "hb-\(UUID().uuidString)")
+        let root = tmp.appending(path: "projects")
+        let store = AppStore(db: db, bridge: BridgeInstaller(settingsURL: tmp.appending(path: "s.json"), meepoHome: tmp),
+                             usageRoot: root, defaults: UserDefaults(suiteName: "meepo-tests-\(UUID().uuidString)")!)
+        try store.addProject(at: try makeTempRepo())
+        try store.createSession(projectId: store.projects[0].id!, model: nil, prompt: nil)
+        let session = store.sessions[0]
+        func blocked(_ sessionId: String) -> String {
+            #"{"type":"user","sessionId":"\#(sessionId)","timestamp":"2026-09-24T06:10:00.123Z","message":{"content":[{"type":"tool_result","content":"PreToolUse:Bash hook error: [/h/protect-env.sh]: .env is protected","is_error":true}]}}"#
+        }
+        let dir = root.appending(path: "-repo")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data((blocked(session.claudeSessionId) + "\n" + blocked("not-a-meepo-session") + "\n").utf8)
+            .write(to: dir.appending(path: "\(session.claudeSessionId).jsonl"))
+
+        await store.refreshUsage()
+        try await db.write { try $0.execute(sql: "DELETE FROM scanState") }                      // a rewritten file is scanned from the start
+        await store.refreshUsage()
+
+        let events = try await db.read { try HookEvent.filter(Column("name") == "HookBlocked").fetchAll($0) }
+        XCTAssertEqual(events.map(\.summary), ["Bash blocked by protect-env.sh: .env is protected"])
+        XCTAssertEqual(events.first?.sessionId, session.id)
+        XCTAssertEqual(events.first?.isFailure, true)
+    }
+}

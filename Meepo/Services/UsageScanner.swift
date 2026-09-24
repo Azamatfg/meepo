@@ -37,9 +37,11 @@ enum UsageScanner {
         let parsed = parse(data)
         if parsed.badLines > 0 { log.notice("\(url.lastPathComponent, privacy: .public): skipped \(parsed.badLines) unreadable lines") }
         guard parsed.consumed > 0 else { return 0 }
+        let blocks = parseBlocks(data.prefix(parsed.consumed))
         return try db.write { db in
             let before = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM usageRecord") ?? 0
             for record in parsed.records { try upsert(record, db) }
+            for block in blocks { try insert(block, db) }
             let added = (try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM usageRecord") ?? 0) - before
             try db.execute(sql: "INSERT OR REPLACE INTO scanState (path, offset) VALUES (?, ?)",
                            arguments: [url.path, offset + parsed.consumed])
@@ -61,6 +63,43 @@ enum UsageScanner {
                 cacheReadTokens = MAX(cacheReadTokens, excluded.cacheReadTokens)
             """, arguments: [r.messageId, r.claudeSessionId, r.cwd, r.model, r.createdAt, r.isSidechain,
                              r.inputTokens, r.outputTokens, r.cacheCreationTokens, r.cacheReadTokens])
+    }
+
+    /// A tool call the user's own PreToolUse hook refused (exit 2). Claude Code sends no hook event for it
+    /// (checked live, 2.1.281: PreToolUse, then nothing), so the transcript's tool_result is the only trace.
+    struct Block: Equatable {
+        let claudeSessionId: String
+        let createdAt: Date
+        let summary: String
+    }
+
+    /// Lines like `"content":"PreToolUse:Bash hook error: [/path/pre-bash-safety.sh]: rm is not allowed"`.
+    static func parseBlocks(_ data: Data) -> [Block] {
+        let marker = Data("PreToolUse:".utf8)
+        return data.split(separator: UInt8(ascii: "\n")).compactMap { line -> Block? in
+            guard line.range(of: marker) != nil,
+                  let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                  let sessionId = object["sessionId"] as? String,
+                  let createdAt = (object["timestamp"] as? String).flatMap(date),
+                  let content = ((object["message"] as? [String: Any])?["content"] as? [[String: Any]])?
+                    .first(where: { $0["type"] as? String == "tool_result" && $0["is_error"] as? Bool == true })?["content"],
+                  let text = (content as? String) ?? (content as? [[String: Any]])?.compactMap({ $0["text"] as? String }).first,
+                  let match = text.firstMatch(of: /^PreToolUse:(\S+) hook error: \[([^\]]*)\]: (.*)/.dotMatchesNewlines())
+            else { return nil }
+            let hook = URL(filePath: String(match.2)).lastPathComponent
+            let reason = match.3.split(separator: "\n").first.map(String.init) ?? ""
+            return Block(claudeSessionId: sessionId, createdAt: createdAt, summary: "\(match.1) blocked by \(hook): \(reason)")
+        }
+    }
+
+    /// Into the feed of the Meepo session it belongs to; transcripts of other sessions are skipped.
+    private static func insert(_ block: Block, _ db: Database) throws {
+        guard let sessionId = try Int64.fetchOne(db, sql: "SELECT id FROM session WHERE claudeSessionId = ?",
+                                                 arguments: [block.claudeSessionId]),
+              try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM hookEvent WHERE sessionId = ? AND name = 'HookBlocked' AND createdAt = ?",
+                               arguments: [sessionId, block.createdAt]) == 0 else { return }
+        var event = HookEvent(sessionId: sessionId, name: "HookBlocked", summary: block.summary, isFailure: true, createdAt: block.createdAt)
+        try event.insert(db)
     }
 
     /// Parses complete lines only; a trailing line without "\n" is still being written and waits for the next scan.

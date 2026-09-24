@@ -118,6 +118,8 @@ private struct TaskRow: View {
                     .onSubmit(addLink)
                 Button("+ LINK", action: addLink)
                 Button("+ FILE") { isPickingFile = true }
+                Button("+ SHOT") { Task { await addScreenshot() } }
+                    .help("Select an area; the image stays with the task until it is deleted")
                 Button("DELETE") { store.deleteTask(task.id!) }
             }
             .buttonStyle(PixelButtonStyle())
@@ -128,6 +130,15 @@ private struct TaskRow: View {
             t.attachments += urls.map(\.path)
             store.updateTask(t)
         }
+    }
+
+    private func addScreenshot() async {
+        let file = TaskItem.attachmentsDir.appending(path: "\(UUID().uuidString).png")
+        try? FileManager.default.createDirectory(at: TaskItem.attachmentsDir, withIntermediateDirectories: true)
+        guard await ScreenshotFlow.capture(to: file) else { return }
+        var t = task
+        t.attachments.append(file.path)
+        store.updateTask(t)
     }
 
     private func addLink() {

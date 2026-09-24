@@ -234,6 +234,7 @@ final class AppStore {
         let (db, root) = (self.db, usageRoot)
         _ = try? await Task.detached { try UsageScanner.scan(root: root, into: db) }.value
         reloadUsage()
+        reloadEvents() // the scan may have found tool calls blocked by the user's hooks
         refreshProjects()
     }
 
@@ -463,6 +464,9 @@ final class AppStore {
         }
     }
 
+    /// Backups and the change log (SPEC §8); a temp folder in tests.
+    var backupsDir: URL { bridge.meepoHome.appending(path: "backups") }
+
     /// Copies a command file into one project, or into `~/.claude/commands` for every project.
     /// Never overwrites: an existing file there wins. The user picks both source and target.
     func copyCommand(_ command: String, from source: Project, toProject target: Project?,
@@ -475,6 +479,7 @@ final class AppStore {
             guard !FileManager.default.fileExists(atPath: to.path) else { return }
             try FileManager.default.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
             try FileManager.default.copyItem(at: from, to: to)
+            ChangeLog.record("Copy /\(command) from \(source.name)", file: to, backup: nil, backups: backupsDir)
         } catch {
             bridgeError = error.localizedDescription
         }
@@ -562,7 +567,7 @@ final class AppStore {
         fixAttempts["\(projectId)|\(run.key)", default: 0] += 1
         let name = "ci-fix-\(ClaudeLauncher.worktreeSlug(run.headBranch))-\(run.databaseId % 100_000)"
         do {
-            try createSession(projectId: projectId, model: nil, prompt: CIGuard.fixPrompt(run, log: log), worktree: name)
+            try createSession(projectId: projectId, model: nil, prompt: CIGuard.fixPrompt(run, log: log, reviewRequest: provider.reviewRequest), worktree: name)
             onCINotice?("Fixing CI", "\(project.name) · \(run.headBranch): \(run.workflowName) — new session \(name)")
         } catch {
             bridgeError = error.localizedDescription
@@ -671,6 +676,8 @@ final class AppStore {
     }
 
     func deleteTask(_ id: Int64) {
+        let owned = tasks.first { $0.id == id }?.attachments.filter { $0.hasPrefix(TaskItem.attachmentsDir.path + "/") } ?? []
+        for file in owned { try? FileManager.default.removeItem(atPath: file) }
         _ = try? db.write { try TaskItem.deleteOne($0, id: id) }
         reloadTasks()
     }
@@ -733,6 +740,7 @@ final class AppStore {
     func daySummary(now: Date = .now) -> [ProjectDay] {
         let start = Calendar.current.startOfDay(for: now)
         let tokens = Dictionary(usageStats(since: start).byProject.map { ($0.name, $0.totals.total) }, uniquingKeysWith: +)
+        let syncCommand = stages.first { $0.name == "sync" }?.command ?? "sync"
         return projects.compactMap { project in
             guard let projectId = project.id else { return nil }
             let sessionIds = sessions.filter { $0.projectId == projectId }.compactMap(\.id)
@@ -747,11 +755,11 @@ final class AppStore {
                     SELECT summary FROM hookEvent WHERE sessionId IN (\(marks)) AND name = 'UserPromptExpansion' AND createdAt >= ?
                     ORDER BY createdAt
                     """, arguments: args)
-                // The reply to the day's last /sync or /retro holds the next steps.
+                // The reply to the day's last sync-stage command (whatever it is called here) or /retro holds the next steps.
                 let wrapUp = try Row.fetchOne(db, sql: """
                     SELECT sessionId, createdAt FROM hookEvent WHERE sessionId IN (\(marks)) AND name = 'UserPromptExpansion'
-                    AND createdAt >= ? AND (summary LIKE '/sync%' OR summary LIKE '/retro%') ORDER BY createdAt DESC LIMIT 1
-                    """, arguments: args)
+                    AND createdAt >= ? AND (summary LIKE ? OR summary LIKE '/retro%') ORDER BY createdAt DESC LIMIT 1
+                    """, arguments: args + ["/\(syncCommand)%"])
                 let reply = try wrapUp.flatMap { row in
                     try String.fetchOne(db, sql: """
                         SELECT summary FROM hookEvent WHERE sessionId = ? AND name = 'Stop' AND createdAt >= ? ORDER BY createdAt LIMIT 1
@@ -888,7 +896,7 @@ final class AppStore {
                        worktree: String? = nil, resuming: String? = nil) throws {
         guard let project = projects.first(where: { $0.id == projectId }) else { return }
         let worktreeName = worktree.map(ClaudeLauncher.worktreeSlug).flatMap { $0.isEmpty ? nil : $0 }
-        if worktreeName != nil { GitService.ensureWorktreesIgnored(in: project.path) }
+        if worktreeName != nil { GitService.ensureWorktreesIgnored(in: project.path, backups: backupsDir) }
         var session = Session(
             projectId: projectId,
             claudeSessionId: resuming ?? UUID().uuidString.lowercased(),

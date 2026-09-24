@@ -20,3 +20,26 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertEqual(GlobalHotKey.combos.first?.title, "⌘⇧6") // the default in AppStore
     }
 }
+
+@MainActor
+final class ClipboardRestoreTests: XCTestCase {
+    /// Sending a shot borrows the clipboard; what the user had (all its types) must come back intact.
+    func testSnapshotRestoresEveryItemAndType() {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let item = NSPasteboardItem()
+        item.setString("copied text", forType: .string)
+        item.setString("<b>copied</b>", forType: .html)
+        pasteboard.clearContents()
+        pasteboard.writeObjects([item])
+
+        let saved = ScreenshotFlow.snapshot(pasteboard)
+        pasteboard.clearContents()
+        pasteboard.writeObjects([NSImage(size: NSSize(width: 2, height: 2))])
+        ScreenshotFlow.restore(saved, to: pasteboard)
+
+        XCTAssertEqual(pasteboard.string(forType: .string), "copied text")
+        XCTAssertEqual(pasteboard.string(forType: .html), "<b>copied</b>")
+        XCTAssertNil(pasteboard.data(forType: .tiff))                  // the shot is gone
+    }
+}

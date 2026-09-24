@@ -6,7 +6,7 @@ struct ToolsView: View {
     @State private var tab = Tab.practices
     @State private var confirmation: PixelConfirmation?
 
-    enum Tab: String, CaseIterable { case practices = "PRACTICES", docker = "DOCKER" }
+    enum Tab: String, CaseIterable { case practices = "PRACTICES", docker = "DOCKER", changes = "CHANGES" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -23,6 +23,7 @@ struct ToolsView: View {
             switch tab {
             case .practices: PracticesView(confirmation: $confirmation)
             case .docker: DockerView(confirmation: $confirmation)
+            case .changes: ChangesView(confirmation: $confirmation)
             }
         }
         .padding(16)
@@ -89,7 +90,7 @@ private struct PracticesView: View {
         }
     }
 
-    private var backups: URL { MeepoHome.url.appending(path: "backups") }
+    private var backups: URL { store.backupsDir }
 
     private func reload() { items = Library.scan(library: store.libraryURL, projects: store.projects) }
 
@@ -265,6 +266,62 @@ private struct DockerView: View {
         guard let docker = store.toolPath("docker") else { return }
         _ = await Task.detached { Docker.run(docker, cleanup.args) }.value
         await load()
+    }
+}
+
+/// Every change Meepo made to the user's files (SPEC §8), newest first, each with RESTORE.
+private struct ChangesView: View {
+    @Environment(AppStore.self) private var store
+    @Binding var confirmation: PixelConfirmation?
+    @State private var entries: [ChangeLog.Entry] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    if entries.isEmpty { Text("Meepo hasn't changed any of your files yet.").foregroundStyle(Tokens.textDim) }
+                    ForEach(entries) { entry in
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack {
+                                    Text(entry.action).foregroundStyle(Tokens.text)
+                                    Text(entry.date.formatted(date: .abbreviated, time: .shortened))
+                                        .font(.caption).foregroundStyle(Tokens.textDim)
+                                }
+                                Text(entry.file.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                                    .font(Fonts.mono(11)).foregroundStyle(Tokens.textDim).lineLimit(1).truncationMode(.middle)
+                            }
+                            Spacer()
+                            Button("RESTORE") {
+                                confirmation = PixelConfirmation(
+                                    title: "RESTORE \(URL(filePath: entry.file).lastPathComponent.uppercased())?",
+                                    message: entry.backup == nil
+                                        ? "Meepo created this file; restoring deletes it. The current file is backed up first."
+                                        : "Puts back the file as it was before “\(entry.action)”. The current file is backed up first.",
+                                    action: "RESTORE"
+                                ) { restore(entry) }
+                            }
+                            .buttonStyle(PixelButtonStyle())
+                        }
+                        .padding(6)
+                        .help(entry.file)
+                    }
+                }
+                .padding(6)
+            }
+            .background(Tokens.dirt)
+            .sunken()
+            Text("Backups and this log: ~/.meepo/backups").font(.caption).foregroundStyle(Tokens.textDim)
+        }
+        .onAppear(perform: reload)
+    }
+
+    private func reload() { entries = ChangeLog.entries(backups: store.backupsDir) }
+
+    private func restore(_ entry: ChangeLog.Entry) {
+        do { try ChangeLog.restore(entry, backups: store.backupsDir) } catch { store.bridgeError = error.localizedDescription }
+        reload()
+        store.refreshProjects()
     }
 }
 

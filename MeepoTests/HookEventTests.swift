@@ -313,6 +313,24 @@ final class NotifyGuardTests: XCTestCase {
         XCTAssertEqual(NotifyGuard.unguarded(guarded).0, projectSettings) // byte-for-byte restore
     }
 
+    /// invoke, 2026-09-24: its committed .claude/settings.json showed Meepo's guard in `git diff`.
+    func testCommittedProjectSettingsAreNeverGuardedAndAnOldGuardIsTakenBack() throws {
+        let tracked = try makeTempRepo(), untracked = try makeTempRepo()
+        for repo in [tracked, untracked] {
+            try FileManager.default.createDirectory(at: repo.appending(path: ".claude"), withIntermediateDirectories: true)
+        }
+        try NotifyGuard.guarded(projectSettings).0.write(to: tracked.appending(path: ".claude/settings.json"), atomically: true, encoding: .utf8)
+        try git(["add", ".claude/settings.json"], in: tracked)
+        try projectSettings.write(to: untracked.appending(path: ".claude/settings.json"), atomically: true, encoding: .utf8)
+
+        let home = FileManager.default.temporaryDirectory.appending(path: "ng-\(UUID().uuidString)")
+        let bridge = BridgeInstaller(settingsURL: home.appending(path: "settings.json"), meepoHome: home)
+        try bridge.setNotifyGuard(true, projectPaths: [tracked.path, untracked.path])
+
+        XCTAssertEqual(try String(contentsOf: tracked.appending(path: ".claude/settings.json"), encoding: .utf8), projectSettings)
+        XCTAssertTrue(try String(contentsOf: untracked.appending(path: ".claude/settings.json"), encoding: .utf8).contains("MEEPO_SESSION_ID"))
+    }
+
     func testBridgeAndAmbiguousCommandsAreLeftAlone() {
         let text = """
         {"hooks":{"Notification":[{"hooks":[{"type":"command","command":"/h/.meepo/bin/meepo-bridge.sh"},{"type":"command","command":"n.sh"}]}],

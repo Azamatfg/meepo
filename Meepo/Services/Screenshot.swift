@@ -82,14 +82,7 @@ final class ScreenshotFlow {
         let file = Self.shotsDir.appending(path: "\(UUID().uuidString).png")
         try? FileManager.default.createDirectory(at: Self.shotsDir, withIntermediateDirectories: true)
         Task {
-            // -i interactive area/window selection, -x no sound; Esc leaves no file.
-            await Task.detached {
-                let process = Process()
-                process.executableURL = URL(filePath: "/usr/sbin/screencapture")
-                process.arguments = ["-i", "-x", file.path]
-                try? process.run()
-                process.waitUntilExit()
-            }.value
+            await Self.capture(to: file)
             isCapturing = false
             guard let image = NSImage(contentsOf: file) else { return }
             showPicker(image: image, file: file, returnTo: previous)
@@ -123,11 +116,50 @@ final class ScreenshotFlow {
         panel.makeKeyAndOrderFront(nil)
     }
 
+    /// The system area/window picker; false when the user pressed Esc (no file is left).
+    @discardableResult
+    static func capture(to file: URL) async -> Bool {
+        await Task.detached {
+            let process = Process()
+            process.executableURL = URL(filePath: "/usr/sbin/screencapture")
+            process.arguments = ["-i", "-x", file.path] // -i interactive selection, -x no sound
+            try? process.run()
+            process.waitUntilExit()
+            return FileManager.default.fileExists(atPath: file.path)
+        }.value
+    }
+
     /// Claude Code pastes images with Ctrl+V: put the shot on the clipboard and press it in that terminal.
+    /// The user's clipboard comes back afterwards, unless they copied something new meanwhile.
     private func deliver(_ image: NSImage, to sessionId: Int64) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.writeObjects([image])
+        let pasteboard = NSPasteboard.general
+        let saved = Self.snapshot(pasteboard)
+        pasteboard.clearContents()
+        pasteboard.writeObjects([image])
+        let ours = pasteboard.changeCount
         store.type("\u{16}", into: sessionId)
+        // claude reads the image asynchronously after the keypress; restoring at once would paste the old clipboard.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            guard pasteboard.changeCount == ours else { return }
+            Self.restore(saved, to: pasteboard)
+        }
+    }
+
+    /// Every item with every type it offers, so text, files and images all survive.
+    static func snapshot(_ pasteboard: NSPasteboard) -> [[NSPasteboard.PasteboardType: Data]] {
+        (pasteboard.pasteboardItems ?? []).map { item in
+            item.types.reduce(into: [:]) { result, type in result[type] = item.data(forType: type) }
+        }
+    }
+
+    static func restore(_ items: [[NSPasteboard.PasteboardType: Data]], to pasteboard: NSPasteboard) {
+        pasteboard.clearContents()
+        guard !items.isEmpty else { return }
+        pasteboard.writeObjects(items.map { types in
+            let item = NSPasteboardItem()
+            for (type, data) in types { item.setData(data, forType: type) }
+            return item
+        })
     }
 
     /// macOS asks for Screen Recording the first time; say why before it does (SPEC module 8).

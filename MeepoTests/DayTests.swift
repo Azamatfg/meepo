@@ -73,6 +73,19 @@ final class MorningEveningTests: XCTestCase {
         XCTAssertTrue(prompt.contains("- /tmp/shot.png") && prompt.contains("- https://issue/42"))
     }
 
+    /// §10: the user's own setup decides names; a sync stage bound to /wrap still yields the next steps.
+    func testNextStepsFollowTheConfiguredSyncCommand() throws {
+        let index = try XCTUnwrap(store.stages.firstIndex { $0.name == "sync" })
+        store.stages[index].command = "wrap"
+        try store.createSession(projectId: app.id!, model: nil, prompt: nil)
+        let session = store.sessions[0]
+        store.handleHookEvent(HookPayload(event: "UserPromptExpansion", claudeSessionId: session.claudeSessionId,
+                                          prompt: "/wrap", commandName: "wrap"), sessionId: session.id!)
+        store.handleHookEvent(HookPayload(event: "Stop", claudeSessionId: session.claudeSessionId,
+                                          lastAssistantMessage: "Next: ship the export"), sessionId: session.id!)
+        XCTAssertEqual(store.daySummary().first { $0.project.id == app.id }?.nextSteps, "Next: ship the export")
+    }
+
     func testDaySummaryCollectsCommitsStagesTodosNextSteps() throws {
         try store.createSession(projectId: app.id!, model: nil, prompt: nil)
         let session = store.sessions[0]
@@ -92,5 +105,28 @@ final class MorningEveningTests: XCTestCase {
         let text = AppStore.dayText([day])
         XCTAssertTrue(text.contains("Stages: plan → sync"))
         XCTAssertTrue(text.contains("☐ Polish UI"))
+    }
+}
+
+@MainActor
+final class TaskAttachmentTests: XCTestCase {
+    /// A shot taken for the task goes with it; a file the user attached is theirs and stays.
+    func testDeletingATaskRemovesOnlyItsOwnScreenshots() throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        try FileManager.default.createDirectory(at: TaskItem.attachmentsDir, withIntermediateDirectories: true)
+        let shot = TaskItem.attachmentsDir.appending(path: "test-\(UUID().uuidString).png")
+        let userFile = FileManager.default.temporaryDirectory.appending(path: "mine-\(UUID().uuidString).txt")
+        try Data("x".utf8).write(to: shot)
+        try Data("x".utf8).write(to: userFile)
+
+        var task = try XCTUnwrap(store.addTask("Fix the login screen", projectId: nil))
+        task.attachments = [shot.path, userFile.path, "https://example.com"]
+        store.updateTask(task)
+        store.deleteTask(task.id!)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: shot.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: userFile.path))
     }
 }
