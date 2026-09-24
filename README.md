@@ -75,4 +75,4 @@ Everything lives on your Mac: `~/.meepo/meepo.sqlite` (sessions, events, tasks, 
 
 ## License
 
-<!-- No LICENSE file yet: pick one (e.g. MIT) before the first release. -->
+MIT — see [LICENSE](LICENSE).
