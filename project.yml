@@ -18,9 +18,9 @@ settings:
     SWIFT_VERSION: "6.0"
     MARKETING_VERSION: 0.1.0
     CURRENT_PROJECT_VERSION: 1
-    # TAXITECH team (decision 2026-09-24): the widget's App Group needs a Team ID.
-    DEVELOPMENT_TEAM: 7N5485K2AV
-    CODE_SIGN_IDENTITY: Apple Development
+    # SERMIR team (2026-09-24: its Developer ID signs Meepo); the widget's App Group needs a Team ID.
+    DEVELOPMENT_TEAM: ZKXQWVLBRG
+    CODE_SIGN_IDENTITY: Developer ID Application
     CODE_SIGN_STYLE: Manual
 
 targets:
@@ -41,7 +41,7 @@ targets:
     entitlements:
       path: Meepo/Meepo.entitlements
       properties:
-        com.apple.security.application-groups: [7N5485K2AV.com.azamatfg.meepo]
+        com.apple.security.application-groups: [ZKXQWVLBRG.com.azamatfg.meepo]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.azamatfg.meepo
@@ -74,7 +74,7 @@ targets:
       path: MeepoWidget/MeepoWidget.entitlements
       properties:
         com.apple.security.app-sandbox: true
-        com.apple.security.application-groups: [7N5485K2AV.com.azamatfg.meepo]
+        com.apple.security.application-groups: [ZKXQWVLBRG.com.azamatfg.meepo]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.azamatfg.meepo.widget

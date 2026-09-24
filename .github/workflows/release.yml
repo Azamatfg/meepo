@@ -1,11 +1,13 @@
 # Tag vX.Y.Z → universal Meepo.app, signed with Developer ID, notarized, attached to a GitHub Release.
 # Secrets: DEVELOPER_ID_P12 (base64 of the .p12), DEVELOPER_ID_P12_PASSWORD,
-#          NOTARY_APPLE_ID, NOTARY_PASSWORD (app-specific password). Team: TAXITECH (7N5485K2AV).
+#          NOTARY_APPLE_ID, NOTARY_PASSWORD (app-specific password). Team: SERMIR, TOO (ZKXQWVLBRG).
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  # A dry run: build, sign, notarize and keep Meepo.zip as a workflow artifact — no GitHub Release.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -14,7 +16,7 @@ jobs:
   release:
     runs-on: macos-15
     env:
-      TEAM_ID: 7N5485K2AV
+      TEAM_ID: ZKXQWVLBRG
     steps:
       - uses: actions/checkout@v4
 
@@ -43,13 +45,16 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
 
       - name: Build
+        env:
+          VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
         run: |
+          VERSION="${VERSION#v}"
           brew install xcodegen
           xcodegen generate
           xcodebuild -downloadComponent MetalToolchain
           xcodebuild -project Meepo.xcodeproj -scheme Meepo -configuration Release -skipPackagePluginValidation \
             -derivedDataPath build ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
-            MARKETING_VERSION="${GITHUB_REF_NAME#v}" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            MARKETING_VERSION="${VERSION:-0.0.0}" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
             CODE_SIGN_IDENTITY="Developer ID Application" DEVELOPMENT_TEAM="$TEAM_ID" OTHER_CODE_SIGN_FLAGS="--timestamp" \
             build
 
@@ -65,7 +70,15 @@ jobs:
           rm Meepo.zip && ditto -c -k --keepParent "$APP" Meepo.zip
           echo "sha256 for the cask: $(shasum -a 256 Meepo.zip | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Keep the build (dry run)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Meepo
+          path: Meepo.zip
+
       - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" Meepo.zip --title "Meepo ${GITHUB_REF_NAME#v}" --generate-notes

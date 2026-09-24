@@ -15,6 +15,6 @@ cask "meepo" do
 
   zap trash: [
     "~/.meepo",
-    "~/Library/Group Containers/7N5485K2AV.com.azamatfg.meepo",
+    "~/Library/Group Containers/ZKXQWVLBRG.com.azamatfg.meepo",
   ]
 end

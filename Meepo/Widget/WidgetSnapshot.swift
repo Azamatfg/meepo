@@ -8,7 +8,7 @@ struct WidgetSnapshot: Codable, Equatable {
     var waitingSessions = 0
     var updatedAt = Date.distantPast
 
-    static let appGroup = "7N5485K2AV.com.azamatfg.meepo"
+    static let appGroup = "ZKXQWVLBRG.com.azamatfg.meepo"
 
     static var fileURL: URL? {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)?.appending(path: "widget.json")
