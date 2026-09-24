@@ -195,6 +195,7 @@ struct SessionLabel: View {
 }
 
 private struct ProjectHeader: View {
+    @Environment(AppStore.self) private var store
     let project: Project
     let isActive: Bool
     let onNewSession: () -> Void
@@ -218,6 +219,14 @@ private struct ProjectHeader: View {
                     Button("Open in \(ide.name)") { open(app: ide.app) }
                 }
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: project.path)]) }
+                Divider()
+                Button("Remove from Meepo…") {
+                    store.confirmation = PixelConfirmation(
+                        title: "REMOVE \(project.name.uppercased()) FROM MEEPO?",
+                        message: "Its sessions close. The folder, git and Claude's conversations stay — add it again any time.",
+                        action: "REMOVE"
+                    ) { store.removeProject(project.id!) }
+                }
             } label: {
                 Image(systemName: "chevron.left.forwardslash.chevron.right")
             }

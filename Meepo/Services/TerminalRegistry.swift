@@ -12,7 +12,7 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     func start(_ session: Session, projectPath: String, initialPrompt: String?,
-               login: ClaudeLauncher.LoginEnvironment?, remoteControlName: String? = nil) {
+               login: ClaudeLauncher.LoginEnvironment, remoteControlName: String? = nil) {
         guard let id = session.id, views[id] == nil else { return }
         let (directory, createWorktree) = ClaudeLauncher.location(worktreeName: session.worktreeName, projectPath: projectPath)
         // Sessions start before they're on screen; a zero frame would start claude in a 0-column terminal.
@@ -37,17 +37,9 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
             meepo["PORT"] = String(base)
             meepo["MEEPO_PORT_BASE"] = String(base)
         }
-        if let login {
-            view.startProcess(executable: login.claudePath, args: args,
-                              environment: ClaudeLauncher.environment(base: login.environment, extra: meepo),
-                              currentDirectory: directory)
-        } else {
-            let launch = ClaudeLauncher.shellLaunch(claudeArgs: args)
-            view.startProcess(executable: launch.executable, args: launch.args,
-                              environment: ClaudeLauncher.environment(
-                                  base: ClaudeLauncher.scrubbed(ProcessInfo.processInfo.environment), extra: meepo),
-                              currentDirectory: directory)
-        }
+        view.startProcess(executable: login.claudePath, args: args,
+                          environment: ClaudeLauncher.environment(base: login.environment, extra: meepo),
+                          currentDirectory: directory)
         views[id] = view
     }
 

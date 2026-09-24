@@ -2,11 +2,6 @@ import Foundation
 
 /// Builds the command line for a `claude` session. Flags verified against `claude --help` (v2.1.280).
 enum ClaudeLauncher {
-    struct Launch: Equatable {
-        let executable: String
-        let args: [String]
-    }
-
     /// New session: `--session-id <uuid>` so Meepo knows the id up front.
     /// Existing transcript: `--resume <uuid>`; the initial prompt is never re-sent.
     /// `remoteControl`: session name shown in the Claude app / claude.ai (`--remote-control <name>`),
@@ -50,8 +45,9 @@ enum ClaudeLauncher {
     }
 
     /// Asks the login shell once (~0.6 s with nvm) so every session can exec claude directly.
-    /// Blocking; call off the main thread. Nil if the shell fails or has no `claude`.
-    static func resolveLoginEnvironment(shell: String = defaultShell) -> LoginEnvironment? {
+    /// Blocking; call off the main thread. Nil if the shell fails, has no `claude`, or hangs past `timeout`
+    /// (a ~/.zshrc waiting for input would otherwise leave every session an empty terminal forever).
+    static func resolveLoginEnvironment(shell: String = defaultShell, timeout: TimeInterval = 15) -> LoginEnvironment? {
         let process = Process()
         process.executableURL = URL(filePath: shell)
         process.arguments = ["-l", "-i", "-c",
@@ -62,6 +58,7 @@ enum ClaudeLauncher {
         let out = Pipe()
         process.standardOutput = out
         do { try process.run() } catch { return nil }
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if process.isRunning { process.terminate() } }
         let data = out.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         return parseLoginEnvironment(String(decoding: data, as: UTF8.self))
@@ -83,18 +80,8 @@ enum ClaudeLauncher {
         return LoginEnvironment(claudePath: claudePath, environment: env)
     }
 
-    /// Fallback when the login environment isn't resolved (yet): pay for a shell start per session.
-    static func shellLaunch(claudeArgs: [String], shell: String = defaultShell) -> Launch {
-        let command = (["exec", "claude"] + claudeArgs.map(shellQuote)).joined(separator: " ")
-        return Launch(executable: shell, args: ["-l", "-i", "-c", command])
-    }
-
     static var defaultShell: String {
         ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-    }
-
-    static func shellQuote(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// Drops what Meepo inherits from the terminal it was launched from (Finder launches have none of it):

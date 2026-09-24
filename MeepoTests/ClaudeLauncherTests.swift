@@ -19,27 +19,6 @@ final class ClaudeLauncherTests: XCTestCase {
                        ["--session-id", id])
     }
 
-    func testRunsThroughInteractiveLoginShellWithQuotedArgs() {
-        let launch = ClaudeLauncher.shellLaunch(claudeArgs: ["--session-id", id, "it's $HOME; rm -rf /"], shell: "/bin/zsh")
-        XCTAssertEqual(launch.executable, "/bin/zsh")
-        XCTAssertEqual(launch.args.prefix(3), ["-l", "-i", "-c"])
-        XCTAssertEqual(launch.args[3], #"exec claude '--session-id' '\#(id)' 'it'\''s $HOME; rm -rf /'"#)
-    }
-
-    func testQuotedPromptReachesClaudeAsOneLiteralArgument() throws {
-        // Run the real shell with `printf` standing in for claude: proves quoting survives zsh.
-        let prompt = "it's \"$HOME\" `whoami`\nline2"
-        let command = "printf %s " + ClaudeLauncher.shellQuote(prompt)
-        let p = Process()
-        p.executableURL = URL(filePath: "/bin/zsh")
-        p.arguments = ["-f", "-c", command]
-        let out = Pipe()
-        p.standardOutput = out
-        try p.run()
-        p.waitUntilExit()
-        XCTAssertEqual(String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self), prompt)
-    }
-
     func testTranscriptFoundInAnyProjectFolder() throws {
         let home = FileManager.default.temporaryDirectory.appending(path: "claude-home-\(UUID().uuidString)")
         let folder = home.appending(path: "projects/-Users-me-------")
@@ -88,5 +67,17 @@ final class ClaudeLauncherTests: XCTestCase {
         XCTAssertTrue(env.contains("TERM=xterm-256color"))
         XCTAssertTrue(env.contains("PATH=/usr/bin"))
         XCTAssertTrue(env.contains("LANG=en_US.UTF-8"))
+    }
+}
+
+/// A ~/.zshrc that waits forever used to leave every session an empty terminal.
+final class LoginTimeoutTests: XCTestCase {
+    func testHangingShellGivesUpInsteadOfBlockingForever() throws {
+        let shell = FileManager.default.temporaryDirectory.appending(path: "hang-\(UUID().uuidString).sh")
+        try "#!/bin/sh\nsleep 30\n".write(to: shell, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shell.path)
+        let start = Date.now
+        XCTAssertNil(ClaudeLauncher.resolveLoginEnvironment(shell: shell.path, timeout: 1))
+        XCTAssertLessThan(Date.now.timeIntervalSince(start), 5)
     }
 }

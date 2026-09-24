@@ -125,3 +125,29 @@ final class ReplaceSessionTests: XCTestCase {
         XCTAssertEqual(store.selectedSessionId, fresh.id)
     }
 }
+
+@MainActor
+final class RemoveProjectTests: XCTestCase {
+    /// Out of Meepo, not off the disk: sessions go, the folder and the user's own hook stay as they were.
+    func testRemoveClosesSessionsKeepsTheFolderAndRestoresHooks() throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let tmp = FileManager.default.temporaryDirectory.appending(path: "rp-\(UUID().uuidString)")
+        let bridge = BridgeInstaller(settingsURL: tmp.appending(path: "settings.json"), meepoHome: tmp)
+        try bridge.install()
+        let store = AppStore(db: db, bridge: bridge, usageRoot: tmp,
+                             defaults: UserDefaults(suiteName: "meepo-tests-\(UUID().uuidString)")!)
+        let repo = try makeTempRepo()
+        let hooks = #"{"hooks":{"Notification":[{"hooks":[{"type":"command","command":"n.sh"}]}]}}"#
+        try FileManager.default.createDirectory(at: repo.appending(path: ".claude"), withIntermediateDirectories: true)
+        try hooks.write(to: repo.appending(path: ".claude/settings.local.json"), atomically: true, encoding: .utf8)
+        try store.addProject(at: repo)                                   // guards the project's own hook
+        try store.createSession(projectId: store.projects[0].id!, model: nil, prompt: nil)
+
+        store.removeProject(store.projects[0].id!)
+        XCTAssertTrue(store.projects.isEmpty)
+        XCTAssertTrue(store.sessions.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: repo.path))
+        XCTAssertEqual(try String(contentsOf: repo.appending(path: ".claude/settings.local.json"), encoding: .utf8), hooks)
+    }
+}

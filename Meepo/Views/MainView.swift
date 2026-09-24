@@ -149,6 +149,29 @@ private struct WindowDragArea: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
+/// Instead of an empty terminal: claude is starting, or it can't be found — with what to do about it.
+private struct LaunchState: View {
+    @Environment(AppStore.self) private var store
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if !store.isLoginResolved {
+                Text("Starting claude…").foregroundStyle(Tokens.textDim)
+            } else if store.loginEnvironment == nil {
+                Text("CLAUDE NOT FOUND").font(Fonts.title(16)).foregroundStyle(Tokens.warn)
+                Text("Meepo asks your login shell ($SHELL -l -i) for `claude` and got nothing: it isn't installed, it's only an alias, or ~/.zshrc took over 15 s.")
+                    .font(.caption).foregroundStyle(Tokens.text).multilineTextAlignment(.center)
+                Text("curl -fsSL https://claude.ai/install.sh | bash")
+                    .font(Fonts.mono(12)).foregroundStyle(Tokens.screen).textSelection(.enabled)
+                Button("RETRY") { Task { await store.resolveLogin() } }
+                    .buttonStyle(PixelButtonStyle())
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: 520, maxHeight: .infinity)
+    }
+}
+
 private struct SessionDetailView: View {
     @Environment(AppStore.self) private var store
     let sessionId: Int64
@@ -170,6 +193,9 @@ private struct SessionDetailView: View {
             if let view = store.terminalView(for: sessionId), store.runningSessionIds.contains(sessionId) || store.exitedSessionIds.contains(sessionId) {
                 TerminalHost(terminal: view)
                     .padding(6)
+            }
+            if store.terminalView(for: sessionId) == nil {
+                LaunchState()
             }
             if store.exitedSessionIds.contains(sessionId) {
                 HStack {

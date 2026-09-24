@@ -27,7 +27,8 @@ final class AppStore {
     private(set) var initialPrompts: [Int64: String] = [:]
     private(set) var loginEnvironment: ClaudeLauncher.LoginEnvironment?
     /// Sessions wait for the login environment (~0.6 s at launch) so they never race into the shell fallback.
-    private var isLoginResolved = false
+    /// The login shell has been asked for claude's path and environment (see `loginEnvironment`).
+    private(set) var isLoginResolved = false
 
     private(set) var projects: [Project] = []
     private(set) var sessions: [Session] = []
@@ -84,6 +85,12 @@ final class AppStore {
     /// Resolves the login shell environment once, then brings every saved session back
     /// in the background so switching to it is instant.
     func restoreSessions() async {
+        await resolveLogin()
+    }
+
+    /// Asks the login shell for claude again (after installing it, or fixing ~/.zshrc) and starts the sessions.
+    func resolveLogin() async {
+        isLoginResolved = false
         loginEnvironment = await Task.detached { ClaudeLauncher.resolveLoginEnvironment() }.value
         isLoginResolved = true
         for session in orderedSessions {
@@ -1005,6 +1012,18 @@ final class AppStore {
         selectedSessionId = fresh.id
     }
 
+    /// Takes a project out of Meepo: its sessions close; the folder, git and Claude's conversations stay,
+    /// and the user's own Notification hooks there get their original form back.
+    func removeProject(_ id: Int64) {
+        guard let project = projects.first(where: { $0.id == id }) else { return }
+        for session in sessions where session.projectId == id { if let sid = session.id { closeSession(sid) } }
+        if isBridgeInstalled { try? bridge.setNotifyGuard(false, projectPaths: [project.path]) }
+        _ = try? db.write { try Project.deleteOne($0, id: id) }
+        ciRuns[id] = nil
+        pipelines[id] = nil
+        reload()
+    }
+
     func closeSession(_ id: Int64) {
         let ordered = orderedSessions
         terminals.close(id)
@@ -1030,13 +1049,13 @@ final class AppStore {
     /// Waits for `restoreSessions` to resolve the login environment (it then starts every session);
     /// only if that resolution failed does claude go through the shell fallback.
     func startTerminalIfNeeded(_ sessionId: Int64) {
-        guard isLoginResolved, terminals.view(for: sessionId) == nil,
+        guard isLoginResolved, let login = loginEnvironment, terminals.view(for: sessionId) == nil,
               let existing = sessions.first(where: { $0.id == sessionId }),
               let project = project(for: existing) else { return }
         if existing.portBase == nil { assignPortBase(sessionId) } // sessions from before module 5
         guard let session = sessions.first(where: { $0.id == sessionId }) else { return }
         terminals.start(session, projectPath: project.path, initialPrompt: initialPrompts.removeValue(forKey: sessionId),
-                        login: loginEnvironment,
+                        login: login,
                         remoteControlName: remoteControlForNewSessions ? [project.name, session.branch].compactMap { $0 }.joined(separator: " · ") : nil)
         runningSessionIds.insert(sessionId)
     }
