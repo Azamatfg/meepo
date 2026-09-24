@@ -20,7 +20,7 @@ Meepo is a native macOS control panel for running several [Claude Code](https://
 - **CI.** GitHub Actions (`gh`) and GitLab CI (`glab`): each project's default-branch pipeline step by step, with a RUN button for the manual deploy step. Failed runs can be rerun, or fixed by a new session that opens a PR. Meepo never pushes to main and never fixes a deploy on its own.
 - **Tools.** Compare commands, hooks and agents across projects against a shared library (DIFF, LIFT, OVERWRITE, with backups). Clean up stopped Docker containers by project.
 - **Release notes.** Draft a post about the commits since the last one, in the voice of your own sample posts. You edit it and copy it wherever it goes.
-- **Moving over from an IDE.** Import recent repositories from VS Code, Cursor or Windsurf and continue each project's latest Claude conversation (`claude --resume`). Every project has an "Open in VS Code / Cursor" menu, because Meepo has no editor of its own.
+- **Import from Claude Code.** Every folder you've worked on with Claude Code — from any editor or a terminal — comes in with one click, with its latest conversation to continue (`claude --resume`). Folders without git work too. Every project has an "Open in VS Code / Cursor / Zed" menu, because Meepo has no editor of its own.
 - **Desktop widget.** Tokens today, running sessions, waiting sessions.
 
 ## Requirements

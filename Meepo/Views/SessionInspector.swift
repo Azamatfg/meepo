@@ -92,7 +92,21 @@ struct SessionInspector: View {
     @ViewBuilder
     private func sourceControl(path: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let scm {
+            if let scm, !scm.isRepository {
+                HStack {
+                    Text("Not a git repository").font(.caption).foregroundStyle(Tokens.textDim)
+                    Spacer()
+                    Button("GIT INIT") {
+                        store.confirmation = PixelConfirmation(
+                            title: "START GIT HERE?",
+                            message: "git init in \(path.replacingOccurrences(of: NSHomeDirectory(), with: "~")): changes get tracked, and branches, worktrees and compare turn on. Nothing is committed or pushed.",
+                            action: "GIT INIT",
+                            isDestructive: false
+                        ) { Task { await sync(path) { GitService.runReportingError(["init"], in: path) } } }
+                    }
+                    .buttonStyle(PixelButtonStyle(compact: true))
+                }
+            } else if let scm {
                 changesGroup(scm, path: path)
                 if !scm.incoming.commits.isEmpty { incomingGroup(scm, path: path) }
                 if !scm.outgoing.commits.isEmpty || scm.upstream == nil { outgoingGroup(scm, path: path) }

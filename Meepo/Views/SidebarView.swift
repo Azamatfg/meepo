@@ -214,7 +214,7 @@ private struct ProjectHeader: View {
             }
             Spacer()
             Menu {
-                ForEach(IDEImport.installed, id: \.self) { ide in
+                ForEach(Editors.installed, id: \.self) { ide in
                     Button("Open in \(ide.name)") { open(app: ide.app) }
                 }
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: project.path)]) }

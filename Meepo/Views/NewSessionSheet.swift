@@ -24,6 +24,7 @@ struct NewSessionSheet: View {
             FieldRow("Worktree") {
                 Button(useWorktree ? "ON" : "OFF") { useWorktree.toggle() }
                     .buttonStyle(PixelButtonStyle())
+                    .disabled(!isGit)
                     .overlay { if useWorktree { Rectangle().stroke(Tokens.selection, lineWidth: 2) } }
                     .help("Separate git worktree and branch (claude -w), so parallel features don't touch each other's files")
             }
@@ -72,7 +73,15 @@ struct NewSessionSheet: View {
         .preferredColorScheme(.dark)
         .onAppear { projectId = store.newSessionProjectId }
         // SPEC module 5: a second session in the same project defaults to its own worktree.
-        .onChange(of: projectId, initial: true) { useWorktree = store.sessions.contains { $0.projectId == projectId } }
+        .onChange(of: projectId, initial: true) {
+            useWorktree = isGit && store.sessions.contains { $0.projectId == projectId }
+        }
+    }
+
+    /// Worktrees need git; a plain folder project runs sessions in the folder itself.
+    private var isGit: Bool {
+        guard let path = store.projects.first(where: { $0.id == projectId })?.path else { return false }
+        return GitService.output(["rev-parse", "--is-inside-work-tree"], in: path) == "true"
     }
 
     private func create() {

@@ -95,7 +95,7 @@ private struct TitleBar: View {
                 .foregroundStyle(Tokens.text)
             PixelMenu(selection: "+ Project") {
                 Button("Folder…", action: onAddProject)
-                Button("From VS Code, Cursor, Windsurf…") { isImportShown = true }
+                Button("From Claude Code history…") { isImportShown = true }
             }
             .padding(.leading, 12)
             Button("Tasks") { isMorningShown = true }

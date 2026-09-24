@@ -921,8 +921,10 @@ final class AppStore {
 
     // MARK: Projects
 
+    /// A folder inside a git repository adds the repository; a folder without git is a project too
+    /// (sessions, stages, tokens work; git parts stay hidden).
     func addProject(at url: URL) throws {
-        let root = try GitService.repositoryRoot(of: url.path)
+        let root = (try? GitService.repositoryRoot(of: url.path)) ?? url.standardizedFileURL.path
         let name = URL(filePath: root).lastPathComponent
         var project = Project(name: name, path: root, remote: GitService.remoteURL(in: root), color: nil)
         do {

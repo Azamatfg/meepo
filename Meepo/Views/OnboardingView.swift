@@ -54,7 +54,7 @@ struct OnboardingView: View {
                 }
             }
 
-            Text("3 · PROJECTS FROM YOUR IDE").font(Fonts.title(16)).foregroundStyle(Tokens.text)
+            Text("3 · PROJECTS YOU WORKED ON WITH CLAUDE").font(Fonts.title(16)).foregroundStyle(Tokens.text)
             ImportList { dismiss() }
         }
         .padding(16)

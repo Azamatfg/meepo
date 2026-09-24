@@ -75,6 +75,8 @@ enum GitPanel {
     /// The folder as VS Code's Source Control shows it (user decision 2026-09-24): CHANGES not committed yet,
     /// INCOMING commits teammates pushed that aren't here, OUTGOING commits here that aren't pushed.
     struct SourceControl: Equatable {
+        /// A plain folder project (no git): the inspector offers git init instead of the groups.
+        var isRepository = true
         var branch = ""
         var upstream: String?
         var changes: [FileChange] = []
@@ -103,6 +105,9 @@ enum GitPanel {
 
     /// Blocking; call off the main thread.
     static func sourceControl(in path: String) -> SourceControl {
+        guard GitService.output(["rev-parse", "--is-inside-work-tree"], in: path) == "true" else {
+            return SourceControl(isRepository: false)
+        }
         let status = parseStatus(GitService.output(["status", "--porcelain=v1", "-b", "-uall"], in: path) ?? "")
         var result = SourceControl(branch: status.branch, upstream: status.upstream)
         let counts = parseNumstat(GitService.output(["diff", "--numstat", "HEAD"], in: path) ?? "")
