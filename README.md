@@ -35,13 +35,11 @@ On first launch Meepo checks for these and shows how to install anything that is
 
 ```bash
 brew tap azamatfg/meepo
+brew trust azamatfg/meepo     # newer Homebrew asks you to trust third-party taps once
 brew install --cask meepo
 ```
 
-Or download `Meepo.zip` from [Releases](https://github.com/Azamatfg/meepo/releases), unzip it and move `Meepo.app` to Applications.
-
-<!-- Until builds are notarized: -->
-If macOS says the app "can't be opened because Apple cannot check it", right-click `Meepo.app`, choose **Open**, then confirm once.
+Or download `Meepo.zip` from [Releases](https://github.com/Azamatfg/meepo/releases), unzip it and move `Meepo.app` to Applications. Builds are signed and notarized by Apple, so macOS opens them without warnings.
 
 ### Build from source
 
