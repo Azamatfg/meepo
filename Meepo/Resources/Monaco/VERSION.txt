@@ -1,0 +1,1 @@
+monaco-editor 0.56.0 (npm), min/vs — the editor behind VS Code, MIT. Used for the compare view.

@@ -1,0 +1,81 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- Meepo's compare view: Monaco's diff editor, set up the way VS Code shows a diff. -->
+<link rel="stylesheet" href="vs/editor/editor.main.css">
+<style>
+  html, body, #diff { margin: 0; height: 100%; width: 100%; overflow: hidden; background: #1e1e1e; }
+  #empty { display: none; color: #858585; font: 13px -apple-system, sans-serif; padding: 16px; }
+</style>
+</head>
+<body>
+<div id="diff"></div>
+<div id="empty"></div>
+<script src="vs/loader.js"></script>
+<script>
+  // Workers can't start from file://; Monaco then computes diffs on the page, which is fine for one file.
+  self.MonacoEnvironment = { getWorker: function () { throw new Error("no workers on file://"); } };
+  require.config({ paths: { vs: "vs" } });
+  require(["vs/editor/editor.main"], function () {
+    const editor = monaco.editor.createDiffEditor(document.getElementById("diff"), {
+      theme: "vs-dark",
+      readOnly: true,
+      originalEditable: false,
+      automaticLayout: true,
+      renderSideBySide: true,
+      useInlineViewWhenSpaceIsLimited: false,
+      hideUnchangedRegions: { enabled: true, contextLineCount: 3, minimumLineCount: 3, revealLineCount: 20 },
+      diffAlgorithm: "advanced",
+      renderOverviewRuler: true,
+      minimap: { enabled: true },
+      fontFamily: "Menlo, Monaco, 'Courier New', monospace",
+      fontSize: 12,
+      lineHeight: 18,
+      scrollBeyondLastLine: false,
+      renderIndicators: true,
+      ignoreTrimWhitespace: false,
+      experimental: { showMoves: true },
+    });
+    let original = null, modified = null;
+
+    // Swift calls this with the two versions, the language id and the layout.
+    window.meepoShow = function (payload) {
+      const p = JSON.parse(payload);
+      const empty = document.getElementById("empty");
+      if (p.message) {
+        empty.textContent = p.message; empty.style.display = "block";
+        document.getElementById("diff").style.display = "none";
+        return;
+      }
+      empty.style.display = "none";
+      document.getElementById("diff").style.display = "block";
+      if (original) original.dispose();
+      if (modified) modified.dispose();
+      original = monaco.editor.createModel(p.original, p.language);
+      modified = monaco.editor.createModel(p.modified, p.language);
+      editor.setModel({ original: original, modified: modified });
+      editor.updateOptions({ renderSideBySide: p.sideBySide });
+      paint();
+      const reveal = editor.onDidUpdateDiff(function () {
+        reveal.dispose();
+        paint();
+        const changes = editor.getLineChanges() || [];
+        window.webkit.messageHandlers.meepo.postMessage({ changes: changes.length });
+        if (changes.length) editor.goToDiff("next");
+      });
+    };
+    // WebKit may hold back animation frames (a window not yet on screen): draw now instead of waiting for one.
+    function paint() {
+      editor.layout();
+      editor.getOriginalEditor().render(true);
+      editor.getModifiedEditor().render(true);
+    }
+    window.meepoLayout = function (sideBySide) { editor.updateOptions({ renderSideBySide: sideBySide }); paint(); };
+    window.meepoGo = function (direction) { editor.goToDiff(direction); paint(); };
+    window.meepoChangeCount = function () { return (editor.getLineChanges() || []).length; };
+    window.webkit.messageHandlers.meepo.postMessage({ ready: true });
+  });
+</script>
+</body>
+</html>
