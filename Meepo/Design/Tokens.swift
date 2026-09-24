@@ -22,6 +22,18 @@ enum Tokens {
     static let warn          = Color(hex: 0xF2C230) // time to sync
     static let text          = Color(hex: 0xE8F0E0)
     static let textDim       = Color(hex: 0xE8F0E0).opacity(0.65)
+
+    // The compare view copies VS Code's Dark+ look on purpose (user decision 2026-09-24).
+    static let vsEditor      = Color(hex: 0x1E1E1E)
+    static let vsSideBar     = Color(hex: 0x252526)
+    static let vsTitle       = Color(hex: 0x2D2D2D)
+    static let vsBorder      = Color(hex: 0x3C3C3C)
+    static let vsText        = Color(hex: 0xCCCCCC)
+    static let vsTextDim     = Color(hex: 0x8B8B8B)
+    static let vsListActive  = Color(hex: 0x04395E)
+    static let vsModified    = Color(hex: 0xE2C08D)
+    static let vsAdded       = Color(hex: 0x73C991)
+    static let vsDeleted     = Color(hex: 0xC74E39)
 }
 
 extension Color {

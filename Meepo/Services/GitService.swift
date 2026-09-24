@@ -71,6 +71,51 @@ enum GitService {
         succeeds(["ls-files", "--error-unmatch", "--", file], in: path)
     }
 
+    /// Raw stdout (file contents may be binary); nil on failure.
+    static func data(_ args: [String], in path: String) -> Data? {
+        let process = Process()
+        process.executableURL = URL(filePath: "/usr/bin/git")
+        process.arguments = ["-C", path] + args
+        let out = Pipe()
+        process.standardOutput = out
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return process.terminationStatus == 0 ? data : nil
+    }
+
+    /// Stdout even when git exits non-zero (`diff --no-index` exits 1 when files differ).
+    static func outputAllowingFailure(_ args: [String], in path: String) -> String? {
+        let process = Process()
+        process.executableURL = URL(filePath: "/usr/bin/git")
+        process.arguments = ["-C", path] + args
+        let out = Pipe()
+        process.standardOutput = out
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// Runs git; nil on success, otherwise git's own message (for push/pull errors the user should read).
+    static func runReportingError(_ args: [String], in path: String) -> String? {
+        let process = Process()
+        process.executableURL = URL(filePath: "/usr/bin/git")
+        process.arguments = ["-C", path] + args
+        process.environment = ProcessInfo.processInfo.environment.merging(["GIT_TERMINAL_PROMPT": "0"]) { $1 }
+        let err = Pipe()
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = err
+        do { try process.run() } catch { return error.localizedDescription }
+        let data = err.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus != 0 else { return nil }
+        let message = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return message.isEmpty ? "git \(args.first ?? "") failed" : message
+    }
+
     /// Trimmed stdout of any git command; nil on failure or empty output.
     static func output(_ args: [String], in path: String) -> String? {
         run(args, in: path)

@@ -110,8 +110,7 @@ private struct UnitCard: View {
                     if let run = store.ciState(for: session) {
                         Button {
                             store.selectedSessionId = session.id
-                            store.feedTab = .ci
-                            isFeedShown = true
+                            isFeedShown = true // the inspector shows this session's CI
                         } label: {
                             Text(run.isInfraFailure ? "CI !" : run.failed ? "CI ✗" : run.isRunning ? "CI …" : "CI ✓")
                                 .font(Fonts.mono(11))
@@ -133,6 +132,7 @@ private struct UnitCard: View {
         .contentShape(Rectangle())
         .onTapGesture { store.selectedSessionId = session.id }
         .contextMenu {
+            Button("New Session Instead") { try? store.replaceSession(session.id!) }
             Button("Restart") { store.restartSession(session.id!) }
             Button("Close Session", role: .destructive) { store.closeSession(session.id!) }
         }

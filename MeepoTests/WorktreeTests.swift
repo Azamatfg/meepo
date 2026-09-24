@@ -99,3 +99,29 @@ final class ParallelFeaturesTests: XCTestCase {
         XCTAssertTrue(store.sessions.isEmpty)
     }
 }
+
+@MainActor
+final class ReplaceSessionTests: XCTestCase {
+    /// "Start a new session and kill the old one": same folder, worktree, branch and ports; old one gone.
+    func testNewSessionInsteadKeepsTheFolderAndDropsTheOld() throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        let repo = try makeTempRepo()
+        try git(["commit", "-q", "--allow-empty", "-m", "init"], in: repo)
+        try store.addProject(at: repo)
+        try store.createSession(projectId: store.projects[0].id!, model: "opus", prompt: nil, worktree: "login")
+        let old = store.sessions[0]
+
+        try store.replaceSession(old.id!)
+        XCTAssertEqual(store.sessions.count, 1)
+        let fresh = store.sessions[0]
+        XCTAssertNotEqual(fresh.id, old.id)
+        XCTAssertNotEqual(fresh.claudeSessionId, old.claudeSessionId)          // a new conversation
+        XCTAssertEqual(fresh.worktreeName, "login")
+        XCTAssertEqual(fresh.branch, old.branch)
+        XCTAssertEqual(fresh.portBase, old.portBase)
+        XCTAssertEqual(fresh.model, "opus")
+        XCTAssertEqual(store.selectedSessionId, fresh.id)
+    }
+}

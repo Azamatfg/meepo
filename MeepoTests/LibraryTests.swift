@@ -111,16 +111,3 @@ final class DockerParsingTests: XCTestCase {
         XCTAssertEqual(Docker.composeName(of: project), "taxi-kolesa")
     }
 }
-
-extension LibraryTests {
-    func testDiffShowsWhatTheProjectCopyChanges() throws {
-        let a = project("a")
-        try write(library.appending(path: "commands/ship.md"), "run tests\npush\n", age: 60)
-        try write(claude(a, "commands/ship.md"), "run tests\nrun go vet\npush\n", age: 3600)
-        let item = try XCTUnwrap(Library.scan(library: library, projects: [a]).first)
-        let diff = Library.diff(item.copies[0], against: item)
-        XCTAssertTrue(diff.contains("--- library/ship.md"))
-        XCTAssertTrue(diff.contains("+++ a/ship.md"))
-        XCTAssertTrue(diff.contains("+run go vet"))
-    }
-}

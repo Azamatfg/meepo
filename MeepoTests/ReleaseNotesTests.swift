@@ -38,8 +38,8 @@ final class ReleaseNotesTests: XCTestCase {
 
     /// Hooks off, no tools, nothing saved; and never `--bare`, which skips the keychain login (checked live, 2.1.281).
     func testHeadlessRunCannotReachTheBridgeOrTools() {
-        XCTAssertEqual(ReleaseNotes.arguments, ["-p", "--tools", "", "--no-session-persistence", "--setting-sources", ""])
-        XCTAssertFalse(ReleaseNotes.arguments.contains("--bare"))
+        XCTAssertEqual(ClaudeHeadless.arguments, ["-p", "--tools", "", "--no-session-persistence", "--setting-sources", ""])
+        XCTAssertFalse(ClaudeHeadless.arguments.contains("--bare"))
     }
 }
 

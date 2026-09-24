@@ -1,7 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Right-panel TASKS tab: per-project to-dos with notes and attachments (SPEC module 7).
+/// Per-project to-dos with notes and attachments (SPEC module 7), in the TASKS sheet.
 struct TasksView: View {
     @Environment(AppStore.self) private var store
     @State private var draft = ""
@@ -152,6 +152,35 @@ private struct TaskRow: View {
 }
 
 /// Morning launch: paste today's list, open tasks carry over, sort by project, start all sessions.
+/// TASKS in the title bar: the to-do list, and MORNING START to turn open tasks into sessions.
+struct TasksSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var isMorning = false
+
+    var body: some View {
+        if isMorning {
+            MorningView()
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("TASKS").font(Fonts.title(18)).foregroundStyle(Tokens.text)
+                    Spacer()
+                    Button("MORNING START") { isMorning = true }
+                        .help("Pick open tasks and start a session for each")
+                    Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
+                }
+                .buttonStyle(PixelButtonStyle())
+                TasksView().background(Tokens.dirt).sunken()
+            }
+            .padding(16)
+            .frame(width: 620, height: 600)
+            .background(Tokens.grass)
+            .pixelFrame(6)
+            .preferredColorScheme(.dark)
+        }
+    }
+}
+
 struct MorningView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.dismiss) private var dismiss

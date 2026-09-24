@@ -8,7 +8,6 @@ struct MainView: View {
     @Environment(AppStore.self) private var store
     @AppStorage("feedShown") private var isFeedShown = true
     @State private var isPickingFolder = false
-    @State private var addError: String?
     @State private var isStatsShown = false
     @State private var isMorningShown = false
     @State private var isDayShown = false
@@ -37,8 +36,8 @@ struct MainView: View {
                 .background(Tokens.grassDeep)
                 .pixelFrame(4)
                 if isFeedShown {
-                    EventFeedView()
-                        .frame(width: 300)
+                    SessionInspector()
+                        .frame(width: 316)
                         .pixelFrame(4)
                 }
             }
@@ -47,7 +46,8 @@ struct MainView: View {
         .background(Tokens.frameMid)
         .overlay(Bevel(raised: true))
         .ignoresSafeArea()
-        .frame(minWidth: 900, minHeight: 520)
+        // Sidebar 290 + feed 316 + a usable terminal; the title bar fits unclipped from here up.
+        .frame(minWidth: 1060, minHeight: 560)
         .preferredColorScheme(.dark)
         .sheet(isPresented: Binding(
             get: { store.newSessionProjectId != nil },
@@ -56,7 +56,7 @@ struct MainView: View {
             NewSessionSheet()
         }
         .sheet(isPresented: $isStatsShown) { StatsView() }
-        .sheet(isPresented: $isMorningShown) { MorningView() }
+        .sheet(isPresented: $isMorningShown) { TasksSheet() }
         .sheet(isPresented: $isDayShown) { DayView() }
         .sheet(isPresented: $isToolsShown) { ToolsView() }
         .sheet(isPresented: $isNotesShown) { NotesView() }
@@ -66,17 +66,11 @@ struct MainView: View {
             do {
                 try store.addProject(at: result.get())
             } catch {
-                addError = error.localizedDescription
+                store.confirmation = PixelConfirmation(title: "COULDN'T ADD THE PROJECT", message: error.localizedDescription,
+                                                       action: "OK", cancel: nil, isDestructive: false) {}
             }
         }
-        .alert("Couldn’t add the project", isPresented: Binding(
-            get: { addError != nil },
-            set: { if !$0 { addError = nil } }
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(addError ?? "")
-        }
+        .pixelConfirm(Binding(get: { store.confirmation }, set: { store.confirmation = $0 }))
     }
 }
 
@@ -88,6 +82,7 @@ private struct TitleBar: View {
     @Binding var isMorningShown: Bool
     @Binding var isDayShown: Bool
     @Binding var isToolsShown: Bool
+    @Environment(\.openSettings) private var openSettings
     @Binding var isNotesShown: Bool
     @Binding var isImportShown: Bool
     let onAddProject: () -> Void
@@ -103,18 +98,10 @@ private struct TitleBar: View {
                 Button("From VS Code, Cursor, Windsurf…") { isImportShown = true }
             }
             .padding(.leading, 12)
-            Button(isFeedShown ? "Hide Events" : "Events") { isFeedShown.toggle() }
-            Button("Morning") { isMorningShown = true }
-                .help("Start today's sessions from the task list")
+            Button("Tasks") { isMorningShown = true }
+                .help("To-dos per project; MORNING START turns them into sessions")
             Button("Day") { isDayShown = true }
                 .help("End-of-day summary per project")
-            Button("Stats") { isStatsShown = true }
-            Button("Tools") { isToolsShown = true }
-                .help("Shared commands/hooks across projects, Docker cleanup")
-            Button("Notes") { isNotesShown = true }
-                .help("Release note drafts from recent commits, in your voice")
-            SettingsLink { Text("Settings") }
-                .help("Context windows, relay threshold, Remote Control, stages (⌘,)")
             if store.waitingCount > 0 {
                 Text("! \(store.waitingCount)")
                     .font(Fonts.title(16))
@@ -127,6 +114,16 @@ private struct TitleBar: View {
                     .font(Fonts.title(16))
                     .foregroundStyle(Tokens.selection)
                     .help("brew upgrade --cask meepo, or download it from the release page")
+            }
+            // Less frequent things live behind one menu so the bar stays readable.
+            PixelMenu(selection: "≡") {
+                Button(isFeedShown ? "Hide Session Panel" : "Show Session Panel") { isFeedShown.toggle() }
+                Divider()
+                Button("Stats") { isStatsShown = true }
+                Button("Tools — practices, Docker, ports, changes") { isToolsShown = true }
+                Button("Notes — release notes") { isNotesShown = true }
+                Divider()
+                Button("Settings…") { openSettings() }
             }
         }
         .buttonStyle(PixelButtonStyle())

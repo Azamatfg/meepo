@@ -13,6 +13,7 @@ Meepo is a native macOS control panel for running several [Claude Code](https://
 - **Knows what each session needs.** A hook bridge reports status, permission requests, questions and failures; notifications say *which* session wants *what*.
 - **Stages.** PLAN → CODE → QA → SHIP → SYNC per session, each a click that runs your own slash command. Meepo reminds you to QA again if code changed after the last QA.
 - **Context and tokens.** Context-window bar per session, tokens today, stats by project and model; when a session gets full, Meepo relays it into a fresh one with a summary.
+- **What the agent changed.** Next to each session: every file it touched since it started, committed or not, with PUSH/PULL. COMPARE opens the diff exactly as VS Code shows it (it's VS Code's own editor, Monaco); EXPLAIN says what changed in plain words.
 - **Parallel features.** New sessions in their own git worktree (`claude -w`) with their own port range.
 - **Mornings and evenings.** Turn a task list into running sessions with one button; end-of-day summary per project with commits, stages, tokens and the TODOs the agent left.
 - **Screenshots straight into a session.** A global hotkey captures an area and pastes it into the selected session. No files are saved.
@@ -75,4 +76,4 @@ Everything lives on your Mac: `~/.meepo/meepo.sqlite` (sessions, events, tasks, 
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). The compare view bundles [Monaco Editor](https://github.com/microsoft/monaco-editor) (MIT), the editor behind VS Code.

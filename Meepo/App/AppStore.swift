@@ -491,8 +491,71 @@ final class AppStore {
     private static let autofixKey = "ciAutofixProjects"
     private static let fixAttemptsKey = "ciFixAttempts"
 
-    /// Right panel tab; the card's CI badge switches it to CI.
-    var feedTab = EventFeedView.Tab.events
+    /// EXPLAIN in the inspector: changes from `from` to `to` (nil = files on disk) in plain words, by a headless claude.
+    func explainChanges(in path: String, from: String, to: String?, whose: String, newFiles: [String]) async throws -> String {
+        guard let login = loginEnvironment else { throw ClaudeHeadless.Failure(errorDescription: "claude isn't found in the login shell") }
+        let diff = await Task.detached { GitPanel.fullDiff(from: from, to: to, in: path) }.value
+        let prompt = GitPanel.explainPrompt(diff: diff, newFiles: newFiles, whose: whose, language: GitPanel.userLanguage)
+        return try await ClaudeHeadless.run(prompt, claude: login.claudePath, environment: login.environment)
+    }
+
+    // MARK: Auto-sync with teammates (2026-09-24)
+
+    /// Per Meepo session: what to tell the agent on its next prompt about teammates' commits.
+    private(set) var teammateNotes: [Int64: String] = [:]
+    /// Upstream tip already reported per folder, so the same commits aren't announced twice.
+    private var notedUpstream: [String: String] = [:]
+    /// Folders waiting for a clean tree to pull.
+    private(set) var pendingPulls: Set<String> = []
+
+    /// Fetches every running session's folder; teammates' new commits are pulled with --rebase when the tree is
+    /// clean and the agent is between turns, and the agent hears about them on its next prompt. Never pushes.
+    /// `only`: the sessions to sync (tests); by default the running ones.
+    func autoSync(only: [Session]? = nil) async {
+        let live = only ?? sessions.filter { runningSessionIds.contains($0.id ?? -1) }
+        let byFolder = Dictionary(grouping: live) { workdir(of: $0) ?? "" }
+        for (path, folderSessions) in byFolder where !path.isEmpty {
+            let fetched = await Task.detached { () -> (status: GitPanel.Snapshot, incoming: (commits: [String], files: [String]), tip: String?) in
+                GitPanel.fetch(in: path)
+                let status = GitPanel.snapshot(in: path)
+                guard status.upstream != nil, status.behind > 0 else { return (status, ([], []), nil) }
+                return (status, GitPanel.incoming(in: path), GitService.output(["rev-parse", "@{u}"], in: path))
+            }.value
+            guard let tip = fetched.tip, let upstream = fetched.status.upstream else {
+                pendingPulls.remove(path)
+                continue
+            }
+            let idle = folderSessions.allSatisfy { $0.status == .idle || $0.status == .waitingInput }
+            var pulled = false
+            if fetched.status.changes.isEmpty && idle {
+                if let error = await Task.detached(operation: { GitPanel.pullRebase(in: path) }).value {
+                    onCINotice?("Pull stopped", "\(URL(filePath: path).lastPathComponent): \(error.split(separator: "\n").first ?? "") — the folder is as it was")
+                } else {
+                    pulled = true
+                    pendingPulls.remove(path)
+                }
+            } else {
+                pendingPulls.insert(path)
+            }
+            // Tell the agents once per new upstream tip, and again when the pull finally happened.
+            let key = "\(tip)#\(pulled)"
+            guard notedUpstream[path] != key else { continue }
+            notedUpstream[path] = key
+            let note = GitPanel.teammateNote(commits: fetched.incoming.commits, files: fetched.incoming.files,
+                                             upstream: upstream, pulled: pulled)
+            for session in folderSessions { if let id = session.id { teammateNotes[id] = note } }
+        }
+    }
+
+    /// The bridge's reply to a hook: the teammates note, handed over once, on the session's next prompt.
+    func hookReply(sessionId: Int64, body: Data) -> String? {
+        guard HookPayload(json: body)?.event == "UserPromptSubmit" else { return nil }
+        return teammateNotes.removeValue(forKey: sessionId)
+    }
+
+    /// A question or notice shown over the main window (pixel style, not a system dialog).
+    var confirmation: PixelConfirmation?
+
     /// Latest run per workflow + branch, per project.
     private(set) var ciRuns: [Int64: [CIRun]] = [:]
     /// Default branch's latest commit through CI → build → deploy, per project.
@@ -617,7 +680,7 @@ final class AppStore {
         writingNotes.insert(projectId)
         defer { writingNotes.remove(projectId) }
         do {
-            let text = try await ReleaseNotes.generate(prompt, claude: login.claudePath, environment: login.environment)
+            let text = try await ClaudeHeadless.run(prompt, claude: login.claudePath, environment: login.environment)
             let note = ReleaseNote(projectId: projectId, sha: head, text: text)
             _ = try await db.write { try note.inserted($0) }
             reloadReleaseNotes()
@@ -915,6 +978,29 @@ final class AppStore {
         if let prompt, !prompt.isEmpty { initialPrompts[session.id!] = prompt }
         reload()
         selectedSessionId = session.id
+    }
+
+    /// A fresh claude in the same folder — same worktree, branch and ports — and the old session closed.
+    /// The old conversation stays in ~/.claude (claude --resume can still open it).
+    func replaceSession(_ id: Int64) throws {
+        guard let old = sessions.first(where: { $0.id == id }) else { return }
+        var fresh = Session(
+            projectId: old.projectId,
+            claudeSessionId: UUID().uuidString.lowercased(),
+            model: old.model,
+            effort: old.effort,
+            branch: old.branch,
+            stage: nil,
+            worktreeName: old.worktreeName,
+            worktreeBase: old.worktreeBase,
+            portBase: old.portBase,
+            status: .idle,
+            createdAt: .now,
+            lastActiveAt: .now
+        )
+        try db.write { try fresh.insert($0) }
+        closeSession(id)
+        selectedSessionId = fresh.id
     }
 
     func closeSession(_ id: Int64) {

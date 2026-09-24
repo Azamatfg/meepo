@@ -6,7 +6,7 @@ struct ToolsView: View {
     @State private var tab = Tab.practices
     @State private var confirmation: PixelConfirmation?
 
-    enum Tab: String, CaseIterable { case practices = "PRACTICES", docker = "DOCKER", changes = "CHANGES" }
+    enum Tab: String, CaseIterable { case practices = "PRACTICES", docker = "DOCKER", ports = "PORTS", changes = "CHANGES" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -23,6 +23,7 @@ struct ToolsView: View {
             switch tab {
             case .practices: PracticesView(confirmation: $confirmation)
             case .docker: DockerView(confirmation: $confirmation)
+            case .ports: PortsView().background(Tokens.dirt).sunken()
             case .changes: ChangesView(confirmation: $confirmation)
             }
         }
@@ -142,9 +143,6 @@ private struct PracticeRow: View {
                         Spacer()
                         if copy.state != .same {
                             Button("DIFF") { diffCopy = copy }
-                                .popover(isPresented: Binding(get: { diffCopy?.id == copy.id }, set: { if !$0 { diffCopy = nil } })) {
-                                    DiffText(text: Library.diff(copy, against: item))
-                                }
                         }
                         if copy.state == .newer || copy.state == .projectOnly {
                             Button("LIFT") { act { try Library.lift(copy, in: item, library: library, backups: backups) } }
@@ -162,6 +160,14 @@ private struct PracticeRow: View {
         }
         .padding(6)
         .background(isExpanded ? Tokens.grassDeep : .clear)
+        .sheet(item: $diffCopy) { copy in
+            let library = item.libraryURL
+            DiffViewer(title: "LIBRARY ↔ \(copy.project.name.uppercased())", sources: [
+                DiffSource(id: "\(item.kind)/\(item.name)", status: "M") {
+                    (library.flatMap { try? Data(contentsOf: $0) }, try? Data(contentsOf: copy.url))
+                },
+            ], selected: "\(item.kind)/\(item.name)")
+        }
     }
 
     @ViewBuilder
@@ -322,27 +328,5 @@ private struct ChangesView: View {
         do { try ChangeLog.restore(entry, backups: store.backupsDir) } catch { store.bridgeError = error.localizedDescription }
         reload()
         store.refreshProjects()
-    }
-}
-
-/// Unified diff, colored by line.
-private struct DiffText: View {
-    let text: String
-
-    var body: some View {
-        ScrollView([.vertical, .horizontal]) {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(text.split(separator: "\n", omittingEmptySubsequences: false).enumerated()), id: \.offset) { _, line in
-                    Text(String(line))
-                        .font(Fonts.mono(11))
-                        .foregroundStyle(line.hasPrefix("+") ? Tokens.selection : line.hasPrefix("-") ? Tokens.danger
-                                         : line.hasPrefix("@@") ? Tokens.screen : Tokens.text)
-                }
-            }
-            .padding(8)
-        }
-        .frame(width: 620, height: 420)
-        .background(Tokens.terminalBg)
-        .preferredColorScheme(.dark)
     }
 }

@@ -116,21 +116,6 @@ enum Library {
         }
     }
 
-    /// `diff -u library copy`: what a project's copy changes compared to the library (review before overwriting).
-    static func diff(_ copy: Copy, against item: Item) -> String {
-        guard let library = item.libraryURL else { return (try? String(contentsOf: copy.url, encoding: .utf8)) ?? "" }
-        let process = Process()
-        process.executableURL = URL(filePath: "/usr/bin/diff")
-        process.arguments = ["-u", "--label", "library/\(item.name)", "--label", "\(copy.project.name)/\(item.name)",
-                             library.path, copy.url.path]
-        let out = Pipe()
-        process.standardOutput = out
-        do { try process.run() } catch { return "" }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return String(decoding: data, as: UTF8.self)
-    }
-
     private static func modified(_ url: URL) -> Date {
         (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
     }

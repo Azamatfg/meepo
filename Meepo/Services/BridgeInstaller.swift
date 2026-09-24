@@ -34,9 +34,10 @@ struct BridgeInstaller {
     # Installed by Meepo; remove it from Meepo ("Remove Hook Bridge"), not by hand.
     [ -z "$MEEPO_SESSION_ID" ] && exit 0
     TOKEN=$(cat "$HOME/.meepo/token" 2>/dev/null) || exit 0
-    curl -s -m 2 -X POST "http://127.0.0.1:${MEEPO_PORT:-47800}/event" \\
+    # Meepo's reply goes to stdout: for UserPromptSubmit it is context for Claude (e.g. teammates' new commits).
+    curl -s -f -m 2 -X POST "http://127.0.0.1:${MEEPO_PORT:-47800}/event" \\
       -H "Content-Type: application/json" -H "X-Meepo-Token: $TOKEN" -H "X-Meepo-Session: $MEEPO_SESSION_ID" \\
-      --data-binary @- >/dev/null 2>&1
+      --data-binary @- 2>/dev/null
     exit 0
 
     """

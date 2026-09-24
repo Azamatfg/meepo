@@ -1,54 +1,7 @@
 import SwiftUI
 
-/// Right panel: hook events of the selected session, newest first; refusals and failures highlighted.
-struct EventFeedView: View {
-    @Environment(AppStore.self) private var store
-
-    enum Tab: String, CaseIterable { case events = "EVENTS", tasks = "TASKS", ci = "CI", ports = "PORTS" }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                ForEach(Tab.allCases, id: \.self) { item in
-                    Button(item.rawValue) { store.feedTab = item }
-                        .buttonStyle(PixelButtonStyle())
-                        .overlay { if store.feedTab == item { Bevel(raised: false) } }
-                }
-            }
-            .padding(8)
-            Rectangle().fill(Tokens.grassDeep).frame(height: 2)
-            switch store.feedTab {
-            case .events: feed
-            case .tasks: TasksView()
-            case .ci: CIView()
-            case .ports: PortsView()
-            }
-        }
-        .background(Tokens.dirt)
-    }
-
-    @ViewBuilder
-    private var feed: some View {
-        Group {
-            if store.selectedEvents.isEmpty {
-                Text(store.isBridgeInstalled ? "No events yet" : "Install the bridge to see events")
-                    .foregroundStyle(Tokens.textDim)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List(store.selectedEvents) { event in
-                    EventRow(event: event)
-                        .listRowBackground(Tokens.dirt)
-                        .listRowSeparatorTint(Tokens.grassDeep)
-                }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-            }
-        }
-        .background(Tokens.dirt)
-    }
-}
-
-private struct EventRow: View {
+/// One hook event: what happened, when, and its text.
+struct EventRow: View {
     let event: HookEvent
 
     var body: some View {
@@ -87,13 +40,14 @@ private struct EventRow: View {
         case "StopFailure": "Reply failed"
         case "PreCompact": "Compacting context"
         case "UserPromptExpansion": "Command"
+        case "HookBlocked": "Blocked by your hook"
         default: name
         }
     }
 }
 
 /// Who listens on which port (SPEC module 5), with the Meepo session or project it belongs to.
-private struct PortsView: View {
+struct PortsView: View {
     @Environment(AppStore.self) private var store
     @State private var ports: [ListeningPort] = []
 
@@ -131,47 +85,163 @@ private struct PortsView: View {
     }
 }
 
-/// CI per project (SPEC module 9): the default branch's pipeline with a manual deploy,
-/// then the latest run per workflow and branch with rerun / fix, and the autofix switch.
-private struct CIView: View {
+/// CI (SPEC module 9): THIS follows the selected session's project — its default-branch pipeline, the session's
+/// branch, other branches folded; ALL is one line per project, a click unfolds it.
+struct CIView: View {
     @Environment(AppStore.self) private var store
     @State private var confirmation: PixelConfirmation?
+    @State var showAll = false
+    @State private var unfolded: Int64?
 
     var body: some View {
+        let current = store.selectedSession.flatMap { store.project(for: $0) }
         let projects = store.projects.filter { store.ciRuns[$0.id!] != nil }
-        List {
-            if projects.isEmpty {
-                Text("No CI yet. GitHub (gh) and GitLab (glab) projects are checked once a minute.")
-                    .font(.caption).foregroundStyle(Tokens.textDim).listRowBackground(Tokens.dirt)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 4) {
+                Button("THIS") { showAll = false }.overlay { if !showAll { Bevel(raised: false) } }
+                    .disabled(current == nil)
+                Button("ALL") { showAll = true }.overlay { if showAll { Bevel(raised: false) } }
             }
-            ForEach(projects) { project in
-                HStack {
-                    Text(project.name.uppercased()).font(Fonts.title(16)).foregroundStyle(Tokens.text)
-                    Spacer()
-                    let on = store.autofixProjectIds.contains(project.id!)
-                    Button(on ? "AUTOFIX ON" : "AUTOFIX OFF") {
-                        if on { store.autofixProjectIds.remove(project.id!) } else { store.autofixProjectIds.insert(project.id!) }
+            .buttonStyle(PixelButtonStyle())
+            .padding(8)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    if projects.isEmpty {
+                        Text("No CI yet. GitHub (gh) and GitLab (glab) projects are checked once a minute.")
+                            .font(.caption).foregroundStyle(Tokens.textDim)
+                    } else if showAll || current == nil {
+                        ForEach(projects) { project in
+                            ProjectCISummary(project: project, isUnfolded: unfolded == project.id) {
+                                unfolded = unfolded == project.id ? nil : project.id
+                            }
+                            if unfolded == project.id {
+                                ProjectCI(project: project, branch: nil, confirmation: $confirmation).padding(.leading, 8)
+                            }
+                        }
+                    } else if let current {
+                        if store.ciRuns[current.id!] == nil {
+                            Text("\(current.name): no CI runs found.").font(.caption).foregroundStyle(Tokens.textDim)
+                        } else {
+                            ProjectCI(project: current, branch: store.selectedSession?.branch, confirmation: $confirmation)
+                        }
                     }
-                    .buttonStyle(PixelButtonStyle())
-                    .help("On: rerun a failure once, then fix it in a new session with a PR (max 3). Deploy workflows only notify.")
                 }
-                .listRowBackground(Tokens.dirt)
-                if let pipeline = store.pipelines[project.id!] {
-                    PipelineView(pipeline: pipeline, project: project, confirmation: $confirmation).listRowBackground(Tokens.dirt)
-                }
-                ForEach((store.ciRuns[project.id!] ?? []).prefix(8)) { run in
-                    CIRunRow(run: run, project: project).listRowBackground(Tokens.dirt)
-                }
+                .padding(8)
             }
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
         .pixelConfirm($confirmation)
     }
 }
 
+/// ALL: name, one dot per pipeline step, RUN when a deploy can start.
+private struct ProjectCISummary: View {
+    @Environment(AppStore.self) private var store
+    let project: Project
+    let isUnfolded: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        let pipeline = store.pipelines[project.id!]
+        let head = store.ciRuns[project.id!]?.first { $0.headBranch == pipeline?.branch }
+        HStack(spacing: 6) {
+            Text(isUnfolded ? "▾" : "▸").font(Fonts.mono(12)).foregroundStyle(Tokens.textDim)
+            Text(project.name).foregroundStyle(Tokens.text).lineLimit(1)
+            Spacer()
+            if let head, head.isInfraFailure {
+                Text(head.failureReason ?? "").font(.caption2).foregroundStyle(Tokens.warn).lineLimit(1)
+            }
+            ForEach(pipeline?.steps ?? []) { step in
+                Text(StepLook.symbol(step.state)).font(Fonts.mono(12)).foregroundStyle(StepLook.color(step.state))
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
+    }
+}
+
+/// One project's CI: pipeline, the session's branch, other branches folded, the autofix switch.
+private struct ProjectCI: View {
+    @Environment(AppStore.self) private var store
+    let project: Project
+    /// The selected session's branch; nil in ALL.
+    let branch: String?
+    @Binding var confirmation: PixelConfirmation?
+    @State private var showOthers = false
+
+    var body: some View {
+        let runs = store.ciRuns[project.id!] ?? []
+        let pipeline = store.pipelines[project.id!]
+        let mine = runs.filter { $0.headBranch == (branch ?? pipeline?.branch) }
+        let others = runs.filter { !mine.contains($0) }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(project.name.uppercased()).font(Fonts.title(16)).foregroundStyle(Tokens.text).lineLimit(1)
+                Spacer()
+                let on = store.autofixProjectIds.contains(project.id!)
+                Button(on ? "AUTOFIX ✓" : "AUTOFIX") {
+                    if on { store.autofixProjectIds.remove(project.id!) } else { store.autofixProjectIds.insert(project.id!) }
+                }
+                .buttonStyle(PixelButtonStyle())
+                .foregroundStyle(on ? Tokens.selection : Tokens.textDim)
+                .help("On: rerun a failure once, then fix it in a new session with a PR/MR (max 3). Deploys only notify.")
+            }
+            if let pipeline {
+                PipelineView(pipeline: pipeline, project: project, confirmation: $confirmation)
+                if let head = runs.first(where: { $0.headBranch == pipeline.branch }), head.isInfraFailure {
+                    Text("\(head.failureReason ?? "") — CI didn't run the code, not a code failure")
+                        .font(.caption).foregroundStyle(Tokens.warn)
+                }
+            }
+            if !mine.isEmpty && (branch != nil && branch != pipeline?.branch || pipeline == nil) {
+                Text("BRANCH \(branch ?? "")").font(.caption).foregroundStyle(Tokens.textDim)
+                ForEach(mine.prefix(5)) { run in CIRunRow(run: run, project: project) }
+            } else {
+                ForEach(mine.filter(\.failed).prefix(3)) { run in CIRunRow(run: run, project: project) }
+            }
+            if !others.isEmpty {
+                Button {
+                    showOthers.toggle()
+                } label: {
+                    Text("\(showOthers ? "▾" : "▸") Other branches (\(others.count))\(others.contains(where: \.failed) ? " · \(others.filter(\.failed).count) ✗" : "")")
+                        .font(.caption).foregroundStyle(others.contains(where: \.failed) ? Tokens.danger : Tokens.textDim)
+                }
+                .buttonStyle(.plain)
+                if showOthers {
+                    ForEach(others.prefix(10)) { run in CIRunRow(run: run, project: project) }
+                }
+            }
+        }
+        .padding(6)
+        .background(Tokens.dirt)
+    }
+}
+
+/// Step symbols and colors shared by the pipeline and the ALL summary.
+enum StepLook {
+    static func symbol(_ state: Pipeline.Step.State) -> String {
+        switch state {
+        case .passed: "✓"
+        case .failed: "✗"
+        case .running: "…"
+        case .pending: "·"
+        case .skipped: "–"
+        case .manual: "○"
+        }
+    }
+
+    static func color(_ state: Pipeline.Step.State) -> Color {
+        switch state {
+        case .passed: Tokens.selectionSoft
+        case .failed: Tokens.danger
+        case .running: Tokens.warn
+        case .pending, .skipped: Tokens.textDim
+        case .manual: Tokens.alert
+        }
+    }
+}
+
 /// The default branch's latest commit step by step: CI → build → deploy. Manual steps start on RUN, after a confirmation.
-private struct PipelineView: View {
+struct PipelineView: View {
     @Environment(AppStore.self) private var store
     let pipeline: Pipeline
     let project: Project
@@ -182,7 +252,7 @@ private struct PipelineView: View {
             Text("\(pipeline.branch) @ \(pipeline.sha.prefix(7))").font(Fonts.mono(11)).foregroundStyle(Tokens.textDim)
             ForEach(pipeline.steps) { step in
                 HStack {
-                    Text(symbol(step.state)).font(Fonts.mono(13)).foregroundStyle(color(step.state))
+                    Text(StepLook.symbol(step.state)).font(Fonts.mono(13)).foregroundStyle(StepLook.color(step.state))
                     Text(step.name).foregroundStyle(Tokens.text).lineLimit(1)
                     Spacer()
                     if step.trigger != nil {
@@ -204,29 +274,9 @@ private struct PipelineView: View {
         .padding(.vertical, 4)
     }
 
-    private func symbol(_ state: Pipeline.Step.State) -> String {
-        switch state {
-        case .passed: "✓"
-        case .failed: "✗"
-        case .running: "…"
-        case .pending: "·"
-        case .skipped: "–"
-        case .manual: "○"
-        }
-    }
-
-    private func color(_ state: Pipeline.Step.State) -> Color {
-        switch state {
-        case .passed: Tokens.selectionSoft
-        case .failed: Tokens.danger
-        case .running: Tokens.warn
-        case .pending, .skipped: Tokens.textDim
-        case .manual: Tokens.alert
-        }
-    }
 }
 
-private struct CIRunRow: View {
+struct CIRunRow: View {
     @Environment(AppStore.self) private var store
     let run: CIRun
     let project: Project

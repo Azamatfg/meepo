@@ -27,7 +27,13 @@ targets:
   Meepo:
     type: application
     platform: macOS
-    sources: [Meepo]
+    sources:
+      - path: Meepo
+        excludes: ["Resources/Monaco/**"]
+      # A folder reference keeps Monaco's vs/ tree intact in the bundle (its loader resolves by path).
+      - path: Meepo/Resources/Monaco
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: GRDB
       - package: SwiftTerm

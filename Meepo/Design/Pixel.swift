@@ -33,14 +33,19 @@ extension View {
 }
 
 /// Raised grey button that sinks when pressed.
+/// Never squeezed: a narrow row overflows or scrolls instead of truncating labels into empty boxes.
 struct PixelButtonStyle: ButtonStyle {
     var large = false
+    /// Tight padding for tab rows.
+    var compact = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(Fonts.title(16))
             .foregroundStyle(Tokens.text)
-            .padding(.horizontal, large ? 16 : 8)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, large ? 16 : compact ? 4 : 8)
             .padding(.vertical, large ? 8 : 3)
             .background(Tokens.frameMid)
             .overlay(Bevel(raised: !configuration.isPressed))
@@ -138,6 +143,12 @@ struct PixelConfirmation {
     let title: String
     var message: String?
     let action: String
+    /// A second choice between CANCEL and the main action (e.g. "Run QA first").
+    var alternative: (title: String, perform: () -> Void)?
+    /// nil = no cancel button: a notice with just OK.
+    var cancel: String? = "CANCEL"
+    /// Red for destructive actions; a plain notice isn't.
+    var isDestructive = true
     let perform: () -> Void
 }
 
@@ -157,13 +168,21 @@ extension View {
                         }
                         HStack {
                             Spacer()
-                            Button("CANCEL") { confirmation.wrappedValue = nil }
-                                .keyboardShortcut(.cancelAction)
+                            if let cancel = pending.cancel {
+                                Button(cancel) { confirmation.wrappedValue = nil }
+                                    .keyboardShortcut(.cancelAction)
+                            }
+                            if let alternative = pending.alternative {
+                                Button(alternative.title) {
+                                    confirmation.wrappedValue = nil
+                                    alternative.perform()
+                                }
+                            }
                             Button {
                                 confirmation.wrappedValue = nil
                                 pending.perform()
                             } label: {
-                                Text(pending.action).foregroundStyle(Tokens.danger)
+                                Text(pending.action).foregroundStyle(pending.isDestructive ? Tokens.danger : Tokens.text)
                             }
                             .keyboardShortcut(.defaultAction)
                         }

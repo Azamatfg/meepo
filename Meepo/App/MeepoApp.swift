@@ -40,6 +40,14 @@ struct MeepoApp: App {
                             try? await Task.sleep(for: .seconds(24 * 3600))
                         }
                     }
+                    Task { // Teammates' commits: every 5 minutes, and when the user comes back to Meepo.
+                        let activations = NotificationCenter.default.notifications(named: NSApplication.didBecomeActiveNotification)
+                        Task { for await _ in activations { await store.autoSync() } }
+                        while !Task.isCancelled {
+                            await store.autoSync()
+                            try? await Task.sleep(for: .seconds(300))
+                        }
+                    }
                     Task { // CI changes slowly; once a minute is plenty and cheap on the GitHub API
                         while !Task.isCancelled {
                             await store.refreshCI()
@@ -150,6 +158,7 @@ final class LiveServices {
                                     summary: payload.summary)
             }
             server.onFailure = { [weak store] message in store?.bridgeError = message }
+            server.reply = { [weak store] sessionId, body in store?.hookReply(sessionId: sessionId, body: body) }
             try server.start()
             self.server = server
         } catch {

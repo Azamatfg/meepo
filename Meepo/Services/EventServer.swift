@@ -38,6 +38,8 @@ final class EventServer {
     private let onEvent: (Int64, Data) -> Void
     private var listener: NWListener?
     var onFailure: ((String) -> Void)?
+    /// Text to hand back to the hook (Claude reads a UserPromptSubmit hook's stdout as extra context); nil = none.
+    var reply: ((Int64, Data) -> String?)?
 
     /// `onEvent` gets the Meepo session id (from the bridge's header) and the raw hook JSON.
     init(token: String, onEvent: @escaping (Int64, Data) -> Void) {
@@ -99,8 +101,17 @@ final class EventServer {
 
     private func respond(_ connection: NWConnection, to request: HTTPRequest) {
         let (status, sessionId) = Self.route(request, token: token)
-        let head = "HTTP/1.1 \(status) \(status == 204 ? "No Content" : "Error")\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        connection.send(content: Data(head.utf8), completion: .contentProcessed { _ in connection.cancel() })
+        let text = sessionId.flatMap { reply?($0, request.body) } ?? ""
+        connection.send(content: Self.response(status: status, text: text), completion: .contentProcessed { _ in connection.cancel() })
         if let sessionId { onEvent(sessionId, request.body) }
+    }
+
+    /// 204 without a body, 200 with the reply text, or the error status.
+    nonisolated static func response(status: Int, text: String) -> Data {
+        let body = Data(text.utf8)
+        let code = status == 204 && !body.isEmpty ? 200 : status
+        let reason = code == 200 ? "OK" : code == 204 ? "No Content" : "Error"
+        let head = "HTTP/1.1 \(code) \(reason)\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+        return Data(head.utf8) + body
     }
 }

@@ -5,16 +5,25 @@ import SwiftUI
 struct StagePanel: View {
     @Environment(AppStore.self) private var store
     let session: Session
-    @State private var shipWarning: Stage?
     @State private var isMoreShown = false
     @State private var isPlanAsked = false
     @State private var missingStage: Stage?
     @State private var isHandoffShown = false
-    @State private var isRemoveAsked = false
     @State private var handoffNotes = ""
     @State private var planTask = ""
 
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            row
+            ScrollView(.horizontal, showsIndicators: false) { row }
+        }
+        .padding(6)
+        .background(Tokens.frameMid)
+    }
+
+    /// Stages, then session tools; the same row whether it fits or scrolls.
+    @ViewBuilder
+    private var row: some View {
         // All stages are always shown; ones this project lacks are dimmed and offer to add the command.
         let stages = store.stages
         let available = Set(store.stages(for: session.projectId).map(\.name))
@@ -61,15 +70,16 @@ struct StagePanel: View {
                 NumberPlate(text: "PORT \(port)").help("PORT / MEEPO_PORT_BASE for this session: \(port)–\(port + Ports.blockSize - 1)")
             }
             if store.mergedWorktreeSessionIds.contains(session.id!) {
-                Button("REMOVE WORKTREE") { isRemoveAsked = true }
-                    .buttonStyle(PixelButtonStyle())
-                    .overlay { Rectangle().stroke(Tokens.selection, lineWidth: 2) }
-                    .help("The branch is merged: delete the worktree and its branch, close this session")
-                    .confirmationDialog("Remove worktree \(session.worktreeName ?? "")?", isPresented: $isRemoveAsked) {
-                        Button("Remove worktree and branch", role: .destructive) { store.removeWorktree(of: session.id!) }
-                    } message: {
-                        Text("Branch \(session.branch ?? "") is merged. The session closes.")
-                    }
+                Button("REMOVE WORKTREE") {
+                    store.confirmation = PixelConfirmation(
+                        title: "REMOVE WORKTREE \((session.worktreeName ?? "").uppercased())?",
+                        message: "Branch \(session.branch ?? "") is merged. The worktree and the branch are deleted, the session closes.",
+                        action: "REMOVE"
+                    ) { store.removeWorktree(of: session.id!) }
+                }
+                .buttonStyle(PixelButtonStyle())
+                .overlay { Rectangle().stroke(Tokens.selection, lineWidth: 2) }
+                .help("The branch is merged: delete the worktree and its branch, close this session")
             }
             if store.dirtyProjectIds.contains(session.projectId) {
                 Text("✎ UNCOMMITTED")
@@ -98,22 +108,18 @@ struct StagePanel: View {
                     .help("Context \(Int(fraction * 100))%: sync, then continue in a fresh session")
             }
         }
-        .padding(6)
-        .background(Tokens.frameMid)
-        .confirmationDialog("Code changed after the last QA", isPresented: Binding(
-            get: { shipWarning != nil }, set: { if !$0 { shipWarning = nil } }
-        )) {
-            if let qa = store.stages.first(where: { $0.name == "qa" }) {
-                Button("Run QA first") { run(qa, checked: true) }
-            }
-            Button("Ship anyway") { if let ship = shipWarning { run(ship, checked: true) } }
-        }
     }
 
     /// A click runs the stage's command right away; ship first checks that QA ran after the last edit.
     private func run(_ stage: Stage, checked: Bool = false) {
         if stage.name == "ship", !checked, store.codeChangedSinceQA(session.id!) {
-            shipWarning = stage
+            let qa = store.stages.first { $0.name == "qa" }
+            store.confirmation = PixelConfirmation(
+                title: "CODE CHANGED AFTER THE LAST QA",
+                message: "Ship what QA hasn't seen, or run QA first?",
+                action: "SHIP ANYWAY",
+                alternative: qa.map { qa in ("RUN QA FIRST", { run(qa, checked: true) }) }
+            ) { run(stage, checked: true) }
             return
         }
         if stage.command == "plan" {
