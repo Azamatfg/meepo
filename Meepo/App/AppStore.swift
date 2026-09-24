@@ -466,8 +466,12 @@ final class AppStore {
     private static let autofixKey = "ciAutofixProjects"
     private static let fixAttemptsKey = "ciFixAttempts"
 
+    /// Right panel tab; the card's CI badge switches it to CI.
+    var feedTab = EventFeedView.Tab.events
     /// Latest run per workflow + branch, per project.
     private(set) var ciRuns: [Int64: [CIRun]] = [:]
+    /// Default branch's latest commit through CI → build → deploy, per project.
+    private(set) var pipelines: [Int64: Pipeline] = [:]
     /// Projects whose failed CI Meepo reruns and fixes on its own; the rest only get notified.
     var autofixProjectIds: Set<Int64> = [] {
         didSet { defaults.set(Array(autofixProjectIds), forKey: Self.autofixKey) }
@@ -478,8 +482,8 @@ final class AppStore {
     /// Run attempts already seen as failed, so each failure is handled once.
     private var handledFailures: Set<String> = []
     private var isCIPrimed = false
-    /// Injected in tests; otherwise GitHub Actions via the user's `gh`.
-    var ciProvider: (any CIProvider)?
+    /// Injected in tests; otherwise GitHub Actions via `gh` and GitLab CI via `glab`, whichever is installed.
+    var ciProviders: [any CIProvider] = []
     /// (title, body) for a macOS notification; set by the app.
     var onCINotice: ((String, String) -> Void)?
 
@@ -489,13 +493,19 @@ final class AppStore {
         return path.split(separator: ":").map { "\($0)/\(name)" }.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
+    func ciProvider(for project: Project) -> (any CIProvider)? {
+        ciProviders.first { $0.handles(project) }
+    }
+
     /// Polls CI and acts on new failures. The first pass after launch only records history.
     func refreshCI() async {
-        if ciProvider == nil, let gh = toolPath("gh") { ciProvider = GitHubActions(gh: gh) }
-        guard let provider = ciProvider else { return }
-        for project in projects where provider.handles(project) {
-            guard let projectId = project.id else { continue }
+        if ciProviders.isEmpty {
+            ciProviders = [toolPath("gh").map { GitHubActions(gh: $0) }, toolPath("glab").map { GitLabCI(glab: $0) }].compactMap { $0 }
+        }
+        for project in projects {
+            guard let projectId = project.id, let provider = ciProvider(for: project) else { continue }
             let runs = await provider.runs(in: project.path).sorted { $0.createdAt > $1.createdAt }
+            pipelines[projectId] = await provider.pipeline(runs: runs, in: project.path)
             var latest: [String: CIRun] = [:]
             for run in runs where latest[run.key] == nil { latest[run.key] = run }
             ciRuns[projectId] = latest.values.sorted { $0.createdAt > $1.createdAt }
@@ -513,6 +523,8 @@ final class AppStore {
                     await startCIFix(run, in: project, provider: provider)
                 case .giveUp:
                     onCINotice?("CI still failing — gave up", "\(label): \(run.workflowName) after \(CIGuard.maxFixAttempts) fixes")
+                case .reportInfra:
+                    onCINotice?("CI didn't run", "\(label): \(run.failureReason ?? "") — not a code failure")
                 case .reportDeploy:
                     onCINotice?("Deploy failed", "\(label): \(run.workflowName) — not fixed automatically")
                 case .none:
@@ -525,7 +537,7 @@ final class AppStore {
 
     /// Fix session in its own worktree with the failed step's log and guardrails in its first prompt.
     func startCIFix(_ run: CIRun, in project: Project, provider: (any CIProvider)? = nil) async {
-        guard let provider = provider ?? ciProvider, let projectId = project.id else { return }
+        guard let provider = provider ?? ciProvider(for: project), let projectId = project.id else { return }
         let log = await provider.failedLog(run, in: project.path)
         fixAttempts["\(projectId)|\(run.key)", default: 0] += 1
         let name = "ci-fix-\(ClaudeLauncher.worktreeSlug(run.headBranch))-\(run.databaseId % 100_000)"
@@ -535,6 +547,17 @@ final class AppStore {
         } catch {
             bridgeError = error.localizedDescription
         }
+    }
+
+    /// Starts a manual pipeline step (deploy) — only ever on the user's click, never automatically.
+    func startPipelineStep(_ step: Pipeline.Step, in project: Project) async {
+        guard let projectId = project.id, let pipeline = pipelines[projectId], let provider = ciProvider(for: project) else { return }
+        if let error = await provider.start(step, of: pipeline, in: project.path) {
+            bridgeError = error
+        } else {
+            onCINotice?("\(step.name) started", "\(project.name) · \(pipeline.branch) @ \(pipeline.sha.prefix(7))")
+        }
+        await refreshCI()
     }
 
     /// Worst CI state on the session's branch: failed, running, passed; nil when CI knows nothing about it.

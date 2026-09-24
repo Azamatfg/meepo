@@ -4,22 +4,20 @@ import SwiftUI
 struct EventFeedView: View {
     @Environment(AppStore.self) private var store
 
-    @State private var tab = Tab.events
-
     enum Tab: String, CaseIterable { case events = "EVENTS", tasks = "TASKS", ci = "CI", ports = "PORTS" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 ForEach(Tab.allCases, id: \.self) { item in
-                    Button(item.rawValue) { tab = item }
+                    Button(item.rawValue) { store.feedTab = item }
                         .buttonStyle(PixelButtonStyle())
-                        .overlay { if tab == item { Bevel(raised: false) } }
+                        .overlay { if store.feedTab == item { Bevel(raised: false) } }
                 }
             }
             .padding(8)
             Rectangle().fill(Tokens.grassDeep).frame(height: 2)
-            switch tab {
+            switch store.feedTab {
             case .events: feed
             case .tasks: TasksView()
             case .ci: CIView()
@@ -133,15 +131,17 @@ private struct PortsView: View {
     }
 }
 
-/// CI per project (SPEC module 9): latest run per workflow and branch, rerun / fix, autofix switch.
+/// CI per project (SPEC module 9): the default branch's pipeline with a manual deploy,
+/// then the latest run per workflow and branch with rerun / fix, and the autofix switch.
 private struct CIView: View {
     @Environment(AppStore.self) private var store
+    @State private var confirmation: PixelConfirmation?
 
     var body: some View {
         let projects = store.projects.filter { store.ciRuns[$0.id!] != nil }
         List {
             if projects.isEmpty {
-                Text("No CI yet. GitHub projects are checked once a minute through gh.")
+                Text("No CI yet. GitHub (gh) and GitLab (glab) projects are checked once a minute.")
                     .font(.caption).foregroundStyle(Tokens.textDim).listRowBackground(Tokens.dirt)
             }
             ForEach(projects) { project in
@@ -156,6 +156,9 @@ private struct CIView: View {
                     .help("On: rerun a failure once, then fix it in a new session with a PR (max 3). Deploy workflows only notify.")
                 }
                 .listRowBackground(Tokens.dirt)
+                if let pipeline = store.pipelines[project.id!] {
+                    PipelineView(pipeline: pipeline, project: project, confirmation: $confirmation).listRowBackground(Tokens.dirt)
+                }
                 ForEach((store.ciRuns[project.id!] ?? []).prefix(8)) { run in
                     CIRunRow(run: run, project: project).listRowBackground(Tokens.dirt)
                 }
@@ -163,6 +166,63 @@ private struct CIView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        .pixelConfirm($confirmation)
+    }
+}
+
+/// The default branch's latest commit step by step: CI → build → deploy. Manual steps start on RUN, after a confirmation.
+private struct PipelineView: View {
+    @Environment(AppStore.self) private var store
+    let pipeline: Pipeline
+    let project: Project
+    @Binding var confirmation: PixelConfirmation?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("\(pipeline.branch) @ \(pipeline.sha.prefix(7))").font(Fonts.mono(11)).foregroundStyle(Tokens.textDim)
+            ForEach(pipeline.steps) { step in
+                HStack {
+                    Text(symbol(step.state)).font(Fonts.mono(13)).foregroundStyle(color(step.state))
+                    Text(step.name).foregroundStyle(Tokens.text).lineLimit(1)
+                    Spacer()
+                    if step.trigger != nil {
+                        Button("RUN") {
+                            confirmation = PixelConfirmation(
+                                title: "RUN \(step.name.uppercased())?",
+                                message: "\(project.name) · \(pipeline.branch) @ \(pipeline.sha.prefix(7))",
+                                action: "RUN"
+                            ) { Task { await store.startPipelineStep(step, in: project) } }
+                        }
+                        .buttonStyle(PixelButtonStyle())
+                        .disabled(!pipeline.canStart(step))
+                        .help(pipeline.canStart(step) ? "Start \(step.name) on this commit" : "Waits for the steps above to pass")
+                    }
+                    if let url = step.url.flatMap(URL.init(string:)) { Link("↗", destination: url).foregroundStyle(Tokens.screen) }
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func symbol(_ state: Pipeline.Step.State) -> String {
+        switch state {
+        case .passed: "✓"
+        case .failed: "✗"
+        case .running: "…"
+        case .pending: "·"
+        case .skipped: "–"
+        case .manual: "○"
+        }
+    }
+
+    private func color(_ state: Pipeline.Step.State) -> Color {
+        switch state {
+        case .passed: Tokens.selectionSoft
+        case .failed: Tokens.danger
+        case .running: Tokens.warn
+        case .pending, .skipped: Tokens.textDim
+        case .manual: Tokens.alert
+        }
     }
 }
 
@@ -185,7 +245,7 @@ private struct CIRunRow: View {
             Text(run.headBranch).font(Fonts.mono(11)).foregroundStyle(Tokens.textDim).lineLimit(1)
             if run.failed && !run.isDeploy {
                 HStack {
-                    Button("RERUN") { Task { _ = await store.ciProvider?.rerunFailed(run, in: project.path) } }
+                    Button("RERUN") { Task { _ = await store.ciProvider(for: project)?.rerunFailed(run, in: project.path) } }
                     Button("FIX") { Task { await store.startCIFix(run, in: project) } }
                         .help("New session in a worktree with the failed step's log; it opens a PR, never pushes to main")
                 }

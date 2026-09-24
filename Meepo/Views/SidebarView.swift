@@ -68,6 +68,7 @@ extension AppStore {
 /// A session as an RTS unit (design §5): portrait over its ring, "!" when it waits for you.
 private struct UnitCard: View {
     @Environment(AppStore.self) private var store
+    @AppStorage("feedShown") private var isFeedShown = true
     let session: Session
     let isSelected: Bool
     let selectionSpace: Namespace.ID
@@ -107,10 +108,20 @@ private struct UnitCard: View {
                     NumberPlate(text: TokenFormat.short(session.id.flatMap { store.sessionUsage[$0]?.tokensToday } ?? 0))
                         .help("Tokens today (input + output + cache)")
                     if let run = store.ciState(for: session) {
-                        Text(run.failed ? "CI ✗" : run.isRunning ? "CI …" : "CI ✓")
-                            .font(Fonts.mono(11))
-                            .foregroundStyle(run.failed ? Tokens.danger : run.isRunning ? Tokens.warn : Tokens.selectionSoft)
-                            .help("\(run.workflowName): \(run.conclusion ?? run.status)")
+                        Button {
+                            store.selectedSessionId = session.id
+                            store.feedTab = .ci
+                            isFeedShown = true
+                        } label: {
+                            Text(run.isInfraFailure ? "CI !" : run.failed ? "CI ✗" : run.isRunning ? "CI …" : "CI ✓")
+                                .font(Fonts.mono(11))
+                                .foregroundStyle(run.isInfraFailure || run.isRunning ? Tokens.warn
+                                                 : run.failed ? Tokens.danger : Tokens.selectionSoft)
+                        }
+                        .buttonStyle(.plain)
+                        .help(run.isInfraFailure
+                              ? "\(run.workflowName): \(run.failureReason ?? "") — CI didn't run the code, not a code failure. Click for CI"
+                              : "\(run.workflowName): \(run.conclusion ?? run.status). Click for CI")
                     }
                 }
             }

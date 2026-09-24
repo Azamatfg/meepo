@@ -91,6 +91,8 @@ private final class FakeCI: CIProvider, @unchecked Sendable {
     func runs(in path: String) async -> [CIRun] { runs }
     func failedLog(_ run: CIRun, in path: String) async -> String { "KeyError: 'since'" }
     func rerunFailed(_ run: CIRun, in path: String) async -> Bool { reruns.append(run.id); return true }
+    func pipeline(runs: [CIRun], in path: String) async -> Pipeline? { nil }
+    func start(_ step: Pipeline.Step, of pipeline: Pipeline, in path: String) async -> String? { nil }
 }
 
 @MainActor
@@ -107,7 +109,7 @@ final class CIWatcherTests: XCTestCase {
         try git(["commit", "-q", "--allow-empty", "-m", "init"], in: repo)
         try store.addProject(at: repo)
         ci = FakeCI()
-        store.ciProvider = ci
+        store.ciProviders = [ci]
         store.onCINotice = { [weak self] title, _ in self?.notices.append(title) }
     }
 
@@ -167,5 +169,82 @@ final class CIWatcherTests: XCTestCase {
                    ciRun(21, workflow: "Lint", branch: branch), ciRun(22, branch: "other", conclusion: "success")]
         await store.refreshCI()
         XCTAssertEqual(store.ciState(for: store.sessions[0])?.id, 21)
+    }
+}
+
+final class PipelineTests: XCTestCase {
+    private func run(_ id: Int64, _ workflow: String, event: String, sha: String, branch: String = "master",
+                     conclusion: String? = "success", status: String = "completed", minute: Int) -> CIRun {
+        CIRun(databaseId: id, workflowName: workflow, headBranch: branch, headSha: sha, status: status, conclusion: conclusion,
+              createdAt: Date(timeIntervalSince1970: Double(minute) * 60), attempt: 1, url: "u\(id)", event: event)
+    }
+
+    private let workflows = [GitHubActions.Workflow(name: "CI", path: ".github/workflows/ci.yml", state: "active"),
+                             GitHubActions.Workflow(name: "Build & Push", path: ".github/workflows/build.yml", state: "active"),
+                             GitHubActions.Workflow(name: "Deploy", path: ".github/workflows/deploy.yml", state: "active")]
+
+    /// taxinet, 2026-09-23: CI (push) → Build & Push (workflow_run) on the same sha; Deploy is dispatch-only.
+    func testGitHubChainIsTheLatestPushedCommitThenDeploy() throws {
+        let runs = [run(1, "CI", event: "push", sha: "old", minute: 0),
+                    run(2, "Build & Push", event: "workflow_run", sha: "old", minute: 5),
+                    run(3, "CI", event: "push", sha: "new", minute: 10),
+                    run(4, "Build & Push", event: "workflow_run", sha: "new", conclusion: nil, status: "in_progress", minute: 15),
+                    run(5, "CI", event: "pull_request", sha: "pr", branch: "feat/x", conclusion: "failure", minute: 20)]
+        let pipeline = try XCTUnwrap(GitHubActions.pipeline(runs: runs, workflows: workflows, branch: "master"))
+        XCTAssertEqual(pipeline.sha, "new")
+        XCTAssertEqual(pipeline.steps.map(\.name), ["CI", "Build & Push", "Deploy"])
+        XCTAssertEqual(pipeline.steps.map(\.state), [.passed, .running, .manual])
+        XCTAssertEqual(pipeline.steps[2].trigger, ".github/workflows/deploy.yml")
+        XCTAssertNil(pipeline.steps[1].trigger)                       // "Push" in the name isn't a deploy button
+        XCTAssertFalse(pipeline.canStart(pipeline.steps[2]))          // build still running
+    }
+
+    func testDeployOpensWhenEverythingBeforePassedAndCanBeRepeated() throws {
+        let runs = [run(1, "CI", event: "push", sha: "s", minute: 0),
+                    run(2, "Build & Push", event: "workflow_run", sha: "s", minute: 5),
+                    run(3, "Deploy", event: "workflow_dispatch", sha: "s", minute: 9)]
+        let pipeline = try XCTUnwrap(GitHubActions.pipeline(runs: runs, workflows: workflows, branch: "master"))
+        XCTAssertEqual(pipeline.steps.map(\.state), [.passed, .passed, .passed])
+        XCTAssertTrue(pipeline.canStart(pipeline.steps[2]))
+
+        let red = [run(1, "CI", event: "push", sha: "t", conclusion: "failure", minute: 20),
+                   run(2, "Build & Push", event: "workflow_run", sha: "t", conclusion: "skipped", minute: 21)]
+        let blocked = try XCTUnwrap(GitHubActions.pipeline(runs: red, workflows: workflows, branch: "master"))
+        XCTAssertEqual(blocked.steps.map(\.state), [.failed, .skipped, .manual])
+        XCTAssertFalse(blocked.canStart(blocked.steps[2]))
+    }
+
+    /// alva-backend's .gitlab-ci.yml: build → test (test + lint) → release → deploy (manual on master).
+    func testGitLabStagesInOrderWithManualDeploy() {
+        func job(_ id: Int64, _ name: String, _ stage: String, _ status: String, allowFailure: Bool = false) -> GitLabCI.APIJob {
+            GitLabCI.APIJob(id: id, name: name, stage: stage, status: status, web_url: "j\(id)", allow_failure: allowFailure)
+        }
+        let jobs = [job(15, "deploy", "deploy", "manual"), job(14, "release", "release", "success"),
+                    job(13, "lint", "test", "failed", allowFailure: true), job(12, "test", "test", "success"),
+                    job(11, "build", "build", "success")]
+        let steps = GitLabCI.steps(jobs, url: "p")
+        XCTAssertEqual(steps.map(\.name), ["build", "test", "release", "deploy"])
+        XCTAssertEqual(steps.map(\.state), [.passed, .passed, .passed, .manual])
+        XCTAssertEqual(steps[3].trigger, "15")
+        XCTAssertTrue(Pipeline(branch: "master", sha: "s", steps: steps).canStart(steps[3]))
+
+        let running = GitLabCI.steps([job(22, "test", "test", "created"), job(21, "build", "build", "running")], url: "p")
+        XCTAssertEqual(running.map(\.state), [.running, .pending])
+    }
+
+    /// alva-backend, 2026-09-23: every job failed with ci_quota_exceeded — nothing ran, so nothing to fix.
+    func testOutOfCIMinutesIsReportedNeverRerunOrFixed() {
+        var quota = CIRun(databaseId: 1, workflowName: "Pipeline", headBranch: "feature", headSha: "s", status: "completed",
+                          conclusion: "failure", createdAt: .now, attempt: 2, url: "u", failureReason: "ci_quota_exceeded")
+        XCTAssertEqual(CIGuard.action(for: quota, fixAttempts: 0, autofix: true), .reportInfra)
+        quota.failureReason = "script_failure"
+        XCTAssertEqual(CIGuard.action(for: quota, fixAttempts: 0, autofix: true), .fix)
+    }
+
+    func testGitLabPipelineDatesWithMilliseconds() throws {
+        let json = #"[{"id":7,"sha":"abc","ref":"master","status":"manual","source":"push","created_at":"2026-09-23T14:30:54.123Z","web_url":"w"}]"#
+        let run = try XCTUnwrap(GitLabCI.decoder.decode([GitLabCI.APIPipeline].self, from: Data(json.utf8)).first?.run)
+        XCTAssertFalse(run.failed || run.isRunning)                    // waiting for a manual deploy isn't a failure
+        XCTAssertEqual(run.headBranch, "master")
     }
 }
