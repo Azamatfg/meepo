@@ -6,14 +6,20 @@ struct Bevel: View {
     var width: CGFloat = 2
 
     var body: some View {
-        Canvas { context, size in
+        Canvas(renderer: Self.renderer(raised: raised, width: width))
+            .allowsHitTesting(false)
+    }
+
+    /// Built outside the main actor: on macOS 15 SwiftUI calls Canvas renderers from its DisplayLink thread
+    /// during animations, and a main-actor closure there traps (Rustem's crash, 2026-09-24).
+    nonisolated static func renderer(raised: Bool, width: CGFloat) -> (inout GraphicsContext, CGSize) -> Void {
+        { context, size in
             let (lead, trail) = raised ? (Tokens.frameLight, Tokens.frameDark) : (Tokens.frameDark, Tokens.frameLight)
             context.fill(Path(CGRect(x: 0, y: size.height - width, width: size.width, height: width)), with: .color(trail))
             context.fill(Path(CGRect(x: size.width - width, y: 0, width: width, height: size.height)), with: .color(trail))
             context.fill(Path(CGRect(x: 0, y: 0, width: size.width, height: width)), with: .color(lead))
             context.fill(Path(CGRect(x: 0, y: 0, width: width, height: size.height)), with: .color(lead))
         }
-        .allowsHitTesting(false)
     }
 }
 
@@ -106,8 +112,18 @@ struct ContextBar: View {
     let fraction: Double?
 
     var body: some View {
-        Canvas { context, size in
+        Canvas(renderer: Self.renderer(fraction: fraction))
+        .frame(height: 10)
+        .background(Tokens.terminalBg)
+        .sunken()
+        .help(fraction.map { "Context \(Int(($0 * 100).rounded()))%" } ?? "Context: no reply yet")
+    }
+
+    /// Off the main actor for the same reason as `Bevel.renderer`.
+    nonisolated static func renderer(fraction: Double?) -> (inout GraphicsContext, CGSize) -> Void {
+        { context, size in
             let count = Int((size.width - 4) / 5)
+            guard count > 0 else { return }
             let lit = Int((min(max(fraction ?? 0, 0), 1) * Double(count)).rounded(.up))
             for i in 0..<count {
                 let rect = CGRect(x: 2 + CGFloat(i) * 5, y: 2, width: 4, height: size.height - 4)
@@ -116,10 +132,6 @@ struct ContextBar: View {
                 context.fill(Path(rect), with: .color(color))
             }
         }
-        .frame(height: 10)
-        .background(Tokens.terminalBg)
-        .sunken()
-        .help(fraction.map { "Context \(Int(($0 * 100).rounded()))%" } ?? "Context: no reply yet")
     }
 }
 

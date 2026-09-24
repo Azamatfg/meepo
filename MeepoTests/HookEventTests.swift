@@ -402,3 +402,16 @@ final class NotificationTextTests: XCTestCase {
         XCTAssertTrue(text.hasSuffix("…"))
     }
 }
+
+/// macOS 15 draws Canvas from SwiftUI's DisplayLink thread; a main-actor renderer traps there (Rustem, 2026-09-24).
+final class CanvasRendererTests: XCTestCase {
+    func testRenderersAreMadeOffTheMainActor() async {
+        // Calling them from a background task compiles only while they stay nonisolated.
+        let made = await Task.detached { () -> Bool in
+            _ = Bevel.renderer(raised: true, width: 2)
+            _ = ContextBar.renderer(fraction: 0.6)
+            return true
+        }.value
+        XCTAssertTrue(made)
+    }
+}
