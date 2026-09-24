@@ -213,6 +213,19 @@ private struct ProjectHeader: View {
                     .truncationMode(.middle)
             }
             Spacer()
+            Menu {
+                ForEach(IDEImport.installed, id: \.self) { ide in
+                    Button("Open in \(ide.name)") { open(app: ide.app) }
+                }
+                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: project.path)]) }
+            } label: {
+                Image(systemName: "chevron.left.forwardslash.chevron.right")
+            }
+            .menuStyle(.button)
+            .menuIndicator(.hidden)
+            .buttonStyle(PixelButtonStyle())
+            .fixedSize()
+            .help("Open \(project.name) in an editor (Meepo has none)")
             Button(action: onNewSession) {
                 Image(systemName: "plus")
             }
@@ -222,6 +235,13 @@ private struct ProjectHeader: View {
         .padding(.bottom, 4)
         .overlay(alignment: .bottom) { Rectangle().fill(Tokens.dirt).frame(height: 2) }
         .help(project.path)
+    }
+
+    private func open(app: String) {
+        let process = Process()
+        process.executableURL = URL(filePath: "/usr/bin/open")
+        process.arguments = ["-a", app, project.path]
+        try? process.run()
     }
 }
 

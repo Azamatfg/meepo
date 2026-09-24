@@ -18,7 +18,10 @@ settings:
     SWIFT_VERSION: "6.0"
     MARKETING_VERSION: 0.1.0
     CURRENT_PROJECT_VERSION: 1
-    CODE_SIGN_IDENTITY: "-"
+    # TAXITECH team (decision 2026-09-24): the widget's App Group needs a Team ID.
+    DEVELOPMENT_TEAM: 7N5485K2AV
+    CODE_SIGN_IDENTITY: Apple Development
+    CODE_SIGN_STYLE: Manual
 
 targets:
   Meepo:
@@ -28,6 +31,11 @@ targets:
     dependencies:
       - package: GRDB
       - package: SwiftTerm
+      - target: MeepoWidget
+    entitlements:
+      path: Meepo/Meepo.entitlements
+      properties:
+        com.apple.security.application-groups: [7N5485K2AV.com.azamatfg.meepo]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.azamatfg.meepo
@@ -37,6 +45,34 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_HARDENED_RUNTIME: YES
         # No App Sandbox: Meepo spawns claude/git/gh and reads ~/.claude.
+
+  MeepoWidget:
+    type: app-extension
+    platform: macOS
+    sources:
+      - MeepoWidget
+      - Meepo/Widget/WidgetSnapshot.swift
+      - Meepo/Design/Tokens.swift
+      - Meepo/Design/TokenFormat.swift
+      - path: Meepo/Resources/Fonts
+        buildPhase: resources
+    info:
+      path: MeepoWidget/Info.plist
+      properties:
+        CFBundleDisplayName: Meepo
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: MeepoWidget/MeepoWidget.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.application-groups: [7N5485K2AV.com.azamatfg.meepo]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.azamatfg.meepo.widget
+        ENABLE_HARDENED_RUNTIME: YES
 
   MeepoTests:
     type: bundle.unit-test

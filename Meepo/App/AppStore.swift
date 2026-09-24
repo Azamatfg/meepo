@@ -2,6 +2,7 @@ import Foundation
 import GRDB
 import Observation
 import SwiftTerm
+import WidgetKit
 
 enum AddProjectError: LocalizedError, Equatable {
     case alreadyAdded(String)
@@ -24,7 +25,7 @@ final class AppStore {
     private let defaults: UserDefaults
     /// First prompt of a freshly created session; used once, never stored.
     private(set) var initialPrompts: [Int64: String] = [:]
-    private var loginEnvironment: ClaudeLauncher.LoginEnvironment?
+    private(set) var loginEnvironment: ClaudeLauncher.LoginEnvironment?
     /// Sessions wait for the login environment (~0.6 s at launch) so they never race into the shell fallback.
     private var isLoginResolved = false
 
@@ -234,6 +235,24 @@ final class AppStore {
         _ = try? await Task.detached { try UsageScanner.scan(root: root, into: db) }.value
         reloadUsage()
         refreshProjects()
+    }
+
+    /// A newer Meepo on GitHub Releases, checked daily.
+    var availableUpdate: UpdateCheck.Release?
+
+    private var widgetSnapshot = WidgetSnapshot()
+
+    /// Hands the desktop widget its numbers; reloads it only when they change (WidgetKit budgets reloads).
+    func publishWidgetSnapshot() {
+        let next = WidgetSnapshot(tokensToday: usageStats(since: Calendar.current.startOfDay(for: .now)).total.total,
+                                  activeSessions: runningSessionIds.count, waitingSessions: waitingCount, updatedAt: .now)
+        var previous = widgetSnapshot
+        previous.updatedAt = next.updatedAt
+        // Unchanged numbers still refresh the file hourly, so the widget can tell Meepo is alive.
+        guard previous != next || widgetSnapshot.updatedAt < .now.addingTimeInterval(-1800) else { return }
+        widgetSnapshot = next
+        try? next.write()
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     func reloadUsage() {
@@ -864,14 +883,15 @@ final class AppStore {
     }
 
     /// `worktree`: a feature name — the session runs in its own git worktree (`claude -w`), SPEC module 5.
+    /// `resuming`: an existing Claude Code conversation (e.g. imported from an IDE); it opens with `--resume`.
     func createSession(projectId: Int64, model: String?, prompt: String?, effort: String? = nil, stage: String? = nil,
-                       worktree: String? = nil) throws {
+                       worktree: String? = nil, resuming: String? = nil) throws {
         guard let project = projects.first(where: { $0.id == projectId }) else { return }
         let worktreeName = worktree.map(ClaudeLauncher.worktreeSlug).flatMap { $0.isEmpty ? nil : $0 }
         if worktreeName != nil { GitService.ensureWorktreesIgnored(in: project.path) }
         var session = Session(
             projectId: projectId,
-            claudeSessionId: UUID().uuidString.lowercased(),
+            claudeSessionId: resuming ?? UUID().uuidString.lowercased(),
             model: model,
             effort: effort,
             branch: worktreeName.map { "worktree-\($0)" } ?? GitService.currentBranch(in: project.path),

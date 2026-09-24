@@ -14,12 +14,14 @@ struct MainView: View {
     @State private var isDayShown = false
     @State private var isToolsShown = false
     @State private var isNotesShown = false
+    @State private var isImportShown = false
+    @AppStorage("onboarded") private var isOnboarded = false
 
     var body: some View {
         VStack(spacing: 0) {
             TitleBar(isFeedShown: $isFeedShown, isStatsShown: $isStatsShown,
                      isMorningShown: $isMorningShown, isDayShown: $isDayShown, isToolsShown: $isToolsShown,
-                     isNotesShown: $isNotesShown) { isPickingFolder = true }
+                     isNotesShown: $isNotesShown, isImportShown: $isImportShown) { isPickingFolder = true }
             HStack(spacing: 6) {
                 SidebarView()
                     .frame(width: 290)
@@ -58,6 +60,8 @@ struct MainView: View {
         .sheet(isPresented: $isDayShown) { DayView() }
         .sheet(isPresented: $isToolsShown) { ToolsView() }
         .sheet(isPresented: $isNotesShown) { NotesView() }
+        .sheet(isPresented: $isImportShown) { ImportView() }
+        .sheet(isPresented: Binding(get: { !isOnboarded }, set: { if !$0 { isOnboarded = true } })) { OnboardingView() }
         .fileImporter(isPresented: $isPickingFolder, allowedContentTypes: [.folder]) { result in
             do {
                 try store.addProject(at: result.get())
@@ -85,6 +89,7 @@ private struct TitleBar: View {
     @Binding var isDayShown: Bool
     @Binding var isToolsShown: Bool
     @Binding var isNotesShown: Bool
+    @Binding var isImportShown: Bool
     let onAddProject: () -> Void
     @State private var isFullScreen = false
 
@@ -93,8 +98,11 @@ private struct TitleBar: View {
             Text("MEEPO")
                 .font(Fonts.title(16))
                 .foregroundStyle(Tokens.text)
-            Button("+ Project", action: onAddProject)
-                .padding(.leading, 12)
+            PixelMenu(selection: "+ Project") {
+                Button("Folder…", action: onAddProject)
+                Button("From VS Code, Cursor, Windsurf…") { isImportShown = true }
+            }
+            .padding(.leading, 12)
             Button(isFeedShown ? "Hide Events" : "Events") { isFeedShown.toggle() }
             Button("Morning") { isMorningShown = true }
                 .help("Start today's sessions from the task list")
@@ -114,6 +122,12 @@ private struct TitleBar: View {
                     .help("Sessions waiting for you: \(store.waitingCount) — Ctrl+Tab")
             }
             Spacer()
+            if let update = store.availableUpdate, let url = URL(string: update.html_url) {
+                Link("UPDATE \(update.version)", destination: url)
+                    .font(Fonts.title(16))
+                    .foregroundStyle(Tokens.selection)
+                    .help("brew upgrade --cask meepo, or download it from the release page")
+            }
         }
         .buttonStyle(PixelButtonStyle())
         .padding(.leading, isFullScreen ? 8 : 80) // room for the traffic lights, which full screen hides
