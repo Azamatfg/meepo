@@ -9,7 +9,7 @@ cask "meepo" do
   desc "Tab through your Claude Code agents"
   homepage "https://github.com/Azamatfg/meepo"
 
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
 
   app "Meepo.app"
 
