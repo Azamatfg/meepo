@@ -93,12 +93,19 @@ enum ClaudeImport {
 
     /// The newest conversation in the project, to continue with `--resume`.
     static func latestClaudeSession(for path: String, claudeHome: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude")) -> ClaudeSession? {
+        claudeSessions(for: path, limit: 1, claudeHome: claudeHome).first
+    }
+
+    /// Conversations started in this folder, newest first (what `claude --resume` lists), for NEW SESSION.
+    static func claudeSessions(for path: String, limit: Int = 20,
+                               claudeHome: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude")) -> [ClaudeSession] {
         let dir = claudeHome.appending(path: "projects/\(claudeFolderName(for: path))")
-        let files = ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
+        return ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
             .filter { $0.pathExtension == "jsonl" }
             .map { ($0, (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) }
-        guard let (file, date) = files.max(by: { $0.1 < $1.1 }) else { return nil }
-        return ClaudeSession(id: file.deletingPathExtension().lastPathComponent, title: title(of: file) ?? "Untitled", date: date)
+            .sorted { $0.1 > $1.1 }
+            .prefix(limit)
+            .map { file, date in ClaudeSession(id: file.deletingPathExtension().lastPathComponent, title: title(of: file) ?? "Untitled", date: date) }
     }
 
     /// Last AI or custom title near the end of the transcript, else the last prompt. Only the tail is read:

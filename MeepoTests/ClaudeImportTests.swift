@@ -45,6 +45,16 @@ final class ClaudeImportTests: XCTestCase {
         XCTAssertNotNil(folders[0].lastUsed)
     }
 
+    /// NEW SESSION lists the folder's conversations newest first, like `claude --resume`.
+    func testPastConversationsNewestFirst() throws {
+        try transcript(cwd: "/work/app", id: "old", age: 3_600, title: "Set up CI")
+        try transcript(cwd: "/work/app", id: "new", age: 60, title: "Fix login")
+        try transcript(cwd: "/work/other", id: "elsewhere", age: 10, title: "Not this folder")
+        let list = ClaudeImport.claudeSessions(for: "/work/app", claudeHome: tmp.appending(path: ".claude"))
+        XCTAssertEqual(list.map(\.id), ["new", "old"])
+        XCTAssertEqual(list.map(\.title), ["Fix login", "Set up CI"])
+    }
+
     /// Real names from ~/.claude/projects (2026-09-24).
     func testClaudeFolderNamesMatchClaudeCode() {
         XCTAssertEqual(ClaudeImport.claudeFolderName(for: "/Users/Azamat/.meepo"), "-Users-Azamat--meepo")

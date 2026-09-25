@@ -9,7 +9,8 @@ struct NewSessionSheet: View {
     @State private var error: String?
     @State private var useWorktree = false
     @State private var featureName = ""
-
+    /// Past conversations in the project's folder, newest first; the ones open in Meepo left out.
+    @State private var past: [ClaudeImport.ClaudeSession] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -53,6 +54,30 @@ struct NewSessionSheet: View {
                 .frame(height: 110)
                 .background(Tokens.terminalBg)
                 .sunken()
+            if !past.isEmpty {
+                Text("OR CONTINUE A PAST CONVERSATION").font(.caption).foregroundStyle(Tokens.textDim)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(past, id: \.id) { conversation in
+                            Button { resume(conversation) } label: {
+                                HStack {
+                                    Text(conversation.title).foregroundStyle(Tokens.text).lineLimit(1)
+                                    Spacer(minLength: 8)
+                                    Text(conversation.date.formatted(.relative(presentation: .named)))
+                                        .font(.caption).foregroundStyle(Tokens.textDim)
+                                }
+                                .padding(.horizontal, 6).padding(.vertical, 3)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help("claude --resume \(conversation.id)")
+                        }
+                    }
+                }
+                .frame(height: min(CGFloat(past.count) * 24 + 8, 150))
+                .background(Tokens.terminalBg)
+                .sunken()
+            }
             if let error {
                 Text(error).foregroundStyle(Tokens.danger)
             }
@@ -76,12 +101,28 @@ struct NewSessionSheet: View {
         .onChange(of: projectId, initial: true) {
             useWorktree = isGit && store.sessions.contains { $0.projectId == projectId }
         }
+        .task(id: projectId) {
+            guard let path = store.projects.first(where: { $0.id == projectId })?.path else { past = []; return }
+            let open = Set(store.sessions.map(\.claudeSessionId))
+            past = await Task.detached { ClaudeImport.claudeSessions(for: path) }.value.filter { !open.contains($0.id) }
+        }
     }
 
     /// Worktrees need git; a plain folder project runs sessions in the folder itself.
     private var isGit: Bool {
         guard let path = store.projects.first(where: { $0.id == projectId })?.path else { return false }
         return GitService.output(["rev-parse", "--is-inside-work-tree"], in: path) == "true"
+    }
+
+    /// Opens the conversation in Meepo where it stopped (claude --resume), in the project folder.
+    private func resume(_ conversation: ClaudeImport.ClaudeSession) {
+        guard let projectId else { return }
+        do {
+            try store.createSession(projectId: projectId, model: nil, prompt: nil, resuming: conversation.id)
+            dismiss()
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
 
     private func create() {
