@@ -1,0 +1,52 @@
+# Clicks between sessions in a real Meepo window on macOS 15, where the tester's DisplayLink crash happens.
+# Run by hand; crash reports are kept as an artifact.
+name: Smoke macOS 15
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Import Developer ID certificate
+        env:
+          P12: ${{ secrets.DEVELOPER_ID_P12 }}
+          P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          security create-keychain -p ci "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p ci "$KEYCHAIN"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+
+      - name: Stand-in claude
+        run: |
+          printf '#!/bin/sh\necho "stand-in claude $*"\nexec sleep 600\n' | sudo tee /usr/local/bin/claude >/dev/null
+          sudo chmod 755 /usr/local/bin/claude
+          sw_vers
+
+      - name: Smoke test
+        env:
+          TEST_RUNNER_MEEPO_SMOKE: "1"
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          if xcodebuild -help 2>&1 | grep -q -- -downloadComponent; then xcodebuild -downloadComponent MetalToolchain; fi
+          brew install xcodegen
+          xcodegen generate
+          xcodebuild -project Meepo.xcodeproj -scheme Meepo -destination 'platform=macOS,arch=arm64' \
+            -skipPackagePluginValidation -derivedDataPath build \
+            -only-testing:MeepoTests/SessionSwitchSmokeTests test
+
+      - name: Crash reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crash-reports
+          path: ~/Library/Logs/DiagnosticReports/
+          if-no-files-found: ignore
