@@ -45,7 +45,7 @@ extension AppStore {
         case .waitingInput: (.waiting, "Waiting for you")
         case .needsSync: (.sync, "Time to sync")
         case .error: (.error, "Error")
-        case .idle: (.idle, "Running")
+        case .idle: (.idle, "Ready")
         }
     }
 }

@@ -30,6 +30,7 @@ struct StagePanel: View {
         let current = stages.firstIndex { $0.name == session.stage }
         let next = current.map { $0 + 1 < stages.count ? $0 + 1 : nil } ?? 0
         HStack(spacing: 6) {
+            InfoButton(title: "Stages", text: Explain.stages)
             ForEach(Array(stages.enumerated()), id: \.element.id) { index, stage in
                 Button(stage.label) { available.contains(stage.name) ? run(stage) : (missingStage = stage) }
                     .buttonStyle(PixelButtonStyle())

@@ -33,6 +33,7 @@ struct HomeView: View {
                 }
                 .padding(3)
                 .background(Tokens.ghost, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(alignment: .trailing) { InfoButton(title: "Home", text: Explain.home).offset(x: 26) }
                 if sessions.isEmpty {
                     Text("No sessions yet — start one with + above.").foregroundStyle(Tokens.textDim)
                 } else if mode == "timeline" {
@@ -138,7 +139,22 @@ private struct TimelineLanes: View {
                 }
                 .font(Fonts.ui(11)).foregroundStyle(Tokens.textDim)
                 .padding(.leading, 212)
+                HStack(spacing: 14) {
+                    Text("Each square is one minute.").foregroundStyle(Tokens.textDim)
+                    legend(Tokens.work.opacity(0.55), "Claude worked")
+                    legend(Tokens.need, "waited for you")
+                    legend(Tokens.line.opacity(0.5), "nothing happened")
+                }
+                .font(Fonts.ui(12))
+                .padding(.leading, 212)
             }
+        }
+    }
+
+    private func legend(_ color: Color, _ text: String) -> some View {
+        HStack(spacing: 5) {
+            RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 10, height: 10)
+            Text(text)
         }
     }
 
@@ -161,6 +177,7 @@ private struct TimelineLanes: View {
                         RoundedRectangle(cornerRadius: 2)
                             .fill(cells[i] == .waiting ? Tokens.need : cells[i] == .working ? Tokens.work.opacity(0.55) : Tokens.line.opacity(0.5))
                             .frame(height: 26)
+                            .help("\(60 - i) min ago: " + (cells[i] == .waiting ? "waited for you" : cells[i] == .working ? "Claude worked" : "nothing happened"))
                     }
                 }
             }

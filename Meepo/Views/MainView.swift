@@ -107,6 +107,7 @@ private struct TitleBar: View {
     @State private var isSetupShown = false
     @State private var isAutomationsShown = false
     @State private var isWelcomeShown = false
+    @State private var isGuideShown = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -138,6 +139,7 @@ private struct TitleBar: View {
             }
             UpdateBadge()
             PresetPicker()
+            InfoButton(title: "Layouts", text: Explain.presets)
             Menu {
                 Button("Tasks — morning start") { isMorningShown = true }
                 Button("Day — end-of-day summary") { isDayShown = true }
@@ -147,6 +149,7 @@ private struct TitleBar: View {
                 Button("Notes — release notes") { isNotesShown = true }
                 Divider()
                 Toggle("Guided mode", isOn: Binding(get: { store.guidedMode }, set: { store.guidedMode = $0 }))
+                Button("How Meepo works…") { isGuideShown = true }
                 Button("Welcome…") { isWelcomeShown = true }
                 Divider()
                 Button("Automations…") { isAutomationsShown = true }
@@ -169,6 +172,7 @@ private struct TitleBar: View {
         .sheet(isPresented: $isSetupShown) { SetupView() }
         .sheet(isPresented: $isAutomationsShown) { AutomationsView() }
         .sheet(isPresented: $isWelcomeShown) { OnboardingView() }
+        .sheet(isPresented: $isGuideShown) { GuideSheet() }
         .overlay(alignment: .bottom) { Rectangle().fill(Tokens.line).frame(height: 1) }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in isFullScreen = true }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in isFullScreen = false }
@@ -412,6 +416,7 @@ private struct PanelBox: View {
             HStack(spacing: 7) {
                 Image(systemName: Self.symbol(panel)).font(.system(size: 11, weight: .semibold))
                 Text(Self.title(panel).uppercased()).font(Fonts.ui(11, weight: .bold)).tracking(1.2)
+                InfoButton(title: Self.title(panel), text: Explain.panel(panel))
                 Spacer(minLength: 0)
                 Menu {
                     ForEach(ShellLayout.Zone.allCases, id: \.self) { zone in
