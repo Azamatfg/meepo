@@ -14,6 +14,8 @@ struct Bevel: View {
     /// during animations, and a main-actor closure there traps (Rustem's crash, 2026-09-24).
     nonisolated static func renderer(raised: Bool, width: CGFloat) -> (inout GraphicsContext, CGSize) -> Void {
         { context, size in
+            // A frame mid-animation can bring a size that isn't a real one; skip it rather than draw nonsense.
+            guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0 else { return }
             let (lead, trail) = raised ? (Tokens.frameLight, Tokens.frameDark) : (Tokens.frameDark, Tokens.frameLight)
             context.fill(Path(CGRect(x: 0, y: size.height - width, width: size.width, height: width)), with: .color(trail))
             context.fill(Path(CGRect(x: size.width - width, y: 0, width: width, height: size.height)), with: .color(trail))
@@ -122,9 +124,12 @@ struct ContextBar: View {
     /// Off the main actor for the same reason as `Bevel.renderer`.
     nonisolated static func renderer(fraction: Double?) -> (inout GraphicsContext, CGSize) -> Void {
         { context, size in
+            // Int(_) traps on NaN/infinity — here that would be on SwiftUI's render thread, like the Canvas crash.
+            guard size.width.isFinite, size.height.isFinite, size.width > 4, size.width < 100_000 else { return }
             let count = Int((size.width - 4) / 5)
             guard count > 0 else { return }
-            let lit = Int((min(max(fraction ?? 0, 0), 1) * Double(count)).rounded(.up))
+            let filled = min(max(fraction ?? 0, 0), 1)
+            let lit = filled.isFinite ? Int((filled * Double(count)).rounded(.up)) : 0
             for i in 0..<count {
                 let rect = CGRect(x: 2 + CGFloat(i) * 5, y: 2, width: 4, height: size.height - 4)
                 let share = Double(i + 1) / Double(count)

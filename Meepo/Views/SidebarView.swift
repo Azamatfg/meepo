@@ -150,10 +150,12 @@ private struct Exclamation: View {
             .foregroundStyle(Tokens.alert)
             .shadow(color: .black, radius: 0, x: 1, y: 1)
             .offset(y: hop ? -2 : 0)
-            .onAppear {
-                withAnimation(.linear(duration: 0.08)) { hop = true } completion: {
-                    withAnimation(.linear(duration: 0.08)) { hop = false }
-                }
+            .animation(.linear(duration: 0.08), value: hop)
+            // No animation completion closure: SwiftUI may call those from its animation thread (macOS 15).
+            .task {
+                hop = true
+                try? await Task.sleep(for: .milliseconds(80))
+                hop = false
             }
     }
 }
