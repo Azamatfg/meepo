@@ -19,7 +19,7 @@ struct MainView: View {
             TitleBar(isStatsShown: $isStatsShown, isMorningShown: $isMorningShown, isDayShown: $isDayShown,
                      isToolsShown: $isToolsShown, isNotesShown: $isNotesShown, isImportShown: $isImportShown) { isPickingFolder = true }
             HStack(spacing: 0) {
-                Rail()
+                Rail().zIndex(1) // its hover labels lie over the panels next to it
                 ZoneColumn(zone: .left)
                 center
                 ZoneColumn(zone: .right)
@@ -255,19 +255,23 @@ private struct Rail: View {
         VStack(spacing: 4) {
             ForEach(ShellLayout.Panel.allCases) { panel in
                 let isOn = store.shell.zone(of: panel) != nil
-                RailButton(symbol: PanelBox.symbol(panel), isOn: isOn, help: isOn ? "Hide \(PanelBox.title(panel))" : "Show \(PanelBox.title(panel))") {
+                RailButton(symbol: PanelBox.symbol(panel), isOn: isOn, name: PanelBox.title(panel),
+                           hint: PanelBox.hint(panel), click: isOn ? "Click to hide" : "Click to show") {
                     store.editShell { $0.toggle(panel) }
                 }
             }
             Rectangle().fill(Tokens.line).frame(width: 24, height: 1).padding(.vertical, 6)
             ForEach(ShellLayout.splits, id: \.self) { split in
                 RailButton(symbol: split == 1 ? "rectangle" : split == 2 ? "rectangle.split.2x1" : "square.grid.2x2",
-                           isOn: store.shell.split == split, help: split == 1 ? "One terminal" : "\(split) terminals side by side") {
+                           isOn: store.shell.split == split,
+                           name: split == 1 ? "1 terminal" : split == 2 ? "2 terminals" : "4 terminals",
+                           hint: split == 1 ? "One session at a time" : split == 2 ? "Two sessions side by side" : "Four sessions, 2 × 2",
+                           click: store.shell.split == split ? "Shown now" : "Click to switch") {
                     store.editShell { $0.split = split }
                 }
             }
             Spacer()
-            RailButton(symbol: "gearshape", isOn: false, help: "Settings (⌘,)") { openSettings() }
+            RailButton(symbol: "gearshape", isOn: false, name: "Settings", hint: "Meepo's settings", click: "⌘,") { openSettings() }
                 .padding(.bottom, 8)
         }
         .padding(.top, 10)
@@ -276,11 +280,16 @@ private struct Rail: View {
     }
 }
 
+/// An icon that names itself the moment the pointer is on it — a system tooltip waits too long to explain
+/// an unfamiliar icon (feedback from the tester, 2026-09-25).
 private struct RailButton: View {
     let symbol: String
     let isOn: Bool
-    let help: String
+    let name: String
+    let hint: String
+    let click: String
     let action: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
@@ -288,12 +297,30 @@ private struct RailButton: View {
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(isOn ? Tokens.text : Tokens.textDim)
                 .frame(width: 38, height: 36)
-                .background(isOn ? Tokens.raised : .clear, in: RoundedRectangle(cornerRadius: 9))
+                .background(isOn ? Tokens.raised : isHovered ? Tokens.ghost : .clear, in: RoundedRectangle(cornerRadius: 9))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(help)
-        .accessibilityLabel(help)
+        .onHover { isHovered = $0 }
+        .overlay(alignment: .leading) {
+            if isHovered {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name).font(Fonts.ui(13, weight: .bold))
+                    Text(hint).font(.caption).foregroundStyle(Tokens.textDim)
+                    Text(click).font(.caption2).foregroundStyle(Tokens.work)
+                }
+                .fixedSize()
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Tokens.raised, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Tokens.line))
+                .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+                .offset(x: 48)
+                .allowsHitTesting(false)
+            }
+        }
+        .zIndex(isHovered ? 1 : 0)
+        .accessibilityLabel("\(name): \(hint)")
     }
 }
 
@@ -441,6 +468,19 @@ private struct PanelBox: View {
         case .events: "Events"
         case .waiting: "Needs you"
         case .product: "What changed"
+        }
+    }
+
+    /// What the panel is for, in a few plain words — for the rail's hover label.
+    static func hint(_ panel: ShellLayout.Panel) -> String {
+        switch panel {
+        case .sessions: "All your Claude sessions, by project"
+        case .explorer: "The project's files"
+        case .changes: "Git: changes, teammates' commits, push"
+        case .ci: "Builds, tests and deploys"
+        case .events: "What the agent did, step by step"
+        case .waiting: "Sessions waiting for your answer"
+        case .product: "What changed, for your users"
         }
     }
 
