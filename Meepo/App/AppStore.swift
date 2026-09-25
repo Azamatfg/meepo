@@ -110,6 +110,70 @@ final class AppStore {
         for session in orderedSessions {
             if let id = session.id { startTerminalIfNeeded(id) }
         }
+        if let login = loginEnvironment {
+            let output = await Task.detached { ClaudeLauncher.versionOutput(login: login) }.value
+            let changelog = await Task.detached { try? String(contentsOf: ClaudeChangelog.cacheFile, encoding: .utf8) }.value
+            if let version = output.flatMap(ClaudeChangelog.version(fromCLI:)) { noteClaudeVersion(version, changelog: changelog ?? "") }
+        }
+    }
+
+    // MARK: Claude Code's version and what's new in it
+
+    private static let claudeSeenKey = "claudeCodeVersionSeen"
+    private(set) var claudeVersion: String?
+    /// What changed since the version the user last acknowledged, newest first; empty = nothing new.
+    private(set) var claudeNews: [ClaudeChangelog.Release] = []
+    private(set) var claudeNewsSince: String?
+
+    /// On the first run the current version just becomes the baseline — no wall of old news.
+    func noteClaudeVersion(_ version: String, changelog: String) {
+        claudeVersion = version
+        guard let seen = defaults.string(forKey: Self.claudeSeenKey) else {
+            defaults.set(version, forKey: Self.claudeSeenKey)
+            return
+        }
+        guard let old = Updater.Version(seen), let new = Updater.Version(version), new > old else { return }
+        claudeNewsSince = seen
+        claudeNews = ClaudeChangelog.releases(in: changelog, after: seen, upTo: version)
+    }
+
+    func acknowledgeClaudeNews() {
+        if let claudeVersion { defaults.set(claudeVersion, forKey: Self.claudeSeenKey) }
+        claudeNews = []
+        claudeNewsSince = nil
+    }
+
+    // MARK: Claude Code setup check
+
+    /// What in ~/.claude works against the user right now (see SetupCheck).
+    func setupFindings() -> [SetupCheck.Finding] {
+        let settings = (try? bridge.readSettings()) ?? [:]
+        // byModel comes from GROUP BY without an order; the most used one is picked here.
+        let topModel = usageStats(since: .now.addingTimeInterval(-7 * 24 * 3600)).byModel
+            .filter { $0.name.hasPrefix("claude-") }.max { $0.totals.total < $1.totals.total }?.name
+        return SetupCheck.findings(settings: settings, topModel: topModel,
+                                   commands: SetupCheck.userCommands(claudeHome: bridge.settingsURL.deletingLastPathComponent()))
+    }
+
+    /// Applies a finding's fix, or takes exactly that fix back (`undo`). Logged in Tools → Changes either way.
+    func setSetupFix(_ finding: SetupCheck.Finding, applied: Bool) throws {
+        switch finding.fix {
+        case let .settings(apply, undo):
+            try bridge.editSettings((applied ? "" : "Undo: ") + finding.fixTitle, applied ? apply : undo)
+        case let .manualOnly(file):
+            let text = try String(contentsOf: file, encoding: .utf8)
+            let backup = try ChangeLog.backup(file, folder: "skills", backups: backupsDir)
+            try SetupCheck.setManualOnly(text, applied).write(to: file, atomically: true, encoding: .utf8)
+            ChangeLog.record((applied ? "" : "Undo: ") + "\(finding.fixTitle): \(file.lastPathComponent)", file: file,
+                             backup: backup, backups: backupsDir)
+        }
+    }
+
+    /// What in the changelog touches this user: Meepo's own needs plus what ~/.claude/settings.json uses.
+    func claudeNewsKeywords() -> [String] {
+        let settings = (try? Data(contentsOf: bridge.settingsURL))
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        return ClaudeChangelog.keywords(settings: settings)
     }
 
     func reload() {
@@ -324,8 +388,32 @@ final class AppStore {
         return millionTokenModels.contains(bare) ? 1_000_000 : defaultContextWindow
     }
 
+    // MARK: Live numbers from Claude Code's statusline (Meepo's sessions only)
+
+    /// The latest statusline update per session: model, effort, context as Claude Code itself counts them.
+    private(set) var liveStatus: [Int64: StatusLine] = [:]
+    /// The plan's usage limits — account-wide, so the newest update from any session.
+    private(set) var usageLimits: (fiveHour: StatusLine.Limit?, sevenDay: StatusLine.Limit?)?
+
+    /// "Opus 5.5 · xhigh": what the session really runs, once Claude Code has said; else what Meepo started it with.
+    func modelLine(of session: Session) -> String {
+        let live = session.id.flatMap { liveStatus[$0] }
+        let model = live?.modelName ?? session.model ?? "default model"
+        let effort = live?.effort ?? session.effort
+        return [model, effort].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    func applyStatusLine(_ status: StatusLine, sessionId: Int64) {
+        if liveStatus[sessionId] != status { liveStatus[sessionId] = status }
+        if status.fiveHour != nil || status.sevenDay != nil,
+           usageLimits?.fiveHour != status.fiveHour || usageLimits?.sevenDay != status.sevenDay {
+            usageLimits = (status.fiveHour, status.sevenDay)
+        }
+    }
+
     /// 0…1 (can exceed 1 if the window setting is too small); nil before the first response.
     func contextFraction(for sessionId: Int64) -> Double? {
+        if let percent = liveStatus[sessionId]?.contextPercent { return percent / 100 } // Claude Code's own count
         guard let usage = sessionUsage[sessionId], usage.contextTokens > 0 else { return nil }
         return Double(usage.contextTokens) / Double(contextWindow(for: usage.model))
     }

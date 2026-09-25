@@ -22,7 +22,11 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
         view.nativeForegroundColor = NSColor(hex: 0x1B1A17) // Tokens.text
         view.caretColor = NSColor(hex: 0x2140D9)            // Tokens.work
         view.processDelegate = self
-        let args = ClaudeLauncher.sessionSettings(effort: session.effort) + ClaudeLauncher.claudeArguments(
+        let bridge = BridgeInstaller()
+        let hasBridge = FileManager.default.isExecutableFile(atPath: bridge.scriptURL.path)
+        let args = ClaudeLauncher.sessionSettings(effort: session.effort,
+                                                  statusLine: hasBridge ? bridge.statusLineCommand : nil)
+            + ClaudeLauncher.claudeArguments(
             sessionId: session.claudeSessionId,
             resume: ClaudeLauncher.hasTranscript(sessionId: session.claudeSessionId),
             model: session.model,
@@ -33,6 +37,7 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
         )
         // Lets meepo-bridge.sh tag every hook event with this session, even after /clear changes the claude id.
         var meepo = ["MEEPO_SESSION_ID": String(id), "MEEPO_PORT": String(EventServer.defaultPort)]
+        if hasBridge, let own = bridge.userStatusLine() { meepo["MEEPO_USER_STATUSLINE"] = own }
         if let base = session.portBase { // SPEC module 5: the session's own port range
             meepo["PORT"] = String(base)
             meepo["MEEPO_PORT_BASE"] = String(base)

@@ -154,7 +154,9 @@ final class LiveServices {
         }
         do {
             let server = EventServer(token: try MeepoHome.token()) { [weak self, weak store] sessionId, body in
-                guard let store, let payload = HookPayload(json: body) else { return }
+                guard let store else { return }
+                if let status = StatusLine(json: body) { store.applyStatusLine(status, sessionId: sessionId); return }
+                guard let payload = HookPayload(json: body) else { return }
                 let attention = store.handleHookEvent(payload, sessionId: sessionId)
                 if payload.event == "Stop" { Task { await store.refreshUsage() } }
                 guard let attention,

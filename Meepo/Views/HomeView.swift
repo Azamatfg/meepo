@@ -18,6 +18,7 @@ struct HomeView: View {
                     Text("\(TokenFormat.short(store.sessionUsage.values.reduce(0) { $0 + $1.tokensToday })) tokens today across \(sessions.count) sessions")
                         .foregroundStyle(Tokens.textDim)
                 }
+                if !store.claudeNews.isEmpty { ClaudeNewsCard() }
                 HStack(spacing: 2) {
                     ForEach([("deck", "Deck"), ("timeline", "Timeline")], id: \.0) { key, title in
                         Button(title) { mode = key }
@@ -182,5 +183,77 @@ private struct TimelineLanes: View {
             if waits { cells[minute] = .waiting } else if cells[minute] == .empty { cells[minute] = .working }
         }
         return cells
+    }
+}
+
+/// "Claude Code 2.1.281 → 2.1.282": what changed, the lines that touch this setup first. From the changelog
+/// Claude Code keeps locally; "Got it" makes this version the new baseline.
+private struct ClaudeNewsCard: View {
+    @Environment(AppStore.self) private var store
+    @State private var isAllShown = false
+
+    var body: some View {
+        let items = store.claudeNews.flatMap(\.items)
+        let sorted = ClaudeChangelog.relevantFirst(items, keywords: store.claudeNewsKeywords())
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("NEW IN CLAUDE CODE").font(Fonts.ui(11, weight: .bold)).tracking(1.2).foregroundStyle(Tokens.work)
+                Text("\(store.claudeNewsSince ?? "") → \(store.claudeVersion ?? "")").font(Fonts.mono(12)).foregroundStyle(Tokens.textDim)
+                Spacer()
+                Button("All \(items.count) changes") { isAllShown = true }.buttonStyle(PixelButtonStyle(compact: true))
+                Button("Got it") { store.acknowledgeClaudeNews() }.buttonStyle(PixelButtonStyle(compact: true, isPrimary: true))
+            }
+            if sorted.relevant.isEmpty {
+                Text("Nothing here touches hooks, permissions, skills, effort or the rest of your setup.")
+                    .foregroundStyle(Tokens.textDim)
+            } else {
+                Text("Touches your setup").font(Fonts.ui(15, weight: .bold))
+                ForEach(Array(sorted.relevant.prefix(5).enumerated()), id: \.offset) { _, line in
+                    Text("• " + Self.plain(line)).fixedSize(horizontal: false, vertical: true)
+                }
+                if sorted.relevant.count > 5 {
+                    Text("and \(sorted.relevant.count - 5) more").foregroundStyle(Tokens.textDim)
+                }
+            }
+        }
+        .padding(18)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Tokens.line))
+        .sheet(isPresented: $isAllShown) { ClaudeNewsSheet(sorted: sorted) }
+    }
+
+    /// Changelog lines use Markdown backticks; show them as plain text.
+    static func plain(_ line: String) -> String { line.replacingOccurrences(of: "`", with: "") }
+}
+
+private struct ClaudeNewsSheet: View {
+    @Environment(AppStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    let sorted: (relevant: [String], other: [String])
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Claude Code \(store.claudeNewsSince ?? "") → \(store.claudeVersion ?? "")").font(Fonts.title(22))
+                Spacer()
+                Button("Close") { dismiss() }.keyboardShortcut(.cancelAction).buttonStyle(PixelButtonStyle())
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    if !sorted.relevant.isEmpty {
+                        Text("TOUCHES YOUR SETUP").font(Fonts.ui(11, weight: .bold)).tracking(1.2).foregroundStyle(Tokens.work)
+                        ForEach(Array(sorted.relevant.enumerated()), id: \.offset) { Text("• " + ClaudeNewsCard.plain($1)) }
+                    }
+                    Text("EVERYTHING ELSE").font(Fonts.ui(11, weight: .bold)).tracking(1.2).foregroundStyle(Tokens.textDim)
+                        .padding(.top, 8)
+                    ForEach(Array(sorted.other.enumerated()), id: \.offset) { Text("• " + ClaudeNewsCard.plain($1)).foregroundStyle(Tokens.textDim) }
+                }
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(20)
+        .frame(width: 720, height: 640)
+        .background(Tokens.ground)
     }
 }

@@ -33,6 +33,16 @@ struct BridgeInstaller {
     # Meepo hook bridge: forwards Claude Code hook events to Meepo (https://github.com/Azamatfg/meepo).
     # Installed by Meepo; remove it from Meepo ("Remove Hook Bridge"), not by hand.
     [ -z "$MEEPO_SESSION_ID" ] && exit 0
+    if [ "$1" = "statusline" ]; then
+      # Meepo's sessions use this as their statusline: model, effort, context and plan limits go to Meepo,
+      # and the user's own statusline (MEEPO_USER_STATUSLINE) still prints.
+      IN=$(cat)
+      TOKEN=$(cat "$HOME/.meepo/token" 2>/dev/null) && printf '%s' "$IN" | curl -s -f -m 1 -X POST \
+        "http://127.0.0.1:${MEEPO_PORT:-47800}/event" -H "Content-Type: application/json" -H "X-Meepo-Token: $TOKEN" \
+        -H "X-Meepo-Session: $MEEPO_SESSION_ID" --data-binary @- >/dev/null 2>&1
+      [ -n "$MEEPO_USER_STATUSLINE" ] && printf '%s' "$IN" | /bin/sh -c "$MEEPO_USER_STATUSLINE"
+      exit 0
+    fi
     TOKEN=$(cat "$HOME/.meepo/token" 2>/dev/null) || exit 0
     # Meepo's reply goes to stdout: for UserPromptSubmit it is context for Claude (e.g. teammates' new commits).
     curl -s -f -m 2 -X POST "http://127.0.0.1:${MEEPO_PORT:-47800}/event" \\
@@ -69,9 +79,20 @@ struct BridgeInstaller {
     /// What the hook runs: the script if it's there, else nothing. After Meepo is deleted (brew uninstall --zap
     /// takes ~/.meepo) the entries left in ~/.claude/settings.json stay silent instead of failing every hook
     /// in every Claude Code session. `exec` keeps the script's stdout — Meepo's reply to UserPromptSubmit.
-    var hookCommand: String {
+    var hookCommand: String { command() }
+
+    /// The statusline Meepo gives its own sessions (see the script's `statusline` branch).
+    var statusLineCommand: String { command(argument: "statusline") }
+
+    private func command(argument: String? = nil) -> String {
         let path = scriptURL.path.replacingOccurrences(of: "'", with: #"'\''"#)
-        return #"f='\#(path)'; [ -x "$f" ] && exec "$f"; exit 0"#
+        return #"f='\#(path)'; [ -x "$f" ] && exec "$f"\#(argument.map { " " + $0 } ?? ""); exit 0"#
+    }
+
+    /// The user's own statusline command from ~/.claude/settings.json, to keep it showing in Meepo's sessions.
+    func userStatusLine() -> String? {
+        guard let line = (try? readSettings())?["statusLine"] as? [String: Any], line["type"] as? String == "command" else { return nil }
+        return line["command"] as? String
     }
 
     /// Idempotent: replaces any previous bridge entries. Returns the backup, if there was a file to back up.
@@ -140,13 +161,21 @@ struct BridgeInstaller {
         return result
     }
 
-    private func readSettings() throws -> [String: Any] {
+    func readSettings() throws -> [String: Any] {
         guard FileManager.default.fileExists(atPath: settingsURL.path) else { return [:] }
         let data = try Data(contentsOf: settingsURL)
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw BridgeError.unreadableSettings(settingsURL.path)
         }
         return object
+    }
+
+    /// One edit of ~/.claude/settings.json by the user's choice: backed up, logged (Tools → Changes), written.
+    func editSettings(_ action: String, _ change: (inout [String: Any]) -> Void) throws {
+        var settings = try readSettings()
+        change(&settings)
+        let backup = try write(settings)
+        ChangeLog.record(action, file: settingsURL, backup: backup, backups: meepoHome.appending(path: "backups"))
     }
 
     private func write(_ settings: [String: Any]) throws -> URL? {

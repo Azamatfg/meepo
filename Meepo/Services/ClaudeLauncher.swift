@@ -3,10 +3,16 @@ import Foundation
 /// Builds the command line for a `claude` session. Flags verified against `claude --help` (v2.1.280).
 enum ClaudeLauncher {
     /// Settings only Meepo's sessions get (`--settings` outranks the user's files and changes nothing on disk):
-    /// the light theme for Meepo's paper-light terminals, and ultracode when that's the chosen effort —
-    /// ultracode is a setting, not an `--effort` value (2.1.282 accepts low…max there).
-    static func sessionSettings(effort: String?) -> [String] {
-        ["--settings", effort == ultracode ? #"{"theme":"light","ultracode":true}"# : #"{"theme":"light"}"#]
+    /// the light theme for Meepo's paper-light terminals, ultracode when that's the chosen effort —
+    /// ultracode is a setting, not an `--effort` value (2.1.282 accepts low…max there) — and the statusline.
+    /// `statusLine`: Meepo's statusline command, when the bridge is there to receive it.
+    static func sessionSettings(effort: String?, statusLine: String? = nil) -> [String] {
+        var settings: [String: Any] = ["theme": "light"]
+        if effort == ultracode { settings["ultracode"] = true }
+        if let statusLine { settings["statusLine"] = ["type": "command", "command": statusLine, "padding": 0] }
+        let json = (try? JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys, .withoutEscapingSlashes]))
+            .map { String(decoding: $0, as: UTF8.self) } ?? #"{"theme":"light"}"#
+        return ["--settings", json]
     }
 
     static let ultracode = "ultracode"
@@ -17,6 +23,21 @@ enum ClaudeLauncher {
     /// Existing transcript: `--resume <uuid>`; the initial prompt is never re-sent.
     /// `remoteControl`: session name shown in the Claude app / claude.ai (`--remote-control <name>`),
     /// so the session can be followed and answered from the phone. Verified on 2.1.280.
+    /// `claude --version`'s first line, e.g. "2.1.282 (Claude Code)". Blocking; call off the main thread.
+    static func versionOutput(login: LoginEnvironment) -> String? {
+        let process = Process()
+        process.executableURL = URL(filePath: login.claudePath)
+        process.arguments = ["--version"]
+        process.environment = login.environment
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        do { try process.run() } catch { return nil }
+        process.waitUntilExit()
+        return String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .split(separator: "\n").first.map(String.init)
+    }
+
     static func claudeArguments(sessionId: String, resume: Bool, model: String?, effort: String? = nil,
                                 worktree: String? = nil, remoteControl: String? = nil, prompt: String?) -> [String] {
         var args = resume ? ["--resume", sessionId] : ["--session-id", sessionId]

@@ -100,6 +100,7 @@ private struct TitleBar: View {
     @Binding var isImportShown: Bool
     let onAddProject: () -> Void
     @State private var isFullScreen = false
+    @State private var isSetupShown = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -139,6 +140,7 @@ private struct TitleBar: View {
                 Button("Tools — practices, Docker, ports, changes") { isToolsShown = true }
                 Button("Notes — release notes") { isNotesShown = true }
                 Divider()
+                Button("Claude Code Setup…") { isSetupShown = true }
                 Button("Send Feedback…") { NSWorkspace.shared.open(CrashNotice.newIssue(title: "", body: "")) }
                 Button("Settings…") { openSettings() }
             } label: {
@@ -154,6 +156,7 @@ private struct TitleBar: View {
         .padding(.trailing, 10)
         .frame(height: 50)
         .background(WindowDragArea())
+        .sheet(isPresented: $isSetupShown) { SetupView() }
         .overlay(alignment: .bottom) { Rectangle().fill(Tokens.line).frame(height: 1) }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in isFullScreen = true }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in isFullScreen = false }
@@ -546,8 +549,7 @@ private struct TerminalPane: View {
             }
             Spacer(minLength: 4)
             if !isSplit { // the status bar shows the selected session's model anyway
-                Text([session.model, session.effort].compactMap { $0 }.joined(separator: " · "))
-                    .font(.caption).foregroundStyle(Tokens.textDim).lineLimit(1)
+                Text(store.modelLine(of: session)).font(.caption).foregroundStyle(Tokens.textDim).lineLimit(1)
             }
             Menu { SessionMenu(session: session) } label: {
                 Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold)).foregroundStyle(Tokens.textDim)
@@ -629,8 +631,12 @@ private struct StatusBar: View {
                 Text("Nobody waiting")
             }
             Text("\(TokenFormat.short(store.sessionUsage.values.reduce(0) { $0 + $1.tokensToday })) tokens today")
+            if let limits = store.usageLimits {
+                if let five = limits.fiveHour { LimitLabel(name: "5h", limit: five) }
+                if let seven = limits.sevenDay { LimitLabel(name: "7d", limit: seven) }
+            }
             if let session = store.selectedSession, !store.isHomeShown {
-                Text([session.model ?? "default model", session.effort].compactMap { $0 }.joined(separator: " · "))
+                Text(store.modelLine(of: session))
             }
             BridgeIssues()
             if store.quitWhenIdle {
@@ -641,6 +647,7 @@ private struct StatusBar: View {
             }
             if let report = store.lastCrashReport { CrashNotice(report: report) }
             Spacer(minLength: 8)
+            if let claude = store.claudeVersion { Text("Claude Code \(claude)") }
             Text(store.shellPreset.title)
             if let version = Updater.currentVersion { Text("Meepo \(version.description)") }
         }
@@ -651,6 +658,19 @@ private struct StatusBar: View {
         .frame(height: 28)
         .background(Tokens.statusBar)
         .overlay(alignment: .top) { Rectangle().fill(Tokens.line).frame(height: 1) }
+    }
+}
+
+/// "5h 42% · 14:00": how much of the plan's limit is used, and when it resets. Amber from 80%.
+private struct LimitLabel: View {
+    let name: String
+    let limit: StatusLine.Limit
+
+    var body: some View {
+        let reset = limit.resetsAt.map { " · " + $0.formatted(date: Calendar.current.isDateInToday($0) ? .omitted : .abbreviated, time: .shortened) } ?? ""
+        Text("\(name) \(Int(limit.percent.rounded()))%\(reset)")
+            .foregroundStyle(limit.percent >= 80 ? Tokens.warn : Tokens.textDim)
+            .help("Plan usage over \(name == "5h" ? "5 hours" : "7 days"), as Claude Code reports it\(limit.resetsAt.map { "; resets \($0.formatted())" } ?? "")")
     }
 }
 
