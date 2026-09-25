@@ -35,7 +35,10 @@ final class AppStore {
     private(set) var runningSessionIds: Set<Int64> = []
     private(set) var exitedSessionIds: Set<Int64> = []
     var selectedSessionId: Int64? {
-        didSet { reloadEvents() }
+        didSet {
+            reloadEvents()
+            isHomeShown = false
+        }
     }
     /// Non-nil while the "new session" sheet is shown; the project preselected in it.
     var newSessionProjectId: Int64?
@@ -58,6 +61,9 @@ final class AppStore {
         self.defaults = defaults
         contextWindows = Self.load([String: Int].self, Self.contextWindowsKey, from: defaults) ?? [:]
         stages = Self.load([Stage].self, Self.stagesKey, from: defaults) ?? Stage.defaults
+        let preset = defaults.string(forKey: Self.shellPresetKey).flatMap(ShellLayout.Preset.init(rawValue:)) ?? .focus
+        shellPreset = preset
+        shell = Self.load(ShellLayout.self, Self.shellKey, from: defaults) ?? ShellLayout.preset(preset) ?? ShellLayout.preset(.focus)!
         relayThreshold = defaults.object(forKey: Self.relayThresholdKey) as? Double ?? 0.7
         remoteControlForNewSessions = defaults.bool(forKey: Self.remoteControlKey)
         autofixProjectIds = Set((defaults.array(forKey: Self.autofixKey) as? [Int64]) ?? [])
@@ -420,6 +426,67 @@ final class AppStore {
     /// The user's workflow, set once for all projects.
     var stages: [Stage] {
         didSet { defaults.set(try? JSONEncoder().encode(stages), forKey: Self.stagesKey) }
+    }
+
+    // MARK: Window layout (Meepo 2.0, layout "c")
+
+    private static let shellKey = "shellLayout"
+    private static let shellPresetKey = "shellPreset"
+    private static let customShellKey = "shellCustom"
+
+    var shellPreset: ShellLayout.Preset {
+        didSet { defaults.set(shellPreset.rawValue, forKey: Self.shellPresetKey) }
+    }
+
+    /// What the window shows now; any change by hand is kept as the Custom preset.
+    private(set) var shell: ShellLayout {
+        didSet { defaults.set(try? JSONEncoder().encode(shell), forKey: Self.shellKey) }
+    }
+
+    /// The Home tab (Deck/Timeline) instead of a session; picking a session leaves it.
+    var isHomeShown = false
+
+    func applyPreset(_ preset: ShellLayout.Preset) {
+        shellPreset = preset
+        shell = ShellLayout.preset(preset) ?? Self.load(ShellLayout.self, Self.customShellKey, from: defaults) ?? shell
+    }
+
+    /// Moves, hides or opens panels by hand: the result becomes (and is saved as) Custom.
+    func editShell(_ change: (inout ShellLayout) -> Void) {
+        var layout = shell
+        change(&layout)
+        guard layout != shell else { return }
+        shell = layout
+        shellPreset = .custom
+        defaults.set(try? JSONEncoder().encode(layout), forKey: Self.customShellKey)
+    }
+
+    /// How many terminals the center actually fits right now (a narrow window shows fewer than the split).
+    var fittingPanes: Int?
+
+    /// Sessions whose terminals are on screen: the selected one first, then the next ones up to the split.
+    var visibleSessionIds: [Int64] {
+        guard !isHomeShown, let selected = selectedSessionId else { return [] }
+        let others = orderedSessions.compactMap(\.id).filter { $0 != selected }
+        return Array(([selected] + others).prefix(min(shell.split, fittingPanes ?? shell.split)))
+    }
+
+    /// Git state of the selected session's folder, shared by Explorer and Source Control.
+    private(set) var sourceControl: GitPanel.SourceControl?
+    private(set) var sourceControlPath: String?
+
+    func refreshSourceControl(_ path: String) async {
+        if sourceControlPath != path { sourceControl = nil }
+        sourceControlPath = path
+        let result = await Task.detached { GitPanel.sourceControl(in: path) }.value
+        if sourceControlPath == path { sourceControl = result }
+    }
+
+    /// Hook events of every session since `date`, oldest first — the Home timeline.
+    func events(since date: Date) -> [HookEvent] {
+        (try? db.read {
+            try HookEvent.filter(Column("createdAt") >= date).order(Column("createdAt"), Column("id")).fetchAll($0)
+        }) ?? []
     }
 
     private static let remoteControlKey = "remoteControl"

@@ -1,12 +1,11 @@
 import AppKit
 import SwiftUI
 
-/// VS Code's Explorer in the session panel: the session folder as a tree, folders open on click, changed files
+/// VS Code's Explorer as a panel: the session folder as a tree, folders open on click, changed files
 /// in their Source Control color; a file opens read-only in Monaco.
 struct ExplorerSection: View {
     let root: String
     let changes: [GitPanel.FileChange]
-    @AppStorage("explorerShown") private var isShown = true
     @State private var expanded: Set<String> = []
     /// Listings by folder ("" = root), read for the root and every open folder.
     @State private var children: [String: [FileTree.Entry]] = [:]
@@ -14,25 +13,11 @@ struct ExplorerSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
-            Button { isShown.toggle() } label: {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("EXPLORER").font(Fonts.title(16)).foregroundStyle(Tokens.text)
-                    Text(URL(filePath: root).lastPathComponent).font(Fonts.mono(12)).foregroundStyle(Tokens.textDim).lineLimit(1)
-                    Spacer(minLength: 0)
-                    Text(isShown ? "▾" : "▸").foregroundStyle(Tokens.textDim)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            if isShown {
-                ForEach(rows, id: \.entry.id) { row in entryRow(row.entry, depth: row.depth) }
-                if children[""]?.isEmpty == true {
-                    Text("Empty folder").font(.caption).foregroundStyle(Tokens.textDim)
-                }
+            ForEach(rows, id: \.entry.id) { row in entryRow(row.entry, depth: row.depth) }
+            if children[""]?.isEmpty == true {
+                Text("Empty folder").font(.caption).foregroundStyle(Tokens.textDim)
             }
         }
-        .padding(6)
-        .background(Tokens.grassDeep)
         // New files from claude show up without a click; only the root and open folders are read.
         .task(id: root) {
             expanded = []
@@ -73,14 +58,14 @@ struct ExplorerSection: View {
                         .foregroundStyle(FileIcon.color(for: entry.path)).frame(width: 14)
                 }
                 Text(entry.name).font(.system(size: 12))
-                    .foregroundStyle(status.map(DiffViewer.color) ?? Tokens.text).lineLimit(1).truncationMode(.middle)
+                    .foregroundStyle(status.map(FileIcon.statusColor) ?? Tokens.text).lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 4)
                 if let status {
-                    Text(DiffViewer.letter(status)).font(.system(size: 11, weight: .semibold)).foregroundStyle(DiffViewer.color(status))
+                    Text(DiffViewer.letter(status)).font(.system(size: 11, weight: .semibold)).foregroundStyle(FileIcon.statusColor(status))
                 }
             }
             .padding(.leading, CGFloat(depth) * 12)
-            .frame(height: 18)
+            .frame(height: 20)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

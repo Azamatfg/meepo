@@ -31,7 +31,7 @@ struct NotesView: View {
         .background(Tokens.grass)
         .pixelFrame(6)
         .pixelConfirm($confirmation)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
     }
 }
 

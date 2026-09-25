@@ -1,27 +1,42 @@
 import AppKit
 import SwiftUI
 
-/// All app colors, from design/MEEPO_DESIGN.md §3 (sampled from assets/ref). Change the palette here only.
-/// The look is a fixed dark "RTS map", so there are no light variants.
+/// All app colors — the "Paper" look (Meepo 2.0, decided 2026-09-25): warm paper, ink, ultramarine for work,
+/// vermilion for "needs you". Change the palette here only. Light only for now.
 enum Tokens {
-    static let grass         = Color(hex: 0x2C4B1E) // panel background
-    static let grassLight    = Color(hex: 0x427F41) // hovers, light areas
-    static let grassDeep     = Color(hex: 0x233624) // empty states, dark areas
-    static let dirt          = Color(hex: 0x3F2F1D) // paths, dividers, list underlays
-    static let hood          = Color(hex: 0x7B4B2C) // secondary warm accent
-    static let selection     = Color(hex: 0x11F10F) // selected / active only
-    static let selectionSoft = Color(hex: 0x44922D) // unselected rings, inactive bars
-    static let alert         = Color(hex: 0xF16704) // "waiting for you" only
-    static let screen        = Color(hex: 0x1EC8EC) // terminal and code
-    static let screenDeep    = Color(hex: 0x336C81)
-    static let frameLight    = Color(hex: 0xB3B3B2)
-    static let frameMid      = Color(hex: 0x636363)
-    static let frameDark     = Color(hex: 0x404040)
-    static let terminalBg    = Color(hex: 0x0E1710)
-    static let danger        = Color(hex: 0xE0402A)
-    static let warn          = Color(hex: 0xF2C230) // time to sync
-    static let text          = Color(hex: 0xE8F0E0)
-    static let textDim       = Color(hex: 0xE8F0E0).opacity(0.65)
+    // Paper roles.
+    static let ground        = Color(hex: 0xF1EEE6) // window
+    static let surface       = Color(hex: 0xFBFAF6) // panels, cards
+    static let raised        = Color(hex: 0xFFFFFF) // selected tab/row, dialogs
+    static let line          = Color(hex: 0xE0DBCE) // borders, dividers
+    static let ghost         = Color(hex: 0x1B1A17).opacity(0.06) // quiet buttons
+    static let work          = Color(hex: 0x2140D9) // working, selected, primary
+    static let workTint      = Color(hex: 0x2140D9).opacity(0.08)
+    static let need          = Color(hex: 0xC2440F) // waiting for you — the only loud color
+    static let needTint      = Color(hex: 0xC2440F).opacity(0.10)
+    static let idle          = Color(hex: 0xB0A998)
+    static let statusBar     = Color(hex: 0xE9E5DA)
+    static let added         = Color(hex: 0x2E7D32) // new files in Source Control
+
+    // v1 names, kept so every view moved to Paper at once; new code uses the roles above.
+    static let grass         = surface                // panel background
+    static let grassLight    = Color(hex: 0xEFEBE1)   // hovers
+    static let grassDeep     = ground                 // empty states, section wells
+    static let dirt          = statusBar              // list underlays, dividers
+    static let hood          = Color(hex: 0x8A6A4A)
+    static let selection     = work                   // selected / active only
+    static let selectionSoft = Color(hex: 0x6F84E0)   // unselected, inactive bars, CI passed
+    static let alert         = need                   // "waiting for you" only
+    static let screen        = Color(hex: 0x1F5F8B)   // code, commit authors, explanations
+    static let screenDeep    = Color(hex: 0x4A6A80)
+    static let frameLight    = raised
+    static let frameMid      = statusBar              // bars and plates
+    static let frameDark     = Color(hex: 0xD6D0C2)
+    static let terminalBg    = Color(hex: 0xF6F3EC)
+    static let danger        = Color(hex: 0xB3261E)
+    static let warn          = Color(hex: 0x9A6200)   // time to sync; dark amber stays readable on paper
+    static let text          = Color(hex: 0x1B1A17)
+    static let textDim       = Color(hex: 0x5F5A50)
 
     // The compare view copies VS Code's Dark+ look on purpose (user decision 2026-09-24).
     static let vsEditor      = Color(hex: 0x1E1E1E)
@@ -53,8 +68,8 @@ extension NSColor {
     }
 }
 
-/// Bundled OFL fonts (Meepo/Resources/Fonts): Silkscreen for titles/badges/buttons (16 pt and up only),
-/// JetBrains Mono for terminal, branches and numbers; the system font for small print.
+/// TT Commons for the interface when it's installed (it's commercial, so Meepo doesn't ship it), else the system font;
+/// bundled JetBrains Mono (OFL) for the terminal, branches and numbers.
 enum Fonts {
     static func register() {
         for url in Bundle.main.urls(forResourcesWithExtension: "ttf", subdirectory: nil) ?? [] {
@@ -62,7 +77,14 @@ enum Fonts {
         }
     }
 
-    static func title(_ size: CGFloat = 16) -> Font { .custom("Silkscreen", size: max(size, 16)) }
+    private static let hasCommons = NSFontManager.shared.availableFontFamilies.contains("TT Commons")
+
+    static func ui(_ size: CGFloat = 14, weight: Font.Weight = .regular) -> Font {
+        hasCommons ? .custom("TT Commons", size: size).weight(weight) : .system(size: size, weight: weight)
+    }
+
+    /// Headings and labels. v1 passed 16 — the pixel font's minimum — for small labels; those become 14.
+    static func title(_ size: CGFloat = 16) -> Font { ui(size <= 16 ? 14 : size, weight: .bold) }
     static func mono(_ size: CGFloat = 13) -> Font { .custom("JetBrains Mono", size: size) }
 
     static func terminal(_ size: CGFloat = 13) -> NSFont {

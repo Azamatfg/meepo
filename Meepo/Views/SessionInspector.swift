@@ -1,90 +1,31 @@
 import SwiftUI
 
-/// The right panel (redesign 2026-09-24): everything about the selected session in one column, no tabs —
-/// what it waits for, what it changed (committed or not) with DIFF / EXPLAIN, what isn't pushed, its project's
-/// CI in one line, and its latest events. Details open in sheets.
-struct SessionInspector: View {
+/// Source Control as a panel (VS Code's CHANGES / INCOMING / OUTGOING) for the selected session's folder,
+/// with COMPARE and EXPLAIN. The shell keeps `store.sourceControl` fresh; this panel only acts on it.
+struct SourceControlPanel: View {
     @Environment(AppStore.self) private var store
-    @State private var scm: GitPanel.SourceControl?
     /// What the compare view shows; nil = closed.
     @State private var compare: Compare?
     @State private var explanation: (title: String, text: String)?
     /// Which EXPLAIN is running ("changes", "incoming").
     @State private var explaining: String?
     @State private var isSyncing = false
-    @State private var isCIShown = false
-    @State private var areEventsShown = false
+
+    private var scm: GitPanel.SourceControl? { store.sourceControl }
 
     var body: some View {
         Group {
-            if let session = store.selectedSession, let project = store.project(for: session), let path = store.workdir(of: session) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        header(session, project)
-                        ExplorerSection(root: path, changes: scm?.changes ?? [])
-                        sourceControl(path: path)
-                        ciSection(project, session)
-                        eventsSection
-                    }
-                    .padding(8)
-                }
-                .task(id: path) {
-                    scm = nil
-                    explanation = nil
-                    while !Task.isCancelled {
-                        scm = await Task.detached { GitPanel.sourceControl(in: path) }.value
-                        try? await Task.sleep(for: .seconds(10))
-                    }
-                }
+            if let path = store.selectedSession.flatMap(store.workdir(of:)) {
+                sourceControl(path: path)
+                    .onChange(of: path) { explanation = nil }
             } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Select a session to see what it's doing and what it changed.")
-                        .font(.caption).foregroundStyle(Tokens.textDim)
-                    Button("ALL CI") { isCIShown = true }.buttonStyle(PixelButtonStyle())
-                }
-                .padding(8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                Text("Select a session to see what it changed.").font(.caption).foregroundStyle(Tokens.textDim)
             }
         }
-        .background(Tokens.dirt)
         .sheet(isPresented: Binding(get: { compare != nil }, set: { if !$0 { compare = nil } })) {
             if let compare, let path = store.selectedSession.flatMap(store.workdir(of:)) {
                 DiffViewer(title: compare.title, sources: compare.sources(in: path), selected: compare.selected)
             }
-        }
-        .sheet(isPresented: $isCIShown) { CISheet() }
-        .sheet(isPresented: $areEventsShown) { EventsSheet() }
-    }
-
-    // MARK: Header
-
-    private func header(_ session: Session, _ project: Project) -> some View {
-        let look = store.look(of: session)
-        let place = session.worktreeName.map { "worktree \($0)" } ?? "\(project.name) · \(session.branch ?? "")"
-        return VStack(alignment: .leading, spacing: 4) {
-            Text(project.name.uppercased()).font(Fonts.title(16)).foregroundStyle(Tokens.text).lineLimit(1)
-            Text(session.branch ?? "").font(Fonts.mono(12)).foregroundStyle(Tokens.textDim).lineLimit(1)
-            Text(look.text).font(.caption).foregroundStyle(look.ring == .waiting ? Tokens.alert : Tokens.textDim)
-            HStack(spacing: 6) {
-                Button("NEW SESSION") {
-                    store.confirmation = PixelConfirmation(
-                        title: "START A FRESH SESSION?",
-                        message: "A new claude in \(place), with a clean context. This one is closed; its conversation stays in Claude Code (claude --resume).",
-                        action: "NEW SESSION",
-                        isDestructive: false
-                    ) { try? store.replaceSession(session.id!) }
-                }
-                .help("Close this session and start a clean one in the same folder")
-                Button("CLOSE") {
-                    store.confirmation = PixelConfirmation(
-                        title: "CLOSE THIS SESSION?",
-                        message: "claude stops. Files and commits stay; the conversation stays in Claude Code (claude --resume).",
-                        action: "CLOSE"
-                    ) { store.closeSession(session.id!) }
-                }
-                .help("Stop claude and remove the session from Meepo")
-            }
-            .buttonStyle(PixelButtonStyle(compact: true))
         }
     }
 
@@ -97,11 +38,11 @@ struct SessionInspector: View {
                 HStack {
                     Text("Not a git repository").font(.caption).foregroundStyle(Tokens.textDim)
                     Spacer()
-                    Button("GIT INIT") {
+                    Button("Git init") {
                         store.confirmation = PixelConfirmation(
-                            title: "START GIT HERE?",
+                            title: "Start git here?",
                             message: "git init in \(path.replacingOccurrences(of: NSHomeDirectory(), with: "~")): changes get tracked, and branches, worktrees and compare turn on. Nothing is committed or pushed.",
-                            action: "GIT INIT",
+                            action: "Git init",
                             isDestructive: false
                         ) { Task { await sync(path) { GitService.runReportingError(["init"], in: path) } } }
                     }
@@ -114,21 +55,19 @@ struct SessionInspector: View {
                 if let explanation {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text("EXPLAINED · \(explanation.title)").font(.caption).foregroundStyle(Tokens.screen)
+                            Text("Explained · \(explanation.title)").font(.caption).foregroundStyle(Tokens.screen)
                             Spacer()
                             Button("✕") { self.explanation = nil }.buttonStyle(.plain).foregroundStyle(Tokens.textDim)
                         }
                         Text(explanation.text).font(.caption).foregroundStyle(Tokens.text).textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    .padding(6).background(Tokens.terminalBg).sunken()
+                    .padding(8).background(Tokens.terminalBg, in: RoundedRectangle(cornerRadius: 8))
                 }
             } else {
                 Text("Reading git…").font(.caption).foregroundStyle(Tokens.textDim)
             }
         }
-        .padding(6)
-        .background(Tokens.grassDeep)
     }
 
     private func changesGroup(_ scm: GitPanel.SourceControl, path: String) -> some View {
@@ -142,8 +81,8 @@ struct SessionInspector: View {
             }
             if !scm.changes.isEmpty {
                 actions {
-                    Button("COMPARE") { compare = Compare(title: "Working Tree", files: scm.changes, selected: scm.changes[0].path, old: "HEAD", new: nil) }
-                    Button(explaining == "changes" ? "…" : "EXPLAIN") {
+                    Button("Compare") { compare = Compare(title: "Working Tree", files: scm.changes, selected: scm.changes[0].path, old: "HEAD", new: nil) }
+                    Button(explaining == "changes" ? "…" : "Explain") {
                         explain("changes", title: "your changes", path: path, from: "HEAD", to: nil,
                                 whose: "the user's uncommitted", newFiles: scm.changes.filter { $0.status == "?" }.map(\.path))
                     }
@@ -162,10 +101,10 @@ struct SessionInspector: View {
             }
             actions {
                 if scm.changes.isEmpty {
-                    Button("PULL") { Task { await sync(path) { GitPanel.pullRebase(in: path) } } }
+                    Button("Pull") { Task { await sync(path) { GitPanel.pullRebase(in: path) } } }
                         .help("git pull --rebase: their commits come in, yours go on top")
                 }
-                Button(explaining == "incoming" ? "…" : "EXPLAIN") {
+                Button(explaining == "incoming" ? "…" : "Explain") {
                     explain("incoming", title: "what teammates changed", path: path, from: group.from ?? "HEAD", to: group.to,
                             whose: "the teammates' incoming", newFiles: [])
                 }
@@ -186,7 +125,7 @@ struct SessionInspector: View {
                 FileRow(change: change) { compare = Compare(title: "Outgoing", files: group.files, selected: change.path, old: group.from, new: group.to) }
             }
             actions {
-                Button(scm.upstream == nil ? "PUBLISH" : "PUSH") { askPush(scm, path: path) }
+                Button(scm.upstream == nil ? "Publish" : "Push") { askPush(scm, path: path) }
                     .disabled(!scm.incoming.commits.isEmpty)
                     .help(scm.incoming.commits.isEmpty ? "git push, never forced" : "Take the incoming commits first (PULL)")
             }
@@ -204,11 +143,11 @@ struct SessionInspector: View {
         let main = GitPanel.isMainBranch(scm.branch)
         let status = GitPanel.Snapshot(branch: scm.branch, upstream: scm.upstream, ahead: scm.ahead, behind: scm.behind)
         store.confirmation = PixelConfirmation(
-            title: scm.upstream == nil ? "PUBLISH \(scm.branch.uppercased())?" : "PUSH \(scm.ahead) COMMITS?",
+            title: scm.upstream == nil ? "Publish \(scm.branch)?" : "Push \(scm.ahead) commits?",
             message: "To \(scm.upstream ?? "origin/\(scm.branch)"). Never forced." + (main
                 ? " This is the main branch: the commits go live for everyone, and CI/deploy may start. /ship usually does this after its checks."
                 : ""),
-            action: "PUSH",
+            action: "Push",
             isDestructive: main
         ) { Task { await sync(path) { GitPanel.push(status, in: path) } } }
     }
@@ -217,7 +156,7 @@ struct SessionInspector: View {
         isSyncing = true
         defer { isSyncing = false }
         if let error = await Task.detached(operation: run).value { store.bridgeError = error }
-        scm = await Task.detached { GitPanel.sourceControl(in: path) }.value
+        await store.refreshSourceControl(path)
     }
 
     private func explain(_ key: String, title: String, path: String, from: String, to: String?, whose: String, newFiles: [String]) {
@@ -232,38 +171,52 @@ struct SessionInspector: View {
             }
         }
     }
+}
 
-    // MARK: CI in one line
+/// The selected session's project CI: pipeline steps, RUN for a manual step, the failing run of this branch.
+struct CIPanel: View {
+    @Environment(AppStore.self) private var store
+    @State private var isCIShown = false
+
+    var body: some View {
+        Group {
+            if let session = store.selectedSession, let project = store.project(for: session) {
+                ciSection(project, session)
+            } else {
+                Button("All CI") { isCIShown = true }.buttonStyle(PixelButtonStyle(compact: true))
+            }
+        }
+        .sheet(isPresented: $isCIShown) { CISheet() }
+    }
 
     @ViewBuilder
     private func ciSection(_ project: Project, _ session: Session) -> some View {
         let runs = store.ciRuns[project.id!] ?? []
         let pipeline = store.pipelines[project.id!]
         let failing = runs.first { $0.headBranch == session.branch && $0.failed && $0.headBranch != pipeline?.branch }
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Text("CI").font(Fonts.title(16)).foregroundStyle(Tokens.text)
                 if let pipeline {
                     ForEach(pipeline.steps) { step in
                         Text(StepLook.symbol(step.state) + step.name).font(Fonts.mono(11))
                             .foregroundStyle(StepLook.color(step.state)).lineLimit(1)
                     }
                 } else if runs.isEmpty {
-                    Text("no CI").font(.caption).foregroundStyle(Tokens.textDim)
+                    Text("No CI").font(.caption).foregroundStyle(Tokens.textDim)
                 }
                 Spacer(minLength: 0)
-                Button("ALL") { isCIShown = true }.buttonStyle(PixelButtonStyle(compact: true))
+                Button("All") { isCIShown = true }.buttonStyle(PixelButtonStyle(compact: true))
                     .help("Every project's CI, with autofix and other branches")
             }
             if let pipeline, let step = pipeline.steps.first(where: { $0.trigger != nil && pipeline.canStart($0) }) {
                 HStack {
                     Text("\(step.name) ready on \(pipeline.branch) @ \(pipeline.sha.prefix(7))").font(.caption).foregroundStyle(Tokens.textDim)
                     Spacer()
-                    Button("RUN") {
+                    Button("Run") {
                         store.confirmation = PixelConfirmation(
-                            title: "RUN \(step.name.uppercased())?",
+                            title: "Run \(step.name)?",
                             message: "\(project.name) · \(pipeline.branch) @ \(pipeline.sha.prefix(7))",
-                            action: "RUN"
+                            action: "Run"
                         ) { Task { await store.startPipelineStep(step, in: project) } }
                     }
                     .buttonStyle(PixelButtonStyle(compact: true))
@@ -274,29 +227,26 @@ struct SessionInspector: View {
             }
             if let failing { CIRunRow(run: failing, project: project) }
         }
-        .padding(6)
-        .background(Tokens.grassDeep)
     }
+}
 
-    // MARK: Events
+/// The selected session's latest hook events; ALL opens the whole feed.
+struct EventsPanel: View {
+    @Environment(AppStore.self) private var store
+    @State private var areEventsShown = false
 
-    private var eventsSection: some View {
+    var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("EVENTS").font(Fonts.title(16)).foregroundStyle(Tokens.text)
-                Spacer()
-                if store.selectedEvents.count > 5 {
-                    Button("ALL") { areEventsShown = true }.buttonStyle(PixelButtonStyle(compact: true))
-                }
-            }
             if store.selectedEvents.isEmpty {
                 Text(store.isBridgeInstalled ? "No events yet" : "Install the bridge to see events")
                     .font(.caption).foregroundStyle(Tokens.textDim)
             }
-            ForEach(store.selectedEvents.prefix(5)) { EventRow(event: $0) }
+            ForEach(store.selectedEvents.prefix(8)) { EventRow(event: $0) }
+            if store.selectedEvents.count > 8 {
+                Button("All \(store.selectedEvents.count)") { areEventsShown = true }.buttonStyle(PixelButtonStyle(compact: true))
+            }
         }
-        .padding(6)
-        .background(Tokens.grassDeep)
+        .sheet(isPresented: $areEventsShown) { EventsSheet() }
     }
 }
 
@@ -325,7 +275,7 @@ private struct GroupHeader: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(title).font(Fonts.title(16)).foregroundStyle(Tokens.text)
+            Text(title).font(Fonts.ui(11, weight: .bold)).tracking(1.2).foregroundStyle(Tokens.textDim)
             Text(count).font(Fonts.mono(12)).foregroundStyle(Tokens.warn)
             Spacer(minLength: 0)
             Text(hint).font(.caption2).foregroundStyle(Tokens.textDim).lineLimit(1).truncationMode(.middle)
@@ -355,17 +305,15 @@ private struct CISheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("CI").font(Fonts.title(18)).foregroundStyle(Tokens.text)
+                Text("CI").font(Fonts.title(22)).foregroundStyle(Tokens.text)
                 Spacer()
                 Button("Close") { dismiss() }.keyboardShortcut(.cancelAction).buttonStyle(PixelButtonStyle())
             }
-            CIView(showAll: true).background(Tokens.dirt).sunken()
+            CIView(showAll: true).background(Tokens.surface, in: RoundedRectangle(cornerRadius: 10)).sunken()
         }
-        .padding(16)
+        .padding(18)
         .frame(width: 560, height: 620)
-        .background(Tokens.grass)
-        .pixelFrame(6)
-        .preferredColorScheme(.dark)
+        .background(Tokens.ground)
     }
 }
 
@@ -377,7 +325,7 @@ private struct EventsSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("EVENTS").font(Fonts.title(18)).foregroundStyle(Tokens.text)
+                Text("Events").font(Fonts.title(22)).foregroundStyle(Tokens.text)
                 Spacer()
                 Button("Close") { dismiss() }.keyboardShortcut(.cancelAction).buttonStyle(PixelButtonStyle())
             }
@@ -387,13 +335,11 @@ private struct EventsSheet: View {
                 }
                 .padding(8)
             }
-            .background(Tokens.dirt).sunken()
+            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 10)).sunken()
         }
-        .padding(16)
+        .padding(18)
         .frame(width: 560, height: 620)
-        .background(Tokens.grass)
-        .pixelFrame(6)
-        .preferredColorScheme(.dark)
+        .background(Tokens.ground)
     }
 }
 
@@ -414,7 +360,7 @@ struct FileRow: View {
                     .font(.system(size: 11)).foregroundStyle(Tokens.textDim).lineLimit(1).truncationMode(.head)
                 Spacer(minLength: 4)
                 Text(DiffViewer.letter(change.status)).font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(DiffViewer.color(change.status))
+                    .foregroundStyle(FileIcon.statusColor(change.status))
             }
             .contentShape(Rectangle())
         }
@@ -451,6 +397,15 @@ enum FileIcon {
         case "sql": "cylinder"
         case "": "doc"
         default: "chevron.left.forwardslash.chevron.right"
+        }
+    }
+
+    /// Source Control letter colors, readable on paper (the compare view keeps VS Code's own).
+    static func statusColor(_ status: String) -> Color {
+        switch status {
+        case "A", "?": Tokens.added
+        case "D": Tokens.danger
+        default: Tokens.warn
         }
     }
 

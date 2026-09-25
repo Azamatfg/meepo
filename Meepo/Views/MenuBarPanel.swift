@@ -33,7 +33,7 @@ struct MenuBarPanel: View {
         .padding(12)
         .frame(width: 280)
         .background(Tokens.grass)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
     }
 
     private func open() {

@@ -37,7 +37,7 @@ struct StatsView: View {
         .frame(minHeight: 420, alignment: .top)
         .background(Tokens.grass)
         .pixelFrame(6)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
     }
 
     private var start: Date {
@@ -145,7 +145,7 @@ struct SettingsView: View {
         .frame(width: 560, alignment: .leading)
         .background(Tokens.grass)
         .pixelFrame(6)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
     }
 }
 

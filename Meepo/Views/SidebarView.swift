@@ -1,46 +1,30 @@
 import SwiftUI
 
-struct SidebarView: View {
+/// Projects and their sessions as a panel: a click opens the session, Tab / Shift+Tab step through them
+/// while the list has focus.
+struct SessionsPanel: View {
     @Environment(AppStore.self) private var store
-    @Namespace private var selectionSpace
 
     var body: some View {
-        // Custom list instead of `List`: the system sidebar greys out selection whenever the
-        // terminal has focus and highlights section headers on hover, so two things looked selected.
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 2) {
-                if store.projects.isEmpty {
-                    Text("No projects yet — use “+ Project” above")
-                        .foregroundStyle(Tokens.textDim)
-                        .padding(.top, 8)
+        VStack(alignment: .leading, spacing: 2) {
+            if store.projects.isEmpty {
+                Text("No projects yet — add one with + above").font(.caption).foregroundStyle(Tokens.textDim)
+            }
+            ForEach(store.projects) { project in
+                ProjectHeader(project: project, isActive: store.selectedSession?.projectId == project.id) {
+                    store.presentNewSession(projectId: project.id)
                 }
-                ForEach(store.projects) { project in
-                    ProjectHeader(project: project, isActive: store.selectedSession?.projectId == project.id) {
-                        store.presentNewSession(projectId: project.id)
-                    }
-                    .padding(.top, 10)
-                    ForEach(store.sessions.filter { $0.projectId == project.id }) { session in
-                        UnitCard(session: session, isSelected: session.id == store.selectedSessionId,
-                                 selectionSpace: selectionSpace)
-                    }
+                .padding(.top, 8)
+                ForEach(store.sessions.filter { $0.projectId == project.id }) { session in
+                    SessionRow(session: session, isSelected: session.id == store.selectedSessionId && !store.isHomeShown)
                 }
             }
-            .padding(.horizontal, 8)
-            // The selection ring "jumps" to the next unit (design §8), no fades.
-            .animation(.linear(duration: 0.12), value: store.selectedSessionId)
         }
-        .background(Tokens.grass)
-        // Plain Tab / Shift+Tab switch sessions while the list (not the terminal) has focus.
         .focusable()
         .focusEffectDisabled()
         .onKeyPress(keys: [.tab]) { press in
             store.selectSession(offset: press.modifiers.contains(.shift) ? -1 : 1)
             return .handled
-        }
-        .safeAreaInset(edge: .bottom) {
-            if !store.isBridgeInstalled || store.bridgeError != nil || !store.notificationsAllowed {
-                BridgeBanner()
-            }
         }
     }
 }
@@ -65,43 +49,24 @@ extension AppStore {
     }
 }
 
-/// A session as an RTS unit (design §5): portrait over its ring, "!" when it waits for you.
-private struct UnitCard: View {
+/// A session in the list: state dot, branch, what it does, context and tokens, CI.
+private struct SessionRow: View {
     @Environment(AppStore.self) private var store
-    @AppStorage("feedShown") private var isFeedShown = true
     let session: Session
     let isSelected: Bool
-    let selectionSpace: Namespace.ID
 
     var body: some View {
         let look = store.look(of: session)
-        HStack(spacing: 10) {
-            ZStack(alignment: .bottom) {
-                ZStack {
-                    if let ring = look.ring { SelectionRing(kind: ring) }
-                    if isSelected { SelectedRing().matchedGeometryEffect(id: "selected", in: selectionSpace) }
-                }
-                .frame(width: 54, height: 16)
-                Image("Portrait")
-                    .resizable()
-                    .interpolation(.none)
-                    .frame(width: 48, height: 48)
-                    .saturation(look.ring == nil ? 0.2 : 1)
-                    .padding(.bottom, 7)
-            }
-            .overlay(alignment: .topTrailing) {
-                if look.ring == .waiting { Exclamation() }
-            }
-            .frame(width: 58, height: 60)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(session.branch ?? "no branch")
-                    .font(Fonts.mono(13))
+        HStack(alignment: .top, spacing: 10) {
+            SelectionRing(kind: look.ring).padding(.top, 5)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(session.worktreeName.map { "worktree \($0)" } ?? session.branch ?? "no branch")
+                    .font(Fonts.ui(14, weight: .semibold))
                     .foregroundStyle(Tokens.text)
                     .lineLimit(1)
                 Text([look.text, session.stage?.uppercased(), session.model].compactMap { $0 }.joined(separator: " · "))
                     .font(.caption)
-                    .foregroundStyle(look.ring == .waiting ? Tokens.alert : Tokens.textDim)
+                    .foregroundStyle(look.ring == .waiting ? Tokens.need : Tokens.textDim)
                     .lineLimit(1)
                 HStack(spacing: 6) {
                     ContextBar(fraction: session.id.flatMap(store.contextFraction(for:)))
@@ -110,7 +75,7 @@ private struct UnitCard: View {
                     if let run = store.ciState(for: session) {
                         Button {
                             store.selectedSessionId = session.id
-                            isFeedShown = true // the inspector shows this session's CI
+                            store.editShell { if $0.zone(of: .ci) == nil { $0.move(.ci, to: .right) } }
                         } label: {
                             Text(run.isInfraFailure ? "CI !" : run.failed ? "CI ✗" : run.isRunning ? "CI …" : "CI ✓")
                                 .font(Fonts.mono(11))
@@ -126,37 +91,41 @@ private struct UnitCard: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(4)
-        .background(isSelected ? Tokens.dirt : .clear)
-        .overlay { if isSelected { Bevel(raised: false) } }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(isSelected ? Tokens.raised : .clear, in: RoundedRectangle(cornerRadius: 10))
+        .shadow(color: isSelected ? .black.opacity(0.08) : .clear, radius: 2, y: 1)
         .contentShape(Rectangle())
         .onTapGesture { store.selectedSessionId = session.id }
-        .contextMenu {
-            Button("New Session Instead") { try? store.replaceSession(session.id!) }
-            Button("Restart") { store.restartSession(session.id!) }
-            Button("Close Session", role: .destructive) { store.closeSession(session.id!) }
-        }
+        .contextMenu { SessionMenu(session: session) }
         .help(look.text)
     }
 }
 
-/// Orange "!" over a waiting unit; hops 2 px when it appears (design §8).
-private struct Exclamation: View {
-    @State private var hop = false
+/// New Session Instead / Restart / Close — the same confirmations wherever they're offered.
+struct SessionMenu: View {
+    @Environment(AppStore.self) private var store
+    let session: Session
 
     var body: some View {
-        Text("!")
-            .font(Fonts.title(18))
-            .foregroundStyle(Tokens.alert)
-            .shadow(color: .black, radius: 0, x: 1, y: 1)
-            .offset(y: hop ? -2 : 0)
-            .animation(.linear(duration: 0.08), value: hop)
-            // No animation completion closure: SwiftUI may call those from its animation thread (macOS 15).
-            .task {
-                hop = true
-                try? await Task.sleep(for: .milliseconds(80))
-                hop = false
-            }
+        let place = session.worktreeName.map { "worktree \($0)" } ?? session.branch ?? "this folder"
+        Button("New Session Instead…") {
+            store.confirmation = PixelConfirmation(
+                title: "Start a fresh session?",
+                message: "A new claude in \(place), with a clean context. This one is closed; its conversation stays in Claude Code (claude --resume).",
+                action: "New session",
+                isDestructive: false
+            ) { try? store.replaceSession(session.id!) }
+        }
+        Button("Restart") { store.restartSession(session.id!) }
+        Divider()
+        Button("Close Session…", role: .destructive) {
+            store.confirmation = PixelConfirmation(
+                title: "Close this session?",
+                message: "claude stops. Files and commits stay; the conversation stays in Claude Code (claude --resume).",
+                action: "Close"
+            ) { store.closeSession(session.id!) }
+        }
     }
 }
 
@@ -169,9 +138,7 @@ struct SessionLabel: View {
     var body: some View {
         let look = store.look(of: session)
         HStack(spacing: 6) {
-            Circle()
-                .fill(dotColor(look.ring))
-                .frame(width: 8, height: 8)
+            SelectionRing(kind: look.ring)
             if let projectName {
                 Text(projectName).foregroundStyle(Tokens.text)
             }
@@ -182,16 +149,6 @@ struct SessionLabel: View {
             Text(look.text)
                 .font(.caption)
                 .foregroundStyle(look.ring == .waiting ? Tokens.alert : Tokens.textDim)
-        }
-    }
-
-    private func dotColor(_ ring: SelectionRing.Kind?) -> Color {
-        switch ring {
-        case nil: Tokens.frameMid
-        case .idle, .working: Tokens.selectionSoft
-        case .waiting: Tokens.alert
-        case .sync: Tokens.warn
-        case .error: Tokens.danger
         }
     }
 }
@@ -206,7 +163,7 @@ private struct ProjectHeader: View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(project.name)
-                    .font(Fonts.title(16))
+                    .font(Fonts.ui(15, weight: .bold))
                     .foregroundStyle(isActive ? Tokens.text : Tokens.textDim)
                     .lineLimit(1)
                 Text(project.remote ?? "no remote")
@@ -224,9 +181,9 @@ private struct ProjectHeader: View {
                 Divider()
                 Button("Remove from Meepo…") {
                     store.confirmation = PixelConfirmation(
-                        title: "REMOVE \(project.name.uppercased()) FROM MEEPO?",
+                        title: "Remove \(project.name) from Meepo?",
                         message: "Its sessions close. The folder, git and Claude's conversations stay — add it again any time.",
-                        action: "REMOVE"
+                        action: "Remove"
                     ) { store.removeProject(project.id!) }
                 }
             } label: {
@@ -234,17 +191,17 @@ private struct ProjectHeader: View {
             }
             .menuStyle(.button)
             .menuIndicator(.hidden)
-            .buttonStyle(PixelButtonStyle())
+            .buttonStyle(PixelButtonStyle(compact: true))
             .fixedSize()
             .help("Open \(project.name) in an editor (Meepo has none)")
             Button(action: onNewSession) {
                 Image(systemName: "plus")
             }
-            .buttonStyle(PixelButtonStyle())
+            .buttonStyle(PixelButtonStyle(compact: true))
             .help("New session in \(project.name)")
         }
-        .padding(.bottom, 4)
-        .overlay(alignment: .bottom) { Rectangle().fill(Tokens.dirt).frame(height: 2) }
+        .padding(.horizontal, 4)
+        .padding(.bottom, 2)
         .help(project.path)
     }
 
@@ -256,34 +213,28 @@ private struct ProjectHeader: View {
     }
 }
 
-/// Shown until the hook bridge is installed, or when it/the event server has a problem.
-private struct BridgeBanner: View {
+/// Bridge/event-server problems for the status bar: shown until the hook bridge is installed, when it or the
+/// event server fails, or when macOS blocks notifications.
+struct BridgeIssues: View {
     @Environment(AppStore.self) private var store
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        HStack(spacing: 10) {
             if let error = store.bridgeError {
-                Text(error)
-                    .foregroundStyle(Tokens.danger)
+                Text(error).foregroundStyle(Tokens.danger).lineLimit(1).truncationMode(.tail).help(error)
+                Button("✕") { store.bridgeError = nil }.buttonStyle(.plain).foregroundStyle(Tokens.textDim)
             }
             if !store.notificationsAllowed {
-                Text("Meepo notifications are turned off in macOS settings.")
-                Button("Open Notification Settings") {
+                Button("Notifications off — open settings") {
                     NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!)
                 }
-                .buttonStyle(PixelButtonStyle())
+                .buttonStyle(.plain).foregroundStyle(Tokens.warn)
             }
             if !store.isBridgeInstalled {
-                Text("Hook bridge not installed: no statuses or notifications.")
-                Button("Install Bridge") { store.installBridge() }
-                    .buttonStyle(PixelButtonStyle())
+                Button("No statuses: install the hook bridge") { store.installBridge() }
+                    .buttonStyle(.plain).foregroundStyle(Tokens.need)
                     .help("Adds meepo-bridge.sh to ~/.claude/settings.json next to your hooks; your own Notification hooks stay quiet in Meepo sessions. Backups go to ~/.meepo/backups")
             }
         }
-        .font(.caption)
-        .foregroundStyle(Tokens.text)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .pixelFrame(4)
-        .padding(8)
     }
 }

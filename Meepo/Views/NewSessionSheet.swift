@@ -95,7 +95,7 @@ struct NewSessionSheet: View {
         .frame(width: 460)
         .background(Tokens.grass)
         .pixelFrame(6)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
         .onAppear { projectId = store.newSessionProjectId }
         // SPEC module 5: a second session in the same project defaults to its own worktree.
         .onChange(of: projectId, initial: true) {

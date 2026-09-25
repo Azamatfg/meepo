@@ -46,8 +46,8 @@ struct StagePanel: View {
                             execute(task.isEmpty ? "plan" : "plan \(task)")
                         }
                     }
-                    .overlay { if index == current { Bevel(raised: false) } }
-                    .overlay { if index == next { Rectangle().stroke(Tokens.selection, lineWidth: 2) } }
+                    .overlay { if index == current { Capsule().fill(Tokens.work.opacity(0.14)).allowsHitTesting(false) } }
+                    .overlay { if index == next { Capsule().strokeBorder(Tokens.work, lineWidth: 1.5) } }
                     .help(stage.command.map { "/\($0)" } ?? "Code: talk to Claude")
             }
             let others = (store.commandsByProject[session.projectId] ?? [])
@@ -78,7 +78,7 @@ struct StagePanel: View {
                     ) { store.removeWorktree(of: session.id!) }
                 }
                 .buttonStyle(PixelButtonStyle())
-                .overlay { Rectangle().stroke(Tokens.selection, lineWidth: 2) }
+                .overlay { Capsule().strokeBorder(Tokens.work, lineWidth: 1.5) }
                 .help("The branch is merged: delete the worktree and its branch, close this session")
             }
             if store.dirtyProjectIds.contains(session.projectId) {
@@ -103,7 +103,7 @@ struct StagePanel: View {
             if let fraction = store.contextFraction(for: session.id!), fraction >= store.relayThreshold {
                 Button("RELAY") { store.relay(session.id!) }
                     .buttonStyle(PixelButtonStyle())
-                    .overlay { Rectangle().stroke(Tokens.warn, lineWidth: 2) }
+                    .overlay { Capsule().strokeBorder(Tokens.warn, lineWidth: 1.5) }
                     .disabled(store.relayingSessionIds.contains(session.id!))
                     .help("Context \(Int(fraction * 100))%: sync, then continue in a fresh session")
             }
@@ -158,7 +158,7 @@ private struct CommandList: View {
         .frame(width: 240)
         .frame(maxHeight: 380)
         .background(Tokens.dirt)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
     }
 }
 
@@ -204,7 +204,7 @@ private struct TaskPrompt: View {
         .padding(10)
         .frame(width: 360)
         .background(Tokens.grass)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
         .onAppear { focused = true }
     }
 }
@@ -243,7 +243,7 @@ private struct MissingCommand: View {
         .padding(10)
         .frame(width: 440, alignment: .leading)
         .background(Tokens.grass)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
     }
 }
 
@@ -276,6 +276,6 @@ private struct HandoffNotes: View {
         .padding(10)
         .frame(width: 420)
         .background(Tokens.grass)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
     }
 }

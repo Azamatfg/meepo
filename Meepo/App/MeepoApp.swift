@@ -158,8 +158,8 @@ final class LiveServices {
                 if payload.event == "Stop" { Task { await store.refreshUsage() } }
                 guard let attention,
                       let session = store.sessions.first(where: { $0.id == sessionId }) else { return }
-                // The user is already looking at this session.
-                if NSApp.isActive && store.selectedSessionId == sessionId { return }
+                // The user is already looking at this session's terminal (split views show several).
+                if NSApp.isActive && store.visibleSessionIds.contains(sessionId) { return }
                 self?.notifier.post(attention, session: session, project: store.project(for: session),
                                     summary: payload.summary)
             }

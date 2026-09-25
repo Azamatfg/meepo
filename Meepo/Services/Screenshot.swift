@@ -235,7 +235,7 @@ private struct ShotPicker: View {
         .frame(width: 420, height: 440)
         .background(Tokens.grass)
         .pixelFrame(6)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
         .focusable()
         .focusEffectDisabled()
         .onKeyPress(.upArrow) { move(-1) }

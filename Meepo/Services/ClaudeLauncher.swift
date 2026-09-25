@@ -2,6 +2,10 @@ import Foundation
 
 /// Builds the command line for a `claude` session. Flags verified against `claude --help` (v2.1.280).
 enum ClaudeLauncher {
+    /// Meepo's terminals are paper-light; Claude Code's own theme follows only in Meepo's sessions
+    /// (`--settings` outranks the user's files and changes nothing on disk).
+    static let lightTheme = ["--settings", #"{"theme":"light"}"#]
+
     /// New session: `--session-id <uuid>` so Meepo knows the id up front.
     /// Existing transcript: `--resume <uuid>`; the initial prompt is never re-sent.
     /// `remoteControl`: session name shown in the Claude app / claude.ai (`--remote-control <name>`),

@@ -61,6 +61,6 @@ struct OnboardingView: View {
         .frame(width: 760, height: 680)
         .background(Tokens.grass)
         .pixelFrame(6)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
     }
 }

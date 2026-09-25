@@ -408,7 +408,6 @@ final class CanvasRendererTests: XCTestCase {
     func testRenderersAreMadeOffTheMainActor() async {
         // Calling them from a background task compiles only while they stay nonisolated.
         let made = await Task.detached { () -> Bool in
-            _ = Bevel.renderer(raised: true, width: 2)
             _ = ContextBar.renderer(fraction: 0.6)
             return true
         }.value

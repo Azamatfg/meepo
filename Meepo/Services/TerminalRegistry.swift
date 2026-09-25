@@ -18,11 +18,11 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
         // Sessions start before they're on screen; a zero frame would start claude in a 0-column terminal.
         let view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700))
         view.font = Fonts.terminal(13)
-        view.nativeBackgroundColor = NSColor(hex: 0x0E1710) // Tokens.terminalBg
-        view.nativeForegroundColor = NSColor(hex: 0xE8F0E0) // Tokens.text
-        view.caretColor = NSColor(hex: 0x11F10F)            // Tokens.selection: blinking green block
+        view.nativeBackgroundColor = NSColor(hex: 0xF6F3EC) // Tokens.terminalBg
+        view.nativeForegroundColor = NSColor(hex: 0x1B1A17) // Tokens.text
+        view.caretColor = NSColor(hex: 0x2140D9)            // Tokens.work
         view.processDelegate = self
-        let args = ClaudeLauncher.claudeArguments(
+        let args = ClaudeLauncher.lightTheme + ClaudeLauncher.claudeArguments(
             sessionId: session.claudeSessionId,
             resume: ClaudeLauncher.hasTranscript(sessionId: session.claudeSessionId),
             model: session.model,
