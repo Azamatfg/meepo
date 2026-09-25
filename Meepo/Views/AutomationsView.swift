@@ -78,18 +78,24 @@ struct AutomationsView: View {
 
     /// A change in Meepo against the user's real behavior: how often they still reach for the old way.
     private func measureRow(_ item: (command: String, feature: String, since: Date)) -> some View {
-        let rate = measures[item.command]
         return HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.feature).font(Fonts.ui(14, weight: .semibold))
-                Text("You typed /\(item.command) " + (rate.map { String(format: "%.0f× a week before", $0.before) } ?? "…")
-                     + (rate.map { $0.after.map { String(format: ", %.0f× a week since.", $0) } ?? " — measuring, check back after a week." } ?? ""))
-                    .font(.caption).foregroundStyle(Tokens.textDim)
+                Text(Self.measureText(item.command, measures[item.command])).font(.caption).foregroundStyle(Tokens.textDim)
             }
             Spacer()
         }
         .padding(12)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// "You typed /usage 11× a week before, 3× a week since." Plain statements: one long `+` chain of optionals
+    /// was too much for the release compiler.
+    static func measureText(_ command: String, _ rate: (before: Double, after: Double?)?) -> String {
+        guard let rate else { return "You typed /\(command) …" }
+        let before = String(format: "You typed /%@ %.0f× a week before", command, rate.before)
+        guard let after = rate.after else { return before + " — measuring, check back after a week." }
+        return before + String(format: ", %.0f× a week since.", after)
     }
 
     private var header: some View {

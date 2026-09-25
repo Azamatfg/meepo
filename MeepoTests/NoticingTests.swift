@@ -101,3 +101,11 @@ final class ChainRunTests: XCTestCase {
         XCTAssertNil(store.suggestionStates[suggestion.id]?.appliedAt, "removing the button makes it a suggestion again")
     }
 }
+
+final class MeasureTextTests: XCTestCase {
+    func testWordsForEachStage() {
+        XCTAssertEqual(AutomationsView.measureText("usage", nil), "You typed /usage …")
+        XCTAssertEqual(AutomationsView.measureText("usage", (11, nil)), "You typed /usage 11× a week before — measuring, check back after a week.")
+        XCTAssertEqual(AutomationsView.measureText("usage", (11, 3)), "You typed /usage 11× a week before, 3× a week since.")
+    }
+}
