@@ -313,7 +313,7 @@ private struct CISheet: View {
         }
         .padding(18)
         .frame(width: 560, height: 620)
-        .background(Tokens.ground)
+        .paperSheet()
     }
 }
 
@@ -339,7 +339,7 @@ private struct EventsSheet: View {
         }
         .padding(18)
         .frame(width: 560, height: 620)
-        .background(Tokens.ground)
+        .paperSheet()
     }
 }
 

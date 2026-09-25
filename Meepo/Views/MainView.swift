@@ -101,6 +101,7 @@ private struct TitleBar: View {
     let onAddProject: () -> Void
     @State private var isFullScreen = false
     @State private var isSetupShown = false
+    @State private var isAutomationsShown = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -140,6 +141,7 @@ private struct TitleBar: View {
                 Button("Tools — practices, Docker, ports, changes") { isToolsShown = true }
                 Button("Notes — release notes") { isNotesShown = true }
                 Divider()
+                Button("Automations…") { isAutomationsShown = true }
                 Button("Claude Code Setup…") { isSetupShown = true }
                 Button("Send Feedback…") { NSWorkspace.shared.open(CrashNotice.newIssue(title: "", body: "")) }
                 Button("Settings…") { openSettings() }
@@ -157,6 +159,7 @@ private struct TitleBar: View {
         .frame(height: 50)
         .background(WindowDragArea())
         .sheet(isPresented: $isSetupShown) { SetupView() }
+        .sheet(isPresented: $isAutomationsShown) { AutomationsView() }
         .overlay(alignment: .bottom) { Rectangle().fill(Tokens.line).frame(height: 1) }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in isFullScreen = true }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in isFullScreen = false }

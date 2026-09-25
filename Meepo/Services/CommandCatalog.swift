@@ -5,6 +5,8 @@ import Foundation
 struct SlashCommand: Hashable, Identifiable {
     var name: String
     var description: String?
+    /// The Markdown file it comes from; nil for Claude Code built-ins.
+    var file: URL?
     var id: String { name }
 }
 
@@ -47,15 +49,16 @@ enum CommandCatalog {
         // Relative paths from the enumerator itself: comparing absolute prefixes breaks on /var vs /private/var.
         if let files = FileManager.default.enumerator(atPath: commandsDir.path) {
             for case let relative as String in files where relative.hasSuffix(".md") {
+                let file = commandsDir.appending(path: relative)
                 result.append(SlashCommand(name: relative.dropLast(3).replacingOccurrences(of: "/", with: ":"),
-                                           description: description(of: commandsDir.appending(path: relative))))
+                                           description: description(of: file), file: file))
             }
         }
         let skillsDir = claudeDir.appending(path: "skills")
         for skill in (try? FileManager.default.contentsOfDirectory(at: skillsDir, includingPropertiesForKeys: nil)) ?? [] {
             let file = skill.appending(path: "SKILL.md")
             guard FileManager.default.fileExists(atPath: file.path) else { continue }
-            result.append(SlashCommand(name: skill.lastPathComponent, description: description(of: file)))
+            result.append(SlashCommand(name: skill.lastPathComponent, description: description(of: file), file: file))
         }
         return result
     }

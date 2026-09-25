@@ -169,6 +169,73 @@ final class AppStore {
         }
     }
 
+    // MARK: Automations — the user's skills and commands, how they're used, their settings
+
+    /// Built off the main thread: reads history.jsonl and asks git which project files are the team's.
+    func automations() async -> [Automations.Item] {
+        let projects = projects.map { (name: $0.name, path: $0.path) }
+        let home = bridge.settingsURL.deletingLastPathComponent()
+        return await Task.detached {
+            let history = (try? String(contentsOf: Automations.historyFile, encoding: .utf8)) ?? ""
+            let usage = Automations.usage(historyLines: history.split(separator: "\n"))
+            var items: [String: Automations.Item] = [:]
+            func add(_ command: SlashCommand, project: (name: String, path: String)?) {
+                let key = command.file?.path ?? "builtin:\(command.name)"
+                if var existing = items[key] {
+                    if let project, !existing.projects.contains(project.name) { existing.projects.append(project.name) }
+                    items[key] = existing
+                    return
+                }
+                let owner: Automations.Owner
+                if command.file == nil { owner = .builtIn }
+                else if let project, command.file!.path.hasPrefix(project.path + "/"),
+                        GitService.isTracked(command.file!.path, in: project.path) { owner = .team }
+                else { owner = .personal }
+                let text = command.file.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+                let isProjectFile = command.file.map { !$0.path.hasPrefix(home.path + "/") } ?? false
+                items[key] = Automations.Item(
+                    name: command.name, description: command.description, file: command.file, owner: owner,
+                    projects: isProjectFile ? project.map { [$0.name] } ?? [] : [],
+                    usage: usage[command.name] ?? Automations.Usage(weekly: Array(repeating: 0, count: Automations.weeks), lastUsed: nil),
+                    effort: Automations.frontmatterValue("effort", in: text),
+                    model: Automations.frontmatterValue("model", in: text))
+            }
+            if projects.isEmpty {
+                for command in CommandCatalog.commands(projectPath: home.path) { add(command, project: nil) }
+            }
+            for project in projects {
+                for command in CommandCatalog.commands(projectPath: project.path) {
+                    let inProject = command.file.map { $0.path.hasPrefix(project.path + "/") } ?? false
+                    add(command, project: inProject ? project : nil)
+                }
+            }
+            return items.values.sorted { ($0.usage.total, $1.name) > ($1.usage.total, $0.name) }
+        }.value
+    }
+
+    /// skillOverrides from ~/.claude/settings.json: "name-only", "user-invocable-only", "off"; absent = "on".
+    func skillOverrides() -> [String: String] {
+        ((try? bridge.readSettings())?["skillOverrides"] as? [String: String]) ?? [:]
+    }
+
+    /// Personal, in ~/.claude/settings.json — works for team skills too without touching the team's files.
+    func setSkillOverride(_ name: String, to value: String) throws {
+        try bridge.editSettings("\(name): \(value == "on" ? "listed normally" : value)") { settings in
+            var overrides = settings["skillOverrides"] as? [String: Any] ?? [:]
+            overrides[name] = value == "on" ? nil : value
+            settings["skillOverrides"] = overrides.isEmpty ? nil : overrides
+        }
+    }
+
+    /// effort / model in a personal skill's own frontmatter — Claude Code applies them when the skill runs.
+    func setFrontmatter(_ item: Automations.Item, _ key: String, to value: String?) throws {
+        guard item.owner == .personal, let file = item.file else { return }
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let backup = try ChangeLog.backup(file, folder: "skills", backups: backupsDir)
+        try Automations.settingFrontmatter(key, to: value, in: text).write(to: file, atomically: true, encoding: .utf8)
+        ChangeLog.record("/\(item.name): \(key) \(value ?? "default")", file: file, backup: backup, backups: backupsDir)
+    }
+
     /// What in the changelog touches this user: Meepo's own needs plus what ~/.claude/settings.json uses.
     func claudeNewsKeywords() -> [String] {
         let settings = (try? Data(contentsOf: bridge.settingsURL))

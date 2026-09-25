@@ -31,7 +31,7 @@ struct SetupView: View {
         }
         .padding(22)
         .frame(width: 640, height: 560)
-        .background(Tokens.ground)
+        .paperSheet()
         .onAppear { findings = store.setupFindings() }
     }
 

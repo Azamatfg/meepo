@@ -254,6 +254,6 @@ private struct ClaudeNewsSheet: View {
         }
         .padding(20)
         .frame(width: 720, height: 640)
-        .background(Tokens.ground)
+        .paperSheet()
     }
 }

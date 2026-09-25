@@ -17,6 +17,14 @@ struct Bevel: View {
 }
 
 extension View {
+    /// The root of a sheet: sheets don't inherit the main window's text color or scheme, and in macOS dark mode
+    /// their text came out white on paper.
+    func paperSheet() -> some View {
+        background(Tokens.ground)
+            .foregroundStyle(Tokens.text)
+            .preferredColorScheme(.light)
+    }
+
     /// A panel: surface fill, rounded, hairline border.
     func pixelFrame(_ padding: CGFloat = 6) -> some View {
         self.padding(padding)
