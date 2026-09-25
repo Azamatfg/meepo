@@ -124,7 +124,7 @@ final class ScreenshotFlow {
             process.executableURL = URL(filePath: "/usr/sbin/screencapture")
             process.arguments = ["-i", "-x", file.path] // -i interactive selection, -x no sound
             try? process.run()
-            process.waitUntilExit()
+            process.waitForExit()
             return FileManager.default.fileExists(atPath: file.path)
         }.value
     }

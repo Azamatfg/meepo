@@ -33,7 +33,7 @@ enum ClaudeLauncher {
         process.standardOutput = pipe
         process.standardError = Pipe()
         do { try process.run() } catch { return nil }
-        process.waitUntilExit()
+        process.waitForExit()
         return String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             .split(separator: "\n").first.map(String.init)
     }
@@ -92,7 +92,7 @@ enum ClaudeLauncher {
         do { try process.run() } catch { return nil }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if process.isRunning { process.terminate() } }
         let data = out.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        process.waitForExit()
         return parseLoginEnvironment(String(decoding: data, as: UTF8.self))
     }
 

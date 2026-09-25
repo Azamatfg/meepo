@@ -81,7 +81,7 @@ enum GitService {
         process.standardError = FileHandle.nullDevice
         do { try process.run() } catch { return nil }
         let data = out.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        process.waitForExit()
         return process.terminationStatus == 0 ? data : nil
     }
 
@@ -95,7 +95,7 @@ enum GitService {
         process.standardError = FileHandle.nullDevice
         do { try process.run() } catch { return nil }
         let data = out.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        process.waitForExit()
         return String(decoding: data, as: UTF8.self)
     }
 
@@ -110,7 +110,7 @@ enum GitService {
         process.standardError = err
         do { try process.run() } catch { return error.localizedDescription }
         let data = err.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        process.waitForExit()
         guard process.terminationStatus != 0 else { return nil }
         let message = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         return message.isEmpty ? "git \(args.first ?? "") failed" : message
@@ -132,7 +132,7 @@ enum GitService {
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         do { try process.run() } catch { return false }
-        process.waitUntilExit()
+        process.waitForExit()
         return process.terminationStatus == 0
     }
 
@@ -146,7 +146,7 @@ enum GitService {
         process.standardError = FileHandle.nullDevice
         do { try process.run() } catch { return nil }
         let data = out.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        process.waitForExit()
         guard process.terminationStatus == 0 else { return nil }
         let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         return text.isEmpty ? nil : text

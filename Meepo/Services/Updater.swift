@@ -165,7 +165,7 @@ enum Updater {
         process.standardError = pipe                              // codesign and spctl answer on stderr
         do { try process.run() } catch { return (-1, "") }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        process.waitForExit()
         return (process.terminationStatus, String(decoding: data, as: UTF8.self))
     }
 }

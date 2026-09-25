@@ -6,6 +6,9 @@ struct NewSessionSheet: View {
     @State private var projectId: Int64?
     @State private var model = ""
     @State private var effort = ""
+    /// Worktrees need git; a plain folder project runs sessions in the folder itself. Read off the main
+    /// thread when the project changes — never from `body` (running git there crashed, 2026-09-25).
+    @State private var isGit = false
     @State private var prompt = ""
     @State private var error: String?
     @State private var useWorktree = false
@@ -106,21 +109,19 @@ struct NewSessionSheet: View {
         .pixelFrame(6)
         .preferredColorScheme(.light)
         .onAppear { projectId = store.newSessionProjectId }
-        // SPEC module 5: a second session in the same project defaults to its own worktree.
-        .onChange(of: projectId, initial: true) {
-            useWorktree = isGit && store.sessions.contains { $0.projectId == projectId }
-        }
         .task(id: projectId) {
-            guard let path = store.projects.first(where: { $0.id == projectId })?.path else { past = []; return }
+            guard let path = store.projects.first(where: { $0.id == projectId })?.path else {
+                past = []
+                isGit = false
+                useWorktree = false
+                return
+            }
+            isGit = await Task.detached { GitService.output(["rev-parse", "--is-inside-work-tree"], in: path) == "true" }.value
+            // SPEC module 5: a second session in the same project defaults to its own worktree.
+            useWorktree = isGit && store.sessions.contains { $0.projectId == projectId }
             let open = Set(store.sessions.map(\.claudeSessionId))
             past = await Task.detached { ClaudeImport.claudeSessions(for: path) }.value.filter { !open.contains($0.id) }
         }
-    }
-
-    /// Worktrees need git; a plain folder project runs sessions in the folder itself.
-    private var isGit: Bool {
-        guard let path = store.projects.first(where: { $0.id == projectId })?.path else { return false }
-        return GitService.output(["rev-parse", "--is-inside-work-tree"], in: path) == "true"
     }
 
     /// Opens the conversation in Meepo where it stopped (claude --resume), in the project folder.

@@ -75,7 +75,7 @@ enum Ports {
         process.standardError = FileHandle.nullDevice
         do { try process.run() } catch { return "" }
         let data = out.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        process.waitForExit()
         return String(decoding: data, as: UTF8.self)
     }
 }

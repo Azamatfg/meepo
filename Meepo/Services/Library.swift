@@ -175,7 +175,7 @@ enum Docker {
         process.standardError = FileHandle.nullDevice
         do { try process.run() } catch { return nil }
         let data = out.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        process.waitForExit()
         return process.terminationStatus == 0 ? String(decoding: data, as: UTF8.self) : nil
     }
 }

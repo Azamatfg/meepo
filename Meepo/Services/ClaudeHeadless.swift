@@ -28,7 +28,7 @@ enum ClaudeHeadless {
             try input.fileHandleForWriting.close()
             let data = out.fileHandleForReading.readDataToEndOfFile()
             let errors = err.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
+            process.waitForExit()
             let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
             guard process.terminationStatus == 0, !text.isEmpty else {
                 let message = String(decoding: errors.isEmpty ? data : errors, as: UTF8.self)
