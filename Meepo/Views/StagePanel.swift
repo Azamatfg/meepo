@@ -13,15 +13,15 @@ struct StagePanel: View {
     @State private var planTask = ""
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            row
-            ScrollView(.horizontal, showsIndicators: false) { row }
-        }
-        .padding(6)
-        .background(Tokens.frameMid)
+        // Scrolls sideways when the window is narrow. Not ViewThatFits: on macOS 15 it measures its options on
+        // SwiftUI's DisplayLink thread, building this row's ForEach there — a main-actor closure — which trapped
+        // on every Option+Tab (the tester's crash, 2026-09-25).
+        ScrollView(.horizontal, showsIndicators: false) { row }
+            .padding(6)
+            .background(Tokens.frameMid)
     }
 
-    /// Stages, then session tools; the same row whether it fits or scrolls.
+    /// Stages, then session tools.
     @ViewBuilder
     private var row: some View {
         // All stages are always shown; ones this project lacks are dimmed and offer to add the command.
