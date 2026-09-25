@@ -23,6 +23,7 @@ final class MonacoDiffTests: XCTestCase {
         let sink = MessageSink()
         let ready = expectation(description: "Monaco ready")
         let diffed = expectation(description: "diff computed")
+        diffed.assertForOverFulfill = false // a repaint may report the same diff again
         sink.onMessage = { body in
             if body["ready"] != nil { ready.fulfill() }
             if body["changes"] != nil { diffed.fulfill() }
