@@ -21,6 +21,7 @@ struct SessionInspector: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
                         header(session, project)
+                        ExplorerSection(root: path, changes: scm?.changes ?? [])
                         sourceControl(path: path)
                         ciSection(project, session)
                         eventsSection

@@ -5,12 +5,14 @@
 <!-- Meepo's compare view: Monaco's diff editor, set up the way VS Code shows a diff. -->
 <link rel="stylesheet" href="vs/editor/editor.main.css">
 <style>
-  html, body, #diff { margin: 0; height: 100%; width: 100%; overflow: hidden; background: #1e1e1e; }
-  #empty { display: none; color: #858585; font: 13px -apple-system, sans-serif; padding: 16px; }
+  html, body, #diff, #view { margin: 0; height: 100%; width: 100%; overflow: hidden; background: #1e1e1e; }
+  #empty, #view { display: none; }
+  #empty { color: #858585; font: 13px -apple-system, sans-serif; padding: 16px; }
 </style>
 </head>
 <body>
 <div id="diff"></div>
+<div id="view"></div>
 <div id="empty"></div>
 <script src="vs/loader.js"></script>
 <script>
@@ -37,19 +39,34 @@
       ignoreTrimWhitespace: false,
       experimental: { showMoves: true },
     });
-    let original = null, modified = null;
+    let original = null, modified = null, viewer = null, viewed = null;
+    function showOnly(id) {
+      for (const other of ["diff", "view", "empty"]) document.getElementById(other).style.display = other === id ? "block" : "none";
+    }
 
     // Swift calls this with the two versions, the language id and the layout.
     window.meepoShow = function (payload) {
       const p = JSON.parse(payload);
-      const empty = document.getElementById("empty");
       if (p.message) {
-        empty.textContent = p.message; empty.style.display = "block";
-        document.getElementById("diff").style.display = "none";
+        document.getElementById("empty").textContent = p.message;
+        showOnly("empty");
         return;
       }
-      empty.style.display = "none";
-      document.getElementById("diff").style.display = "block";
+      // The Explorer opens one file: VS Code's plain read-only editor, no diff.
+      if (p.single) {
+        showOnly("view");
+        viewer = viewer || monaco.editor.create(document.getElementById("view"), {
+          theme: "vs-dark", readOnly: true, automaticLayout: true, minimap: { enabled: true },
+          fontFamily: "Menlo, Monaco, 'Courier New', monospace", fontSize: 12, lineHeight: 18, scrollBeyondLastLine: false,
+        });
+        if (viewed) viewed.dispose();
+        viewed = monaco.editor.createModel(p.modified, p.language);
+        viewer.setModel(viewed);
+        viewer.layout();
+        viewer.render(true);
+        return;
+      }
+      showOnly("diff");
       if (original) original.dispose();
       if (modified) modified.dispose();
       original = monaco.editor.createModel(p.original, p.language);

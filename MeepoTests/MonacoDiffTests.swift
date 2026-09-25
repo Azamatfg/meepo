@@ -48,6 +48,19 @@ final class MonacoDiffTests: XCTestCase {
         await fulfillment(of: [diffed], timeout: 20)
         XCTAssertEqual(sink.messages.compactMap { $0["changes"] as? Int }.last, 1)   // one change block: line 4 → lines 4–5
 
+        // The Explorer's single-file view replaces the diff with one plain editor holding the file.
+        let single = MonacoDiffView.Content(modified: "print('explorer')\n", path: "run.py", isSingle: true)
+        _ = try await web.evaluateJavaScript("meepoShow(\(MonacoDiffView.payload(single, sideBySide: true)))")
+        let shown = try await web.evaluateJavaScript("""
+            [document.getElementById('diff').style.display, document.getElementById('view').style.display,
+             monaco.editor.getModels().some(m => m.getValue() === "print('explorer')\\n" && m.getLanguageId() === 'python')].join()
+            """) as? String
+        XCTAssertEqual(shown, "none,block,true")
+        // And back: a diff after the file view shows the diff again.
+        _ = try await web.evaluateJavaScript("meepoShow(\(MonacoDiffView.payload(content, sideBySide: true)))")
+        let back = try await web.evaluateJavaScript("document.getElementById('diff').style.display + document.getElementById('view').style.display") as? String
+        XCTAssertEqual(back, "blocknone")
+
         if let out = ProcessInfo.processInfo.environment["MEEPO_SNAPSHOT_DIR"] {
             try await Task.sleep(for: .milliseconds(1500))
             let image = try await web.takeSnapshot(configuration: nil)

@@ -10,6 +10,8 @@ struct MonacoDiffView: NSViewRepresentable {
         var modified = ""
         var path = ""
         var message: String?
+        /// Just `modified` in a plain editor (the Explorer's file view), no diff.
+        var isSingle = false
     }
 
     let content: Content
@@ -59,6 +61,7 @@ struct MonacoDiffView: NSViewRepresentable {
         var object: [String: Any] = ["original": content.original, "modified": content.modified,
                                      "language": language(for: content.path), "sideBySide": sideBySide]
         if let message = content.message { object["message"] = message }
+        if content.isSingle { object["single"] = true }
         let json = (try? JSONSerialization.data(withJSONObject: object)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
         let literal = (try? JSONSerialization.data(withJSONObject: json, options: .fragmentsAllowed)).map { String(decoding: $0, as: UTF8.self) }
         return literal ?? "\"{}\""
