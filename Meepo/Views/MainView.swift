@@ -139,6 +139,7 @@ private struct TitleBar: View {
                 Button("Tools — practices, Docker, ports, changes") { isToolsShown = true }
                 Button("Notes — release notes") { isNotesShown = true }
                 Divider()
+                Button("Send Feedback…") { NSWorkspace.shared.open(CrashNotice.newIssue(title: "", body: "")) }
                 Button("Settings…") { openSettings() }
             } label: {
                 Image(systemName: "line.3.horizontal").font(.system(size: 14, weight: .semibold)).foregroundStyle(Tokens.textDim)
@@ -538,6 +539,11 @@ private struct TerminalPane: View {
                 .lineLimit(1).layoutPriority(1)
             Text(look.text).font(.caption).foregroundStyle(look.ring == .waiting ? Tokens.need : Tokens.textDim)
                 .lineLimit(1).fixedSize().layoutPriority(3)
+            if store.interruptedSessionIds.contains(sessionId) {
+                Button("Continue") { store.continueInterrupted(sessionId) }
+                    .buttonStyle(PixelButtonStyle(compact: true, isPrimary: true))
+                    .help("Meepo closed while this session was working; its last turn stopped halfway. Asks claude to pick it up")
+            }
             Spacer(minLength: 4)
             if !isSplit { // the status bar shows the selected session's model anyway
                 Text([session.model, session.effort].compactMap { $0 }.joined(separator: " · "))
@@ -627,6 +633,13 @@ private struct StatusBar: View {
                 Text([session.model ?? "default model", session.effort].compactMap { $0 }.joined(separator: " · "))
             }
             BridgeIssues()
+            if store.quitWhenIdle {
+                HStack(spacing: 6) {
+                    Text(store.relaunchAfterQuit ? "Restarts when agents finish" : "Quits when agents finish").foregroundStyle(Tokens.warn)
+                    Button("Cancel") { store.cancelQuitWhenIdle() }.buttonStyle(.plain).foregroundStyle(Tokens.work)
+                }
+            }
+            if let report = store.lastCrashReport { CrashNotice(report: report) }
             Spacer(minLength: 8)
             Text(store.shellPreset.title)
             if let version = Updater.currentVersion { Text("Meepo \(version.description)") }
@@ -638,6 +651,41 @@ private struct StatusBar: View {
         .frame(height: 28)
         .background(Tokens.statusBar)
         .overlay(alignment: .top) { Rectangle().fill(Tokens.line).frame(height: 1) }
+    }
+}
+
+/// "Meepo quit unexpectedly last time": the report stays on this Mac until the user copies or opens it.
+private struct CrashNotice: View {
+    @Environment(AppStore.self) private var store
+    let report: URL
+    @State private var isCopied = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Meepo quit unexpectedly last time").foregroundStyle(Tokens.need)
+            Button(isCopied ? "Copied" : "Copy report") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(CrashReports.text(of: report), forType: .string)
+                isCopied = true
+            }
+            .buttonStyle(.plain).foregroundStyle(Tokens.work)
+            Button("Report on GitHub") {
+                NSWorkspace.shared.open(Self.newIssue(title: "Crash in Meepo \(Updater.currentVersion?.description ?? "")",
+                                                      body: "What were you doing?\n\n(Copy report in Meepo, then paste it here.)"))
+            }
+            .buttonStyle(.plain).foregroundStyle(Tokens.work)
+            Button("Show") { NSWorkspace.shared.activateFileViewerSelecting([report]) }
+                .buttonStyle(.plain).foregroundStyle(Tokens.work)
+            Button("✕") { store.dismissCrashReport() }.buttonStyle(.plain).foregroundStyle(Tokens.textDim)
+                .accessibilityLabel("Dismiss")
+        }
+        .help(report.path)
+    }
+
+    static func newIssue(title: String, body: String) -> URL {
+        var components = URLComponents(string: "https://github.com/Azamatfg/meepo/issues/new")!
+        components.queryItems = [URLQueryItem(name: "title", value: title), URLQueryItem(name: "body", value: body)]
+        return components.url!
     }
 }
 
@@ -741,14 +789,12 @@ private struct UpdateBadge: View {
                 store.confirmation = PixelConfirmation(
                     title: "RESTART INTO \(version.uppercased())?",
                     message: (notes.isEmpty ? "" : String(notes.prefix(400)) + "\n\n")
-                        + "Sessions come back where they were (claude --resume). Or keep working: it installs when you quit Meepo.",
+                        + "Sessions come back where they were (claude --resume); if an agent is mid-turn, Meepo asks first. Or keep working: it installs when you quit Meepo.",
                     action: "RESTART",
                     isDestructive: false
                 ) {
-                    if store.installStagedUpdate() {
-                        Updater.relaunch(Bundle.main.bundleURL)
-                        NSApp.terminate(nil)
-                    }
+                    store.relaunchAfterQuit = true
+                    NSApp.terminate(nil)
                 }
             }
             .foregroundStyle(Tokens.selection)

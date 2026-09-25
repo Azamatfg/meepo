@@ -35,6 +35,7 @@ extension AppStore {
         guard let id = session.id else { return (nil, "") }
         if exitedSessionIds.contains(id) { return (nil, "Exited") }
         guard runningSessionIds.contains(id) else { return (nil, "Not running") }
+        if interruptedSessionIds.contains(id) { return (.sync, "Turn interrupted") }
         if relayingSessionIds.contains(id) { return (.sync, "Relaying…") }
         let full = (contextFraction(for: id) ?? 0) >= relayThreshold
         if full, session.status == .idle || session.status == .thinking { return (.sync, "Time to sync") }

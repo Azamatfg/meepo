@@ -48,7 +48,7 @@ struct StagePanel: View {
                     }
                     .overlay { if index == current { Capsule().fill(Tokens.work.opacity(0.14)).allowsHitTesting(false) } }
                     .overlay { if index == next { Capsule().strokeBorder(Tokens.work, lineWidth: 1.5) } }
-                    .help(stage.command.map { "/\($0)" } ?? "Code: talk to Claude")
+                    .help(help(for: stage))
             }
             let others = (store.commandsByProject[session.projectId] ?? [])
                 .filter { command in !stages.contains { $0.command == command.name } }
@@ -124,11 +124,19 @@ struct StagePanel: View {
         }
         if stage.command == "plan" {
             isPlanAsked = true // ask what to plan, so /plan starts with the task
-        } else if let command = stage.command {
+        } else if let command = store.command(for: stage, in: session.projectId) {
             execute(command)
         } else {
             focusTerminal()
         }
+    }
+
+    private func help(for stage: Stage) -> String {
+        guard let own = stage.command else { return "Code: talk to Claude" }
+        guard let command = store.command(for: stage, in: session.projectId) else { return "/\(own) — not in this project" }
+        if command != own { return "/\(command) — built into Claude Code (this project has no /\(own))" }
+        if store.shadowsBuiltIn(stage, in: session.projectId) { return "/\(own) — your command, used instead of Claude Code's built-in /\(own)" }
+        return "/\(own)"
     }
 
     private func execute(_ command: String) {
@@ -225,7 +233,7 @@ private struct MissingCommand: View {
             Text("\(project?.name ?? "This project") has no /\(command) command.")
                 .font(.caption).foregroundStyle(Tokens.textDim)
             if sources.isEmpty {
-                Text("No other project has it either. Add .claude/commands/\(command).md yourself, or remove the stage in Settings (⌘,).")
+                Text("No other project has it, and Claude Code has no built-in for it. Add .claude/commands/\(command).md, or remove the stage in Settings (⌘,).")
                     .font(.caption).foregroundStyle(Tokens.textDim)
             }
             ForEach(sources) { source in

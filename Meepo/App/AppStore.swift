@@ -74,6 +74,11 @@ final class AppStore {
             ?? (Updater.currentVersion?.isPrerelease ?? true ? .beta : .stable)
         libraryFolder = defaults.string(forKey: Self.libraryKey)
             ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude").path
+        // A session that was mid-turn when Meepo went away (quit, restart, crash) lost that turn; say so.
+        interruptedSessionIds = Set((try? db.read {
+            try Int64.fetchAll($0, sql: "SELECT id FROM session WHERE status = ?", arguments: [SessionStatus.thinking])
+        }) ?? [])
+        lastCrashReport = CrashReports.latest(since: Self.crashesSeen(defaults), in: CrashReports.folder)
         // Processes restart with Meepo, so statuses from the previous run are stale.
         _ = try? db.write { db in
             try db.execute(sql: "UPDATE session SET status = ?", arguments: [SessionStatus.idle])
@@ -118,9 +123,80 @@ final class AppStore {
         sessions.filter { $0.status == .waitingInput || $0.status == .waitingPermission }.count
     }
 
+    // MARK: Quitting without cutting agents off
+
+    /// Sessions in the middle of a turn: quitting now would cut them off.
+    var workingSessionIds: [Int64] {
+        // Statuses reset at launch, so "thinking" means a live turn in this run — unless claude has since exited.
+        sessions.filter { $0.status == .thinking && $0.id.map(exitedSessionIds.contains) == false }.compactMap(\.id)
+    }
+
+    /// Mid-turn when Meepo last went away; cleared by the session's next event or by Continue.
+    private(set) var interruptedSessionIds: Set<Int64> = []
+    /// Quit (or restart into an update) as soon as no agent is working.
+    private(set) var quitWhenIdle = false
+    /// Open Meepo again after quitting — RESTART into a downloaded update.
+    var relaunchAfterQuit = false
+    private var isQuitConfirmed = false
+    /// How the app really quits (NSApp.terminate); tests leave it empty.
+    var terminate: () -> Void = {}
+
+    /// Called on every quit (⌘Q, menu bar, restart). True = quit now; false = a question is on screen.
+    func shouldQuit() -> Bool {
+        let working = workingSessionIds.count
+        if isQuitConfirmed || working == 0 { return true }
+        confirmation = PixelConfirmation(
+            title: working == 1 ? "An agent is still working" : "\(working) agents are still working",
+            message: "Quitting now stops them mid-turn. Their conversations come back when Meepo opens (claude --resume), but the unfinished turn is lost.",
+            action: "Quit now",
+            alternative: ("Quit when they finish", { [weak self] in self?.quitWhenIdle = true }),
+            onCancel: { [weak self] in self?.relaunchAfterQuit = false }
+        ) { [weak self] in
+            self?.isQuitConfirmed = true
+            self?.terminate()
+        }
+        return false
+    }
+
+    func cancelQuitWhenIdle() {
+        quitWhenIdle = false
+        relaunchAfterQuit = false
+    }
+
+    /// Resumed sessions don't pick an interrupted turn up by themselves; this asks claude to.
+    func continueInterrupted(_ sessionId: Int64) {
+        interruptedSessionIds.remove(sessionId)
+        type("continue\r", into: sessionId)
+    }
+
+    // MARK: Crash reports (local only)
+
+    private static let crashesSeenKey = "crashesSeenAt"
+    /// macOS's report of Meepo's last crash, if it's newer than the last one the user dismissed.
+    private(set) var lastCrashReport: URL?
+
+    private static func crashesSeen(_ defaults: UserDefaults) -> Date {
+        if let seen = defaults.object(forKey: crashesSeenKey) as? Date { return seen }
+        defaults.set(Date.now, forKey: crashesSeenKey) // first run: nothing from before counts
+        return .now
+    }
+
+    func dismissCrashReport() {
+        defaults.set(Date.now, forKey: Self.crashesSeenKey)
+        lastCrashReport = nil
+    }
+
     /// Applies a hook event to its session; returns what (if anything) the user should be told.
     @discardableResult
     func handleHookEvent(_ payload: HookPayload, sessionId: Int64) -> Attention? {
+        interruptedSessionIds.remove(sessionId)
+        defer {
+            if quitWhenIdle, workingSessionIds.isEmpty {
+                quitWhenIdle = false
+                isQuitConfirmed = true
+                terminate()
+            }
+        }
         guard var session = sessions.first(where: { $0.id == sessionId }) else { return nil }
         let old = session.status
         // `/clear` starts a new conversation in the same process; resume that one after a restart.
@@ -534,15 +610,29 @@ final class AppStore {
 
     /// Stages the project can run: command-less ones (code) and those whose command exists there.
     func stages(for projectId: Int64) -> [Stage] {
-        let names = Set((commandsByProject[projectId] ?? []).map(\.name))
-        return stages.filter { $0.command == nil || names.contains($0.command!) }
+        stages.filter { $0.command == nil || command(for: $0, in: projectId) != nil }
+    }
+
+    /// What a stage runs in this project: its own command (the project's or ~/.claude's, which also wins over
+    /// a built-in of the same name), else the Claude Code built-in that does the job; nil = nothing does.
+    func command(for stage: Stage, in projectId: Int64) -> String? {
+        guard let command = stage.command else { return nil }
+        return CommandCatalog.resolve(command, available: Set((commandsByProject[projectId] ?? []).map(\.name)))
+    }
+
+    /// The user's own file for a stage command shadows Claude Code's built-in of the same name (e.g. /plan:
+    /// the built-in forbids edits, a custom one may not).
+    func shadowsBuiltIn(_ stage: Stage, in projectId: Int64) -> Bool {
+        guard let command = stage.command, CommandCatalog.builtIns.contains(where: { $0.name == command }) else { return false }
+        return (commandsByProject[projectId] ?? []).first { $0.name == command }?.description
+            != CommandCatalog.builtIns.first { $0.name == command }?.description
     }
 
     /// A slash command enters its stage; a plain prompt right after a stage moves on to a following
     /// command-less stage (plan → code).
     func nextStage(after current: String?, for payload: HookPayload) -> String? {
         if payload.event == "UserPromptExpansion", let command = payload.commandName {
-            return stages.first { $0.command == command }?.name
+            return stages.first { $0.command == command || CommandCatalog.standIns[$0.command ?? ""] == command }?.name
         }
         guard payload.event == "UserPromptSubmit", !(payload.prompt ?? "").hasPrefix("/"),
               let index = stages.firstIndex(where: { $0.name == current }),
@@ -557,15 +647,18 @@ final class AppStore {
 
     /// Code was edited after the last QA stage ran in this session (reminder before ship).
     func codeChangedSinceQA(_ sessionId: Int64) -> Bool {
-        let qa = stages.first { $0.name == "qa" }?.command ?? "qa"
+        let stage = stages.first { $0.name == "qa" }
+        let own = stage?.command ?? "qa"
+        let qa = [own, CommandCatalog.standIns[own]].compactMap { $0 }
         return (try? db.read { db in
             let lastEdit = try Date.fetchOne(db, sql: """
                 SELECT MAX(createdAt) FROM hookEvent WHERE sessionId = ? AND name = 'PostToolUse'
                 AND (summary LIKE 'Edit:%' OR summary LIKE 'Write:%' OR summary LIKE 'MultiEdit:%' OR summary LIKE 'NotebookEdit:%')
                 """, arguments: [sessionId])
             let lastQA = try Date.fetchOne(db, sql: """
-                SELECT MAX(createdAt) FROM hookEvent WHERE sessionId = ? AND name = 'UserPromptExpansion' AND summary LIKE ?
-                """, arguments: [sessionId, "/\(qa)%"])
+                SELECT MAX(createdAt) FROM hookEvent WHERE sessionId = ? AND name = 'UserPromptExpansion'
+                AND (summary LIKE ? OR summary LIKE ?)
+                """, arguments: [sessionId, "/\(qa[0])%", "/\(qa.last!)%"])
             guard let lastEdit else { return false }
             return lastEdit > (lastQA ?? .distantPast)
         }) ?? false

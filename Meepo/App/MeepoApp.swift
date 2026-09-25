@@ -40,6 +40,7 @@ struct MeepoApp: App {
                     services.bindScreenshotHotKey(store.screenshotHotKey, store: store)
                     await store.restoreSessions()
                     quitHandler.store = store
+                    store.terminate = { NSApp.terminate(nil) }
                     Task { // Updates like Claude Code: at launch, then every 6 hours; installed at quit.
                         while !Task.isCancelled {
                             await store.checkForUpdates()
@@ -177,7 +178,21 @@ final class LiveServices {
 final class QuitHandler: NSObject, NSApplicationDelegate {
     weak var store: AppStore?
 
+    /// Every quit — ⌘Q, the menu bar, RESTART — asks first when agents are mid-turn.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        MainActor.assumeIsolated {
+            guard let store, !store.shouldQuit() else { return .terminateNow }
+            NSApp.activate(ignoringOtherApps: true)
+            NSApp.windows.first { $0.canBecomeMain }?.makeKeyAndOrderFront(nil) // where the question is
+            return .terminateCancel
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
-        MainActor.assumeIsolated { _ = store?.installStagedUpdate() }
+        MainActor.assumeIsolated {
+            guard let store else { return }
+            let updated = store.installStagedUpdate()
+            if store.relaunchAfterQuit, updated { Updater.relaunch(Bundle.main.bundleURL) }
+        }
     }
 }

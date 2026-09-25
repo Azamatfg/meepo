@@ -126,6 +126,8 @@ struct PixelConfirmation {
     var cancel: String? = "Cancel"
     /// Red for destructive actions; a plain notice isn't.
     var isDestructive = true
+    /// Called when the box goes away without a choice (Cancel, Esc, a click outside).
+    var onCancel: (() -> Void)?
     let perform: () -> Void
 }
 
@@ -136,7 +138,7 @@ extension View {
             if let pending = confirmation.wrappedValue {
                 ZStack {
                     Tokens.text.opacity(0.18)
-                        .onTapGesture { confirmation.wrappedValue = nil }
+                        .onTapGesture { confirmation.wrappedValue = nil; pending.onCancel?() }
                     VStack(alignment: .leading, spacing: 12) {
                         Text(pending.title.capitalizedSentence).font(Fonts.ui(20, weight: .bold)).foregroundStyle(Tokens.text)
                             .fixedSize(horizontal: false, vertical: true)
@@ -147,7 +149,7 @@ extension View {
                         HStack(spacing: 8) {
                             Spacer()
                             if let cancel = pending.cancel {
-                                Button(cancel.capitalizedSentence) { confirmation.wrappedValue = nil }
+                                Button(cancel.capitalizedSentence) { confirmation.wrappedValue = nil; pending.onCancel?() }
                                     .keyboardShortcut(.cancelAction)
                                     .buttonStyle(PixelButtonStyle())
                             }

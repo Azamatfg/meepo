@@ -18,7 +18,7 @@ final class CommandCatalogTests: XCTestCase {
 
         let commands = CommandCatalog.commands(projectPath: project.path, home: home)
         let byName = Dictionary(uniqueKeysWithValues: commands.map { ($0.name, $0.description) })
-        XCTAssertEqual(Set(byName.keys), ["plan", "retro", "git:ship", "qa", "simplify"])
+        XCTAssertEqual(Set(byName.keys), Set(["plan", "retro", "git:ship", "qa"] + CommandCatalog.builtIns.map(\.name)))
         XCTAssertEqual(byName["plan"]!, "Project plan") // project overrides global
         XCTAssertEqual(byName["retro"]!, "Retro — session retrospective") // no frontmatter: first line, like Claude Code
         XCTAssertEqual(byName["qa"]!, "QA via browser")
@@ -98,8 +98,26 @@ final class StageFlowTests: XCTestCase {
     }
 
     func testOnlyStagesWhoseCommandsExistAreOffered() {
-        // security and simplify: security missing; simplify is a Claude Code built-in.
-        XCTAssertEqual(store.stages(for: project.id!).map(\.name), ["plan", "code", "qa", "simplify", "ship", "sync"])
+        // No own /security: Claude Code's /security-review stands in; simplify is a built-in.
+        XCTAssertEqual(store.stages(for: project.id!).map(\.name), ["plan", "code", "qa", "security", "simplify", "ship", "sync"])
+        XCTAssertEqual(store.command(for: Stage(name: "security", command: "security"), in: project.id!), "security-review")
+        XCTAssertEqual(store.command(for: Stage(name: "qa", command: "qa"), in: project.id!), "qa", "the project's own wins")
+    }
+
+    /// A teammate with nobody's .claude folder (Rustem, 2026-09-25): stages still work on Claude Code's built-ins.
+    func testAProjectWithNoCommandsStillHasItsStages() {
+        let builtIns = Set(CommandCatalog.builtIns.map(\.name))
+        XCTAssertEqual(CommandCatalog.resolve("plan", available: builtIns), "plan")
+        XCTAssertEqual(CommandCatalog.resolve("qa", available: builtIns), "verify")
+        XCTAssertEqual(CommandCatalog.resolve("security", available: builtIns), "security-review")
+        XCTAssertEqual(CommandCatalog.resolve("simplify", available: builtIns), "simplify")
+        XCTAssertEqual(CommandCatalog.resolve("ship", available: builtIns), "commit-push-pr")
+        XCTAssertNil(CommandCatalog.resolve("sync", available: builtIns), "no built-in does sync — the stage says so")
+    }
+
+    func testABuiltInStandInCountsAsItsStage() {
+        send("UserPromptExpansion", prompt: "/verify", command: "verify")
+        XCTAssertEqual(session.stage, "qa")
     }
 
     func testStageFollowsCommandsAndPlainPromptAfterPlanIsCode() {

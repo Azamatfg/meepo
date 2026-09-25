@@ -9,8 +9,25 @@ struct SlashCommand: Hashable, Identifiable {
 }
 
 enum CommandCatalog {
-    /// Built-ins that ship with Claude Code and are common workflow stages.
-    static let builtIns = [SlashCommand(name: "simplify", description: "Review changed code for reuse, quality and efficiency")]
+    /// Built-ins that ship with Claude Code and serve as workflow stages (names checked in 2.1.282).
+    static let builtIns = [
+        SlashCommand(name: "plan", description: "Plan mode: read and plan, no edits"),
+        SlashCommand(name: "simplify", description: "Review changed code for reuse, quality and efficiency"),
+        SlashCommand(name: "verify", description: "Check that the change actually works"),
+        SlashCommand(name: "code-review", description: "Review the changes"),
+        SlashCommand(name: "security-review", description: "Security review of the pending changes on this branch"),
+        SlashCommand(name: "commit-push-pr", description: "Commit, push and open a pull request"),
+    ]
+
+    /// A stage's own command → the built-in that does its job when a project has no such command,
+    /// so a teammate without anyone's .claude folder still has working stages.
+    static let standIns = ["qa": "verify", "security": "security-review", "ship": "commit-push-pr"]
+
+    /// The command a stage runs given the commands a project has: its own, else its built-in stand-in.
+    static func resolve(_ command: String, available: Set<String>) -> String? {
+        if available.contains(command) { return command }
+        return standIns[command].flatMap { available.contains($0) ? $0 : nil }
+    }
 
     /// Project entries override global ones of the same name; sorted by name.
     static func commands(projectPath: String,
