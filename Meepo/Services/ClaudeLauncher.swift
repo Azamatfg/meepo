@@ -2,9 +2,16 @@ import Foundation
 
 /// Builds the command line for a `claude` session. Flags verified against `claude --help` (v2.1.280).
 enum ClaudeLauncher {
-    /// Meepo's terminals are paper-light; Claude Code's own theme follows only in Meepo's sessions
-    /// (`--settings` outranks the user's files and changes nothing on disk).
-    static let lightTheme = ["--settings", #"{"theme":"light"}"#]
+    /// Settings only Meepo's sessions get (`--settings` outranks the user's files and changes nothing on disk):
+    /// the light theme for Meepo's paper-light terminals, and ultracode when that's the chosen effort —
+    /// ultracode is a setting, not an `--effort` value (2.1.282 accepts low…max there).
+    static func sessionSettings(effort: String?) -> [String] {
+        ["--settings", effort == ultracode ? #"{"theme":"light","ultracode":true}"# : #"{"theme":"light"}"#]
+    }
+
+    static let ultracode = "ultracode"
+    /// "" = Claude Code's default.
+    static let effortLevels = ["", "low", "medium", "high", "xhigh", "max", ultracode]
 
     /// New session: `--session-id <uuid>` so Meepo knows the id up front.
     /// Existing transcript: `--resume <uuid>`; the initial prompt is never re-sent.
@@ -16,7 +23,7 @@ enum ClaudeLauncher {
         if let worktree { args += ["--worktree", worktree] }
         if let remoteControl { args += ["--remote-control", remoteControl] }
         if let model, !model.isEmpty { args += ["--model", model] }
-        if let effort, !effort.isEmpty { args += ["--effort", effort] }
+        if let effort, !effort.isEmpty, effort != ultracode { args += ["--effort", effort] }
         if !resume, let prompt, !prompt.isEmpty { args.append(prompt) }
         return args
     }

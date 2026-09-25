@@ -108,7 +108,7 @@ final class BridgeInstallerTests: XCTestCase {
     private func bridgeCount(_ settings: NSDictionary, event: String) -> Int {
         let groups = (settings["hooks"] as? [String: Any])?[event] as? [[String: Any]] ?? []
         return groups.flatMap { $0["hooks"] as? [[String: Any]] ?? [] }
-            .filter { ($0["command"] as? String)?.hasSuffix("meepo-bridge.sh") == true }.count
+            .filter { ($0["command"] as? String)?.contains("meepo-bridge.sh") == true }.count
     }
 
     func testInstallAddsBridgeNextToUserHooksAndKeepsOtherKeys() throws {
@@ -412,5 +412,25 @@ final class CanvasRendererTests: XCTestCase {
             return true
         }.value
         XCTAssertTrue(made)
+    }
+}
+
+/// Claude Code 2.1.28x: a Stop that still has background tasks isn't "done" (the tester saw false "Done").
+final class BackgroundStopTests: XCTestCase {
+    private func stop(_ tasks: String) -> HookPayload {
+        HookPayload(json: Data(#"{"hook_event_name":"Stop","session_id":"s","last_assistant_message":"Started the build.","background_tasks":\#(tasks)}"#.utf8))!
+    }
+
+    func testStopWithBackgroundWorkKeepsWorking() {
+        let payload = stop(#"[{"task_id":"a"},{"task_id":"b"}]"#)
+        XCTAssertEqual(payload.backgroundTasks, 2)
+        XCTAssertEqual(payload.status, .thinking)
+        XCTAssertEqual(payload.summary, "Waiting for 2 background tasks · Started the build.")
+        XCTAssertNil(Attention.from(.thinking, to: payload.status!), "no Done notification")
+    }
+
+    func testStopWithNothingLeftIsDone() {
+        XCTAssertEqual(stop("[]").status, .waitingInput)
+        XCTAssertEqual(HookPayload(json: Data(#"{"hook_event_name":"Stop","session_id":"s"}"#.utf8))?.status, .waitingInput)
     }
 }

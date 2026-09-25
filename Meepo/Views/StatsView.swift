@@ -152,7 +152,7 @@ struct SettingsView: View {
 /// Workflow order and the model/effort a new session gets in each stage.
 private struct StagesEditor: View {
     @Environment(AppStore.self) private var store
-    private let efforts = ["", "low", "medium", "high", "xhigh", "max"]
+    private let efforts = ClaudeLauncher.effortLevels
 
     var body: some View {
         @Bindable var store = store

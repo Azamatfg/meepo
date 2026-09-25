@@ -157,7 +157,7 @@ final class SessionUsageTests: XCTestCase {
 
         let usage = try XCTUnwrap(store.sessionUsage[session.id!])
         XCTAssertEqual(usage.contextTokens, 100_000)                 // latest main response, not the subagent's 190K
-        XCTAssertEqual(store.contextFraction(for: session.id!), 0.5) // of the default 200K window
+        XCTAssertEqual(store.contextFraction(for: session.id!), 0.1) // of Opus 5.5's 1M window
         XCTAssertEqual(usage.tokensToday, 10_402 + 100_000 + 190_402)
         let stats = store.usageStats(since: Calendar.current.startOfDay(for: .now))
         XCTAssertEqual(stats.byProject.map(\.name), [store.projects[0].name])

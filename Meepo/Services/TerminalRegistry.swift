@@ -22,7 +22,7 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
         view.nativeForegroundColor = NSColor(hex: 0x1B1A17) // Tokens.text
         view.caretColor = NSColor(hex: 0x2140D9)            // Tokens.work
         view.processDelegate = self
-        let args = ClaudeLauncher.lightTheme + ClaudeLauncher.claudeArguments(
+        let args = ClaudeLauncher.sessionSettings(effort: session.effort) + ClaudeLauncher.claudeArguments(
             sessionId: session.claudeSessionId,
             resume: ClaudeLauncher.hasTranscript(sessionId: session.claudeSessionId),
             model: session.model,

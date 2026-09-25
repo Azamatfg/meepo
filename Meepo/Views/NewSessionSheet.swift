@@ -5,6 +5,7 @@ struct NewSessionSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var projectId: Int64?
     @State private var model = ""
+    @State private var effort = ""
     @State private var prompt = ""
     @State private var error: String?
     @State private var useWorktree = false
@@ -44,6 +45,14 @@ struct NewSessionSheet: View {
                         Button(option.title) { model = option.value }
                     }
                 }
+            }
+            FieldRow("Effort") {
+                PixelMenu(selection: effort.isEmpty ? "Default" : effort) {
+                    ForEach(ClaudeLauncher.effortLevels, id: \.self) { level in
+                        Button(level.isEmpty ? "Default" : level) { effort = level }
+                    }
+                }
+                .help("How hard Claude thinks. ultracode also lets it run multi-agent workflows — slower and uses more of your limit")
             }
             Text("First prompt (optional)").font(.caption).foregroundStyle(Tokens.textDim)
             TextEditor(text: $prompt)
@@ -130,6 +139,7 @@ struct NewSessionSheet: View {
         do {
             try store.createSession(projectId: projectId, model: model.isEmpty ? nil : model,
                                     prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines),
+                                    effort: effort.isEmpty ? nil : effort,
                                     worktree: useWorktree ? featureName : nil)
             dismiss()
         } catch {

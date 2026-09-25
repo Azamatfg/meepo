@@ -102,7 +102,7 @@ final class AutoSyncStoreTests: XCTestCase {
         XCTAssertNil(store.hookReply(sessionId: session.id!, body: prompt))
     }
 
-    /// Uncommitted work: no pull, no stash — the agent is told to commit and rebase itself.
+    /// Uncommitted work: no pull, no stash — the agent is only told; git stays the user's (and Meepo's) business.
     func testDirtyFolderWaitsAndTheAgentIsTold() async throws {
         let team = try Team()
         let (store, session) = try store(for: team)
@@ -114,7 +114,11 @@ final class AutoSyncStoreTests: XCTestCase {
         XCTAssertEqual(GitService.headCommit(in: team.mine.path), before)
         XCTAssertTrue(store.pendingPulls.contains(team.mine.path))
         let prompt = Data(#"{"hook_event_name":"UserPromptSubmit","session_id":"x","prompt":"go"}"#.utf8)
-        XCTAssertTrue(try XCTUnwrap(store.hookReply(sessionId: session.id!, body: prompt)).contains("Not pulled yet"))
+        let note = try XCTUnwrap(store.hookReply(sessionId: session.id!, body: prompt))
+        XCTAssertTrue(note.contains("Not pulled yet"))
+        XCTAssertFalse(note.localizedCaseInsensitiveContains("commit your work"), "the user decides when to commit")
+        XCTAssertFalse(note.contains("then run git"), "no git instructions to the agent")
+        XCTAssertTrue(note.contains(#"teammate work""#) && note.contains(#"- ""#), "commit messages arrive quoted, as data")
         let stashes = try XCTUnwrap(GitService.outputAllowingFailure(["stash", "list"], in: team.mine.path))
         XCTAssertTrue(stashes.isEmpty)
     }

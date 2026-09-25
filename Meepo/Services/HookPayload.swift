@@ -17,6 +17,9 @@ struct HookPayload: Equatable {
     var commandName: String?
     /// TODO/FIXME/HACK/XXX lines an Edit/Write/MultiEdit put into a code file.
     var todoLines: [String] = []
+    /// Stop only: background work still running (Claude Code's `background_tasks`, 2.1.28x). A Stop with
+    /// some isn't "done" — the session carries on when they finish.
+    var backgroundTasks = 0
 
     init(event: String, claudeSessionId: String, source: String? = nil, notificationType: String? = nil,
          message: String? = nil, prompt: String? = nil, toolName: String? = nil, toolTarget: String? = nil,
@@ -56,6 +59,7 @@ struct HookPayload: Equatable {
             commandName: obj["command_name"] as? String
         )
         if event == "PostToolUse", let path { todoLines = Self.todoLines(in: written, file: path) }
+        backgroundTasks = (obj["background_tasks"] as? [Any])?.count ?? 0
     }
 
     /// Same rule as the common todo-tracker hook: markers in code files only (not docs, not task lists).
@@ -85,7 +89,7 @@ struct HookPayload: Equatable {
             case "idle_prompt": .waitingInput
             default: nil
             }
-        case "Stop": .waitingInput
+        case "Stop": backgroundTasks > 0 ? .thinking : .waitingInput
         case "StopFailure": .error
         case "SessionStart", "SessionEnd": .idle
         default: nil
@@ -103,7 +107,10 @@ struct HookPayload: Equatable {
         if let toolName {
             return [toolName, toolTarget].compactMap { $0 }.joined(separator: ": ")
         }
-        return lastAssistantMessage ?? message ?? prompt ?? source
+        let text = lastAssistantMessage ?? message ?? prompt ?? source
+        guard backgroundTasks > 0 else { return text }
+        let waiting = "Waiting for \(backgroundTasks) background task\(backgroundTasks == 1 ? "" : "s")"
+        return text.map { "\(waiting) · \($0)" } ?? waiting
     }
 }
 

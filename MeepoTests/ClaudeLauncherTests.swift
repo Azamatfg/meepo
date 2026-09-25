@@ -81,3 +81,21 @@ final class LoginTimeoutTests: XCTestCase {
         XCTAssertLessThan(Date.now.timeIntervalSince(start), 5)
     }
 }
+
+final class SessionSettingsTests: XCTestCase {
+    func testUltracodeIsASettingNeverAnEffortFlag() throws {
+        let args = ClaudeLauncher.claudeArguments(sessionId: "id", resume: false, model: nil, effort: "ultracode", prompt: nil)
+        XCTAssertFalse(args.contains("--effort"), "claude 2.1.282 ignores --effort ultracode with a warning")
+        let settings = ClaudeLauncher.sessionSettings(effort: "ultracode")
+        let json = try JSONSerialization.jsonObject(with: Data(settings[1].utf8)) as? [String: Any]
+        XCTAssertEqual(json?["ultracode"] as? Bool, true)
+        XCTAssertEqual(json?["theme"] as? String, "light")
+    }
+
+    func testOtherEffortsStayFlags() throws {
+        let args = ClaudeLauncher.claudeArguments(sessionId: "id", resume: false, model: nil, effort: "xhigh", prompt: nil)
+        XCTAssertEqual(Array(args.suffix(2)), ["--effort", "xhigh"])
+        let json = try JSONSerialization.jsonObject(with: Data(ClaudeLauncher.sessionSettings(effort: "xhigh")[1].utf8)) as? [String: Any]
+        XCTAssertNil(json?["ultracode"])
+    }
+}

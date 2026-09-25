@@ -56,7 +56,8 @@ struct BridgeInstaller {
         guard let hooks = (try? readSettings())?["hooks"] as? [String: Any] else { return false }
         return Self.events.allSatisfy { event in
             (hooks[event] as? [[String: Any]] ?? []).contains { group in
-                (group["hooks"] as? [[String: Any]] ?? []).contains { Self.isBridge($0) }
+                // The current command form too: older bridges ran the script bare.
+                (group["hooks"] as? [[String: Any]] ?? []).contains { $0["command"] as? String == hookCommand }
             }
         }
     }
@@ -65,13 +66,21 @@ struct BridgeInstaller {
         (handler["command"] as? String)?.contains(scriptName) ?? false
     }
 
+    /// What the hook runs: the script if it's there, else nothing. After Meepo is deleted (brew uninstall --zap
+    /// takes ~/.meepo) the entries left in ~/.claude/settings.json stay silent instead of failing every hook
+    /// in every Claude Code session. `exec` keeps the script's stdout — Meepo's reply to UserPromptSubmit.
+    var hookCommand: String {
+        let path = scriptURL.path.replacingOccurrences(of: "'", with: #"'\''"#)
+        return #"f='\#(path)'; [ -x "$f" ] && exec "$f"; exit 0"#
+    }
+
     /// Idempotent: replaces any previous bridge entries. Returns the backup, if there was a file to back up.
     @discardableResult
     func install() throws -> URL? {
         try writeScript()
         var settings = try readSettings()
         var hooks = Self.removingBridge(from: settings["hooks"] as? [String: Any] ?? [:])
-        let entry: [String: Any] = ["hooks": [["type": "command", "command": scriptURL.path, "timeout": 5]]]
+        let entry: [String: Any] = ["hooks": [["type": "command", "command": hookCommand, "timeout": 5]]]
         for event in Self.events {
             hooks[event] = (hooks[event] as? [Any] ?? []) + [entry]
         }

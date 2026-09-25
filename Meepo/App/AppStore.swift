@@ -147,7 +147,7 @@ final class AppStore {
         }
         reload()
         if sessionId == selectedSessionId { reloadEvents() }
-        if payload.event == "Stop", relayingSessionIds.contains(sessionId) {
+        if payload.event == "Stop", payload.backgroundTasks == 0, relayingSessionIds.contains(sessionId) {
             finishRelay(sessionId, summary: payload.lastAssistantMessage)
             return nil
         }
@@ -223,7 +223,7 @@ final class AppStore {
     private(set) var sessionUsage: [Int64: SessionUsage] = [:]
     private var isScanning = false
 
-    /// Context window per model (design: "sizes in settings"); unknown models get 200K.
+    /// Context window per model set by hand in Settings; other models get `nativeWindow`.
     var contextWindows: [String: Int] {
         didSet { defaults.set(try? JSONEncoder().encode(contextWindows), forKey: Self.contextWindowsKey) }
     }
@@ -233,7 +233,19 @@ final class AppStore {
     }
 
     func contextWindow(for model: String?) -> Int {
-        model.flatMap { contextWindows[$0] } ?? Self.defaultContextWindow
+        model.flatMap { contextWindows[$0] } ?? model.map(Self.nativeWindow) ?? Self.defaultContextWindow
+    }
+
+    /// Models whose window is 1M without asking — Claude Code's own model table (2.1.282).
+    private static let millionTokenModels: Set = ["claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-opus-5-5",
+                                                  "claude-sonnet-5", "claude-fable-5", "claude-fable-5-1",
+                                                  "claude-mythos-5", "claude-mythos-5-1"]
+
+    /// "claude-opus-5-5", "claude-opus-5-5-20260801" or "claude-sonnet-4-6[1m]" → the window Claude Code uses.
+    static func nativeWindow(_ model: String) -> Int {
+        if model.hasSuffix("[1m]") { return 1_000_000 }
+        let bare = model.replacingOccurrences(of: #"-\d{8}$"#, with: "", options: .regularExpression)
+        return millionTokenModels.contains(bare) ? 1_000_000 : defaultContextWindow
     }
 
     /// 0…1 (can exceed 1 if the window setting is too small); nil before the first response.
@@ -571,9 +583,9 @@ final class AppStore {
               let plan = latestReply(of: sessionId) else { return }
         let code = stages.first { $0.command == nil }
         let decisions = notes.isEmpty ? "" : "\n\nMy decisions and notes (they override the plan where they differ):\n\(notes)"
-        try createSession(projectId: session.projectId, model: code?.model ?? session.model,
-                          prompt: "Implement the plan below, prepared in a previous session.\n\n\(plan)\(decisions)",
-                          effort: code?.effort, stage: code?.name)
+        try successor(of: session, model: code?.model ?? session.model, effort: code?.effort, stage: code?.name,
+                      prompt: "Implement the plan below, prepared in a previous session.\n\n\(plan)\(decisions)",
+                      keepsPorts: false)
     }
 
     /// Relay: `/sync` (or a handoff request) in the old session; its reply seeds a fresh session in the
@@ -595,10 +607,11 @@ final class AppStore {
         guard let old = sessions.first(where: { $0.id == sessionId }) else { return }
         let handoff = summary.map { "\n\nHandoff from the previous session:\n\n\($0)" } ?? ""
         do {
-            try createSession(projectId: old.projectId, model: old.model,
-                              prompt: "Continue the task of the previous session (its context was full).\(handoff)",
-                              effort: old.effort, stage: old.stage)
+            let fresh = try successor(of: old, model: old.model, effort: old.effort, stage: old.stage,
+                                      prompt: "Continue the task of the previous session (its context was full).\(handoff)",
+                                      keepsPorts: true)
             closeSession(sessionId)
+            selectedSessionId = fresh
         } catch {
             bridgeError = error.localizedDescription
         }
@@ -1163,23 +1176,36 @@ final class AppStore {
     /// The old conversation stays in ~/.claude (claude --resume can still open it).
     func replaceSession(_ id: Int64) throws {
         guard let old = sessions.first(where: { $0.id == id }) else { return }
+        let fresh = try successor(of: old, model: old.model, effort: old.effort, stage: nil, prompt: nil, keepsPorts: true)
+        closeSession(id)
+        selectedSessionId = fresh
+    }
+
+    /// A new session that carries on where `old` works: the same worktree (or project folder) and branch,
+    /// never the main folder by accident. `keepsPorts` when the old one closes; otherwise both run at once
+    /// and the new one gets its own port range.
+    @discardableResult
+    func successor(of old: Session, model: String?, effort: String?, stage: String?, prompt: String?,
+                   keepsPorts: Bool) throws -> Int64? {
         var fresh = Session(
             projectId: old.projectId,
             claudeSessionId: UUID().uuidString.lowercased(),
-            model: old.model,
-            effort: old.effort,
+            model: model,
+            effort: effort,
             branch: old.branch,
-            stage: nil,
+            stage: stage,
             worktreeName: old.worktreeName,
             worktreeBase: old.worktreeBase,
-            portBase: old.portBase,
+            portBase: keepsPorts ? old.portBase : nextPortBase(),
             status: .idle,
             createdAt: .now,
             lastActiveAt: .now
         )
         try db.write { try fresh.insert($0) }
-        closeSession(id)
+        if let prompt, !prompt.isEmpty { initialPrompts[fresh.id!] = prompt }
+        reload()
         selectedSessionId = fresh.id
+        return fresh.id
     }
 
     /// Takes a project out of Meepo: its sessions close; the folder, git and Claude's conversations stay,

@@ -68,6 +68,35 @@ final class StageFlowTests: XCTestCase {
                               sessionId: id ?? session.id!)
     }
 
+    func testContextWindowsFollowClaudeCode() {
+        XCTAssertEqual(AppStore.nativeWindow("claude-opus-5-5"), 1_000_000)
+        XCTAssertEqual(AppStore.nativeWindow("claude-sonnet-5-20260601"), 1_000_000)
+        XCTAssertEqual(AppStore.nativeWindow("claude-sonnet-4-6"), 200_000)
+        XCTAssertEqual(AppStore.nativeWindow("claude-sonnet-4-6[1m]"), 1_000_000)
+        store.contextWindows["claude-opus-5-5"] = 200_000
+        XCTAssertEqual(store.contextWindow(for: "claude-opus-5-5"), 200_000, "a size set by hand wins")
+    }
+
+    func testPlanToCodeAndRelayStayInTheWorktree() throws {
+        try store.createSession(projectId: project.id!, model: "opus", prompt: nil, stage: "plan", worktree: "login")
+        let planner = session
+        send("UserPromptExpansion", command: "plan")
+        send("Stop", reply: "1. Do it")
+        try store.startImplementation(from: planner.id!)
+        let coder = store.sessions.last!
+        XCTAssertEqual(coder.worktreeName, "login", "code goes on in the plan's worktree, not the main folder")
+        XCTAssertEqual(coder.branch, planner.branch)
+        XCTAssertNotEqual(coder.portBase, planner.portBase, "both run at once, so their own ports")
+
+        store.relay(coder.id!)
+        send("Stop", reply: "handoff", to: coder.id!)
+        let relayed = store.sessions.last!
+        XCTAssertNotEqual(relayed.id, coder.id)
+        XCTAssertEqual(relayed.worktreeName, "login")
+        XCTAssertEqual(relayed.portBase, coder.portBase, "the old one closed; its ports carry over")
+        XCTAssertFalse(store.sessions.contains { $0.id == coder.id })
+    }
+
     func testOnlyStagesWhoseCommandsExistAreOffered() {
         // security and simplify: security missing; simplify is a Claude Code built-in.
         XCTAssertEqual(store.stages(for: project.id!).map(\.name), ["plan", "code", "qa", "simplify", "ship", "sync"])
@@ -175,5 +204,53 @@ final class CommandCopyTests: XCTestCase {
         try "user's own global plan".write(to: global, atomically: true, encoding: .utf8)
         store.copyCommand("plan", from: source, toProject: nil, home: tmp)
         XCTAssertEqual(try String(contentsOf: global, encoding: .utf8), "user's own global plan")
+    }
+}
+
+/// After Meepo is deleted its hook entries must not break Claude Code (brew uninstall --zap takes ~/.meepo).
+final class BridgeCommandTests: XCTestCase {
+    private func run(_ command: String, input: String) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = URL(filePath: "/bin/sh")
+        process.arguments = ["-c", command]
+        let stdin = Pipe(), stdout = Pipe()
+        process.standardInput = stdin
+        process.standardOutput = stdout
+        process.standardError = Pipe()
+        try process.run()
+        stdin.fileHandleForWriting.write(Data(input.utf8))
+        try stdin.fileHandleForWriting.close()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(decoding: stdout.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+    }
+
+    func testAMissingScriptIsASilentSuccess() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: "gone \(UUID().uuidString)") // a space, too
+        let installer = BridgeInstaller(settingsURL: dir.appending(path: "settings.json"), meepoHome: dir)
+        let result = try run(installer.hookCommand, input: "{}")
+        XCTAssertEqual(result.status, 0)
+        XCTAssertEqual(result.output, "")
+    }
+
+    func testThePresentScriptGetsStdinAndItsReplyComesOut() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: "here \(UUID().uuidString)")
+        let installer = BridgeInstaller(settingsURL: dir.appending(path: "settings.json"), meepoHome: dir)
+        try FileManager.default.createDirectory(at: installer.scriptURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "#!/bin/sh\ncat\n".write(to: installer.scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: installer.scriptURL.path)
+        XCTAssertEqual(try run(installer.hookCommand, input: "reply for claude").output, "reply for claude")
+    }
+
+    func testABareScriptPathFromAnOlderMeepoGetsReplaced() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: "old-\(UUID().uuidString)")
+        let installer = BridgeInstaller(settingsURL: dir.appending(path: "settings.json"), meepoHome: dir)
+        let bare: [String: Any] = ["hooks": [["type": "command", "command": installer.scriptURL.path, "timeout": 5]]]
+        let old = ["hooks": Dictionary(uniqueKeysWithValues: BridgeInstaller.events.map { ($0, [bare]) })]
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: old).write(to: installer.settingsURL)
+        XCTAssertTrue(installer.isInstalled())
+        XCTAssertFalse(installer.isUpToDate(), "an old bare path fails hooks once ~/.meepo is gone")
+        try installer.install()
+        XCTAssertTrue(installer.isUpToDate())
     }
 }
