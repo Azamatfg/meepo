@@ -126,6 +126,10 @@ enum AppDatabase {
             }
         }
 
+        migrator.registerMigration("v10-session-names") { db in
+            try db.alter(table: "session") { t in t.add(column: "name", .text) }
+        }
+
         return migrator
     }
 }

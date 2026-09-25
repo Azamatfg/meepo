@@ -45,12 +45,17 @@ struct MeepoApp: App {
                     Task { // Updates like Claude Code: at launch, then every 6 hours; installed at quit.
                         while !Task.isCancelled {
                             await store.checkForUpdates()
-                            try? await Task.sleep(for: .seconds(6 * 3600))
+                            try? await Task.sleep(for: .seconds(3600)) // hourly: betas come out more than once a day
                         }
                     }
                     Task { // Teammates' commits: every 5 minutes, and when the user comes back to Meepo.
                         let activations = NotificationCenter.default.notifications(named: NSApplication.didBecomeActiveNotification)
-                        Task { for await _ in activations { await store.autoSync() } }
+                        Task {
+                            for await _ in activations {
+                                await store.autoSync()
+                                await store.checkForUpdatesIfStale()
+                            }
+                        }
                         while !Task.isCancelled {
                             await store.autoSync()
                             try? await Task.sleep(for: .seconds(300))

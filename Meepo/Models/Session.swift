@@ -30,6 +30,8 @@ struct Session: Codable, Identifiable, Hashable, FetchableRecord, MutablePersist
     var status: SessionStatus
     var createdAt: Date
     var lastActiveAt: Date
+    /// The user's name for it (`claude --name`), so two sessions of one project can be told apart.
+    var name: String? = nil
 
     mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID

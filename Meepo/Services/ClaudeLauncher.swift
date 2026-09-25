@@ -64,8 +64,10 @@ enum ClaudeLauncher {
     }
 
     static func claudeArguments(sessionId: String, resume: Bool, model: String?, effort: String? = nil,
-                                worktree: String? = nil, remoteControl: String? = nil, prompt: String?) -> [String] {
+                                worktree: String? = nil, remoteControl: String? = nil, prompt: String?,
+                                name: String? = nil) -> [String] {
         var args = resume ? ["--resume", sessionId] : ["--session-id", sessionId]
+        if let name, !name.isEmpty { args += ["--name", name] }  // shown in the prompt box, /resume, Remote Control
         if let worktree { args += ["--worktree", worktree] }
         if let remoteControl { args += ["--remote-control", remoteControl] }
         if let model, !model.isEmpty { args += ["--model", model] }

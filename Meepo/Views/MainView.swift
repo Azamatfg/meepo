@@ -53,6 +53,11 @@ struct MainView: View {
         .sheet(isPresented: $isToolsShown) { ToolsView() }
         .sheet(isPresented: $isNotesShown) { NotesView() }
         .sheet(isPresented: $isImportShown) { ImportView() }
+        .sheet(isPresented: Binding(get: { store.renamingSessionId != nil }, set: { if !$0 { store.renamingSessionId = nil } })) {
+            if let id = store.renamingSessionId, let session = store.sessions.first(where: { $0.id == id }) {
+                RenameSheet(session: session)
+            }
+        }
         .sheet(isPresented: Binding(get: { !isOnboarded }, set: { if !$0 { isOnboarded = true } })) { OnboardingView() }
         .fileImporter(isPresented: $isPickingFolder, allowedContentTypes: [.folder]) { result in
             do {
@@ -183,7 +188,7 @@ private struct SessionTab: View {
         TabButton(isOn: !store.isHomeShown && store.selectedSessionId == session.id,
                   action: { store.selectedSessionId = session.id }) {
             SelectionRing(kind: look.ring)
-            Text(siblings > 1 ? "\(project) · \(session.worktreeName ?? session.branch ?? "")" : project)
+            Text(siblings > 1 ? "\(project) · \(store.displayName(of: session))" : project)
                 .lineLimit(1).truncationMode(.middle).frame(maxWidth: 200)
         }
         .contextMenu { SessionMenu(session: session) }
@@ -512,7 +517,8 @@ private struct WaitingPanel: View {
                     HStack(spacing: 10) {
                         SelectionRing(kind: .waiting)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(store.project(for: session)?.name ?? "?").font(Fonts.ui(14, weight: .semibold))
+                            Text("\(store.project(for: session)?.name ?? "?") · \(store.displayName(of: session))")
+                                .font(Fonts.ui(14, weight: .semibold)).lineLimit(1)
                             Text(store.look(of: session).text).font(.caption).foregroundStyle(Tokens.need)
                         }
                         Spacer(minLength: 0)
@@ -589,8 +595,11 @@ private struct TerminalPane: View {
             SelectionRing(kind: look.ring)
             Text(store.project(for: session)?.name ?? "").font(Fonts.ui(14, weight: .bold))
                 .lineLimit(1).truncationMode(.middle).layoutPriority(2)
+            Text(store.displayName(of: session)).font(Fonts.ui(14)).lineLimit(1).truncationMode(.tail).layoutPriority(1)
+                .onTapGesture(count: 2) { store.renamingSessionId = sessionId }
+                .help("Double-click to rename")
             Text(session.worktreeName.map { "worktree \($0)" } ?? session.branch ?? "").font(Fonts.mono(12)).foregroundStyle(Tokens.textDim)
-                .lineLimit(1).layoutPriority(1)
+                .lineLimit(1)
             Text(look.text).font(.caption).foregroundStyle(look.ring == .waiting ? Tokens.need : Tokens.textDim)
                 .lineLimit(1).fixedSize().layoutPriority(3)
             if let chain = store.runningChains[sessionId] {
@@ -706,6 +715,14 @@ private struct StatusBar: View {
             }
             if let report = store.lastCrashReport { CrashNotice(report: report) }
             Spacer(minLength: 8)
+            if case let .ready(version, _) = store.updateState {
+                Button("Meepo \(version) ready · Restart") {
+                    store.relaunchAfterQuit = true
+                    NSApp.terminate(nil)
+                }
+                .buttonStyle(.plain).foregroundStyle(Tokens.work).fontWeight(.semibold)
+                .help("Downloaded and checked. Restart now, or it installs when you quit Meepo")
+            }
             if let claude = store.claudeVersion { Text("Claude Code \(claude)") }
             Text(store.shellPreset.title)
             if let version = Updater.currentVersion { Text("Meepo \(version.description)") }

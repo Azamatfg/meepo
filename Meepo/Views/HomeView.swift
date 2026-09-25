@@ -62,7 +62,7 @@ private struct SessionCard: View {
                 HStack(spacing: 8) {
                     SelectionRing(kind: look.ring, size: 9)
                     Text(store.project(for: session)?.name ?? "?").font(Fonts.ui(19, weight: .bold)).lineLimit(1)
-                    Text(session.worktreeName.map { "worktree \($0)" } ?? session.branch ?? "").font(Fonts.mono(12))
+                    Text(store.displayName(of: session)).font(Fonts.ui(14))
                         .foregroundStyle(Tokens.textDim).lineLimit(1)
                     Spacer(minLength: 4)
                     Text(look.text.uppercased()).font(Fonts.ui(11, weight: .bold)).tracking(1)
@@ -151,6 +151,7 @@ private struct TimelineLanes: View {
                         SelectionRing(kind: look.ring)
                         Text(store.project(for: session)?.name ?? "?").font(Fonts.ui(15, weight: .bold)).lineLimit(1)
                     }
+                    Text(store.displayName(of: session)).font(.caption).lineLimit(1).padding(.leading, 15)
                     Text(look.text).font(.caption).foregroundStyle(look.ring == .waiting ? Tokens.need : Tokens.textDim)
                         .lineLimit(1).padding(.leading, 15)
                 }

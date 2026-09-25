@@ -8,6 +8,8 @@ struct StatusLine: Equatable {
         var resetsAt: Date?
     }
 
+    /// The name Claude Code shows for the session (`/rename`, `--name`).
+    var sessionName: String?
     var modelId: String?
     var modelName: String?
     var effort: String?
@@ -22,6 +24,7 @@ struct StatusLine: Equatable {
         guard let obj = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
               obj["hook_event_name"] == nil, obj["session_id"] is String,
               obj["model"] != nil || obj["context_window"] != nil else { return nil }
+        sessionName = obj["session_name"] as? String
         let model = obj["model"] as? [String: Any]
         modelId = model?["id"] as? String
         modelName = model?["display_name"] as? String

@@ -38,6 +38,9 @@ final class AppStore {
         didSet {
             reloadEvents()
             isHomeShown = false
+            if let id = selectedSessionId, paneAnchor.map({ paneWindow(from: $0, count: shell.split).contains(id) }) != true {
+                paneAnchor = id
+            }
         }
     }
     /// Non-nil while the "new session" sheet is shown; the project preselected in it.
@@ -120,6 +123,39 @@ final class AppStore {
             if let version = output.flatMap(ClaudeChangelog.version(fromCLI:)) { noteClaudeVersion(version, changelog: changelog ?? "") }
         }
         await checkClaudeLogin()
+    }
+
+    // MARK: Session names
+
+    /// What to call a session: the user's name for it, else Claude Code's (after /rename), else its first
+    /// request — so two sessions of one project read differently everywhere.
+    func displayName(of session: Session) -> String {
+        if let name = session.name { return name }
+        if let id = session.id, let named = liveStatus[id]?.sessionName, !named.isEmpty { return named }
+        if let id = session.id, let first = firstRequest(of: id) { return Notifier.plainText(first, limit: 40) }
+        return session.worktreeName.map { "worktree \($0)" } ?? session.branch ?? "session"
+    }
+
+    private func firstRequest(of sessionId: Int64) -> String? {
+        try? db.read { db in
+            try String.fetchOne(db, sql: """
+                SELECT summary FROM hookEvent WHERE sessionId = ? AND name = 'UserPromptSubmit' AND summary <> ''
+                ORDER BY createdAt, id LIMIT 1
+                """, arguments: [sessionId])
+        }
+    }
+
+    /// The session whose Rename box is open.
+    var renamingSessionId: Int64?
+
+    /// Renames in Meepo, and in Claude Code too when the session is running (`/rename` works mid-turn).
+    func rename(_ sessionId: Int64, to name: String) {
+        guard var session = sessions.first(where: { $0.id == sessionId }) else { return }
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        session.name = clean.isEmpty ? nil : clean
+        _ = try? db.write { try session.update($0) }
+        reload()
+        if !clean.isEmpty, runningSessionIds.contains(sessionId) { type("/rename \(clean)\r", into: sessionId) }
     }
 
     // MARK: Onboarding — the two ways in
@@ -771,11 +807,16 @@ final class AppStore {
             return
         }
         guard autoUpdate || userInitiated else { return }
-        if case .ready = updateState { if userInitiated { notice("UPDATE READY", "It installs when you quit Meepo.") }; return }
+        // One already downloaded: still look for a newer one (a day of releases shouldn't stop at the first).
+        var baseline = current
+        if case let .ready(staged, _) = updateState, let version = Updater.Version(staged) { baseline = version }
+        let wasReady = updateState
         updateState = .checking
+        lastUpdateCheck = .now
         do {
             let releases = try await Updater.fetchReleases()
-            guard let release = Updater.pick(releases, channel: updateChannel, current: current), let version = release.version else {
+            guard let release = Updater.pick(releases, channel: updateChannel, current: baseline), let version = release.version else {
+                if case .ready = wasReady { updateState = wasReady; return }
                 updateState = .upToDate
                 if userInitiated { notice("MEEPO IS UP TO DATE", "\(current) is the newest on the \(updateChannel.rawValue) channel.") }
                 return
@@ -796,9 +837,17 @@ final class AppStore {
             stagedUpdate = app
             updateState = .ready(version: version.text, notes: release.body ?? "")
         } catch {
-            updateState = .idle
+            if case .ready = wasReady { updateState = wasReady } else { updateState = .idle }
             if userInitiated { notice("UPDATE FAILED", error.localizedDescription) }
         }
+    }
+
+    private(set) var lastUpdateCheck: Date?
+
+    /// When Meepo comes to the front: check again if the last look was over an hour ago.
+    func checkForUpdatesIfStale() async {
+        guard lastUpdateCheck.map({ Date.now.timeIntervalSince($0) > 3600 }) ?? true else { return }
+        await checkForUpdates()
     }
 
     /// At quit (and RESTART NOW): puts the verified download in place of this app. True when it did.
@@ -948,11 +997,23 @@ final class AppStore {
     /// How many terminals the center actually fits right now (a narrow window shows fewer than the split).
     var fittingPanes: Int?
 
-    /// Sessions whose terminals are on screen: the selected one first, then the next ones up to the split.
+    /// Where the row of terminals on screen starts. Picking a session already on screen keeps it (clicking the
+    /// second terminal just focuses it — the tester found panes swapping places confusing); picking one that
+    /// isn't moves the row to start there.
+    private var paneAnchor: Int64?
+
+    /// Sessions whose terminals are on screen, in the sidebar's order, the selected one among them.
     var visibleSessionIds: [Int64] {
         guard !isHomeShown, let selected = selectedSessionId else { return [] }
-        let others = orderedSessions.compactMap(\.id).filter { $0 != selected }
-        return Array(([selected] + others).prefix(min(shell.split, fittingPanes ?? shell.split)))
+        let count = min(shell.split, fittingPanes ?? shell.split)
+        let window = paneWindow(from: paneAnchor ?? selected, count: count)
+        return window.contains(selected) ? window : paneWindow(from: selected, count: count)
+    }
+
+    private func paneWindow(from anchor: Int64, count: Int) -> [Int64] {
+        let ids = orderedSessions.compactMap(\.id)
+        guard let start = ids.firstIndex(of: anchor) else { return Array(ids.prefix(count)) }
+        return Array((ids[start...] + ids[..<start]).prefix(count))
     }
 
     /// Git state of the selected session's folder, shared by Explorer and Source Control.
@@ -1616,7 +1677,7 @@ final class AppStore {
     /// `worktree`: a feature name — the session runs in its own git worktree (`claude -w`), SPEC module 5.
     /// `resuming`: an existing Claude Code conversation (e.g. imported from an IDE); it opens with `--resume`.
     func createSession(projectId: Int64, model: String?, prompt: String?, effort: String? = nil, stage: String? = nil,
-                       worktree: String? = nil, resuming: String? = nil) throws {
+                       worktree: String? = nil, resuming: String? = nil, name: String? = nil) throws {
         guard let project = projects.first(where: { $0.id == projectId }) else { return }
         let worktreeName = worktree.map(ClaudeLauncher.worktreeSlug).flatMap { $0.isEmpty ? nil : $0 }
         if worktreeName != nil { GitService.ensureWorktreesIgnored(in: project.path, backups: backupsDir) }
@@ -1632,7 +1693,8 @@ final class AppStore {
             portBase: nextPortBase(),
             status: .idle,
             createdAt: .now,
-            lastActiveAt: .now
+            lastActiveAt: .now,
+            name: name.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0.trimmingCharacters(in: .whitespaces) }
         )
         try db.write { try session.insert($0) }
         if let prompt, !prompt.isEmpty { initialPrompts[session.id!] = prompt }

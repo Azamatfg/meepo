@@ -61,11 +61,12 @@ private struct SessionRow: View {
         HStack(alignment: .top, spacing: 10) {
             SelectionRing(kind: look.ring).padding(.top, 5)
             VStack(alignment: .leading, spacing: 4) {
-                Text(session.worktreeName.map { "worktree \($0)" } ?? session.branch ?? "no branch")
+                Text(store.displayName(of: session))
                     .font(Fonts.ui(14, weight: .semibold))
                     .foregroundStyle(Tokens.text)
                     .lineLimit(1)
-                Text([look.text, session.stage?.uppercased(), session.model].compactMap { $0 }.joined(separator: " · "))
+                Text([look.text, session.worktreeName.map { "worktree \($0)" } ?? session.branch, session.stage?.uppercased()]
+                    .compactMap { $0 }.joined(separator: " · "))
                     .font(.caption)
                     .foregroundStyle(look.ring == .waiting ? Tokens.need : Tokens.textDim)
                     .lineLimit(1)
@@ -110,6 +111,7 @@ struct SessionMenu: View {
 
     var body: some View {
         let place = session.worktreeName.map { "worktree \($0)" } ?? session.branch ?? "this folder"
+        Button("Rename…") { store.renamingSessionId = session.id }
         Button("New Session Instead…") {
             store.confirmation = PixelConfirmation(
                 title: "Start a fresh session?",

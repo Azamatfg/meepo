@@ -86,7 +86,11 @@ final class ShellStoreTests: XCTestCase {
         store.applyPreset(.focus)
         XCTAssertEqual(store.visibleSessionIds, [ids[1]])
         store.applyPreset(.full)
-        XCTAssertEqual(store.visibleSessionIds, [ids[1], ids[0]], "The selected one first, then the others in order")
+        XCTAssertEqual(store.visibleSessionIds, [ids[1], ids[2]], "from the selected one on, in the sidebar's order")
+        store.selectedSessionId = ids[2]
+        XCTAssertEqual(store.visibleSessionIds, [ids[1], ids[2]], "clicking the other terminal focuses it; nothing moves")
+        store.selectedSessionId = ids[0]
+        XCTAssertEqual(store.visibleSessionIds, [ids[0], ids[1]], "a session not on screen brings its own row")
         store.isHomeShown = true
         XCTAssertEqual(store.visibleSessionIds, [], "Home shows no terminal, so notifications still come")
         store.selectedSessionId = ids[2]

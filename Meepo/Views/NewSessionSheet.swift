@@ -5,6 +5,7 @@ struct NewSessionSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var projectId: Int64?
     @State private var model = ""
+    @State private var name = ""
     @State private var effort = ""
     /// Worktrees need git; a plain folder project runs sessions in the folder itself. Read off the main
     /// thread when the project changes — never from `body` (running git there crashed, 2026-09-25).
@@ -41,6 +42,12 @@ struct NewSessionSheet: View {
                     .padding(6)
                     .background(Tokens.terminalBg)
                     .sunken()
+            }
+            FieldRow("Name") {
+                TextField("optional — e.g. refunds, bugfix login", text: $name)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 260)
+                    .help("Tells this session apart from others in the same project; Claude Code shows it too")
             }
             FieldRow("Model") {
                 PixelMenu(selection: store.modelChoices().first { $0.value == model }?.title ?? model) {
@@ -141,7 +148,7 @@ struct NewSessionSheet: View {
             try store.createSession(projectId: projectId, model: model.isEmpty ? nil : model,
                                     prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines),
                                     effort: effort.isEmpty ? nil : effort,
-                                    worktree: useWorktree ? featureName : nil)
+                                    worktree: useWorktree ? featureName : nil, name: name)
             dismiss()
         } catch {
             self.error = error.localizedDescription
