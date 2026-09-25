@@ -19,6 +19,7 @@ struct HomeView: View {
                         .foregroundStyle(Tokens.textDim)
                 }
                 if !store.claudeNews.isEmpty { ClaudeNewsCard() }
+                if let noticed = store.visibleSuggestions.first { NoticedRow(suggestion: noticed, isCard: true) }
                 HStack(spacing: 2) {
                     ForEach([("deck", "Deck"), ("timeline", "Timeline")], id: \.0) { key, title in
                         Button(title) { mode = key }

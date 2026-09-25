@@ -9,6 +9,7 @@ struct AutomationsView: View {
     @State private var items: [Automations.Item]?
     @State private var overrides: [String: String] = [:]
     @State private var error: String?
+    @State private var measures: [String: (before: Double, after: Double?)] = [:]
 
     private static let efforts = ["", "low", "medium", "high", "xhigh", "max"]
 
@@ -27,6 +28,17 @@ struct AutomationsView: View {
                 let fading = items.filter { Automations.isFading($0) }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 6) {
+                        if !store.visibleSuggestions.isEmpty {
+                            section("MEEPO NOTICED")
+                            ForEach(store.visibleSuggestions) { NoticedRow(suggestion: $0) }
+                        }
+                        if !store.chains.isEmpty {
+                            section("YOUR CHAINS")
+                            ForEach(store.chains, id: \.self) { chainRow($0) }
+                        }
+                        section("DID MEEPO HELP?")
+                        ForEach(Noticing.meepoReplacements, id: \.command) { measureRow($0) }
+                        section("SKILLS AND COMMANDS")
                         header
                         ForEach(active) { row($0) }
                         if !fading.isEmpty {
@@ -47,6 +59,37 @@ struct AutomationsView: View {
         .frame(width: 980, height: 680)
         .paperSheet()
         .task { await reload() }
+    }
+
+    private func section(_ title: String) -> some View {
+        Text(title).font(Fonts.ui(11, weight: .bold)).tracking(1.2).foregroundStyle(Tokens.textDim).padding(.top, 14)
+    }
+
+    private func chainRow(_ chain: [String]) -> some View {
+        HStack {
+            Text(chain.map { "/" + $0 }.joined(separator: " → ")).font(Fonts.mono(13).weight(.semibold))
+            Text("ran to the end \(store.chainRuns[chain.joined(separator: ">")] ?? 0)×").foregroundStyle(Tokens.textDim)
+            Spacer()
+            Button("Remove") { store.removeChain(chain) }.buttonStyle(PixelButtonStyle(compact: true))
+        }
+        .padding(12)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// A change in Meepo against the user's real behavior: how often they still reach for the old way.
+    private func measureRow(_ item: (command: String, feature: String, since: Date)) -> some View {
+        let rate = measures[item.command]
+        return HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.feature).font(Fonts.ui(14, weight: .semibold))
+                Text("You typed /\(item.command) " + (rate.map { String(format: "%.0f× a week before", $0.before) } ?? "…")
+                     + (rate.map { $0.after.map { String(format: ", %.0f× a week since.", $0) } ?? " — measuring, check back after a week." } ?? ""))
+                    .font(.caption).foregroundStyle(Tokens.textDim)
+            }
+            Spacer()
+        }
+        .padding(12)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 10))
     }
 
     private var header: some View {
@@ -154,6 +197,12 @@ struct AutomationsView: View {
     private func reload() async {
         overrides = store.skillOverrides()
         items = await store.automations()
+        await store.refreshSuggestions()
+        measures = await Task.detached {
+            let text = (try? String(contentsOf: Automations.historyFile, encoding: .utf8)) ?? ""
+            let entries = Noticing.entries(historyLines: text.split(separator: "\n"))
+            return Dictionary(uniqueKeysWithValues: Noticing.meepoReplacements.map { ($0.command, Noticing.rate(of: $0.command, in: entries, around: $0.since)) })
+        }.value
     }
 }
 

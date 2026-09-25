@@ -73,12 +73,13 @@ final class ShellSnapshotTests: XCTestCase {
         let tmp = FileManager.default.temporaryDirectory.appending(path: "snapa-\(UUID().uuidString)")
         let store = AppStore(db: db, bridge: BridgeInstaller(settingsURL: tmp.appending(path: "s.json"), meepoHome: tmp),
                              usageRoot: tmp, defaults: UserDefaults(suiteName: "meepo-snap-\(UUID().uuidString)")!)
-        try store.addProject(at: URL(filePath: FileManager.default.currentDirectoryPath))
+        try store.addProject(at: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()) // this repo
+        store.refreshProjects()
         let window = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 980, height: 680), styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = NSHostingView(rootView: AutomationsView().environment(store))
         window.makeKeyAndOrderFront(nil)
         defer { window.orderOut(nil) }
-        try await Task.sleep(for: .seconds(3))
+        try await Task.sleep(for: .seconds(4))
         let view = try XCTUnwrap(window.contentView)
         let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.cacheDisplay(in: view.bounds, to: rep)

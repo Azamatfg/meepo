@@ -50,6 +50,13 @@ struct StagePanel: View {
                     .overlay { if index == next { Capsule().strokeBorder(Tokens.work, lineWidth: 1.5) } }
                     .help(help(for: stage))
             }
+            ForEach(store.chains(for: session.projectId), id: \.self) { chain in
+                Button(chain.map { "/" + $0 }.joined(separator: " → ")) { store.runChain(chain, in: session.id!) }
+                    .buttonStyle(PixelButtonStyle())
+                    .overlay { Capsule().strokeBorder(Tokens.work.opacity(0.5), lineWidth: 1) }
+                    .disabled(store.runningChains[session.id!] != nil)
+                    .help("Runs them in order, each after the one before really ends (Automations)")
+            }
             let others = (store.commandsByProject[session.projectId] ?? [])
                 .filter { command in !stages.contains { $0.command == command.name } }
             if !others.isEmpty {

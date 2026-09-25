@@ -545,6 +545,14 @@ private struct TerminalPane: View {
                 .lineLimit(1).layoutPriority(1)
             Text(look.text).font(.caption).foregroundStyle(look.ring == .waiting ? Tokens.need : Tokens.textDim)
                 .lineLimit(1).fixedSize().layoutPriority(3)
+            if let chain = store.runningChains[sessionId] {
+                Text(chain.paused ? "Chain paused — Claude asked something" : "Chain \(min(chain.next, chain.commands.count))/\(chain.commands.count)")
+                    .font(.caption).foregroundStyle(chain.paused ? Tokens.need : Tokens.work).lineLimit(1).fixedSize()
+                if chain.paused {
+                    Button("Continue chain") { store.resumeChain(sessionId) }.buttonStyle(PixelButtonStyle(compact: true, isPrimary: true))
+                }
+                Button("Stop") { store.stopChain(sessionId) }.buttonStyle(PixelButtonStyle(compact: true))
+            }
             if store.interruptedSessionIds.contains(sessionId) {
                 Button("Continue") { store.continueInterrupted(sessionId) }
                     .buttonStyle(PixelButtonStyle(compact: true, isPrimary: true))

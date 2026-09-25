@@ -61,6 +61,9 @@ final class AppStore {
         self.defaults = defaults
         contextWindows = Self.load([String: Int].self, Self.contextWindowsKey, from: defaults) ?? [:]
         stages = Self.load([Stage].self, Self.stagesKey, from: defaults) ?? Stage.defaults
+        suggestionStates = Self.load([String: SuggestionState].self, Self.suggestionsKey, from: defaults) ?? [:]
+        chains = Self.load([[String]].self, Self.chainsKey, from: defaults) ?? []
+        chainRuns = (defaults.dictionary(forKey: Self.chainRunsKey) as? [String: Int]) ?? [:]
         let preset = defaults.string(forKey: Self.shellPresetKey).flatMap(ShellLayout.Preset.init(rawValue:)) ?? .focus
         shellPreset = preset
         shell = Self.load(ShellLayout.self, Self.shellKey, from: defaults) ?? ShellLayout.preset(preset) ?? ShellLayout.preset(.focus)!
@@ -167,6 +170,157 @@ final class AppStore {
             ChangeLog.record((applied ? "" : "Undo: ") + "\(finding.fixTitle): \(file.lastPathComponent)", file: file,
                              backup: backup, backups: backupsDir)
         }
+    }
+
+    // MARK: Noticing — suggestions from the user's own history, applied with their say-so, then measured
+
+    struct SuggestionState: Codable, Equatable {
+        var dismissedAt: Int?     // the count when "Not now" was clicked; it comes back once that doubles
+        var appliedAt: Date?
+    }
+
+    private static let suggestionsKey = "suggestionStates"
+    private static let chainsKey = "chains"
+    private static let chainRunsKey = "chainRuns"
+
+    private(set) var suggestionStates: [String: SuggestionState] = [:]
+    /// Everything noticed in history, newest reading; `visibleSuggestions` filters what the user already answered.
+    private(set) var suggestions: [Noticing.Suggestion] = []
+    /// Command chains the user turned into buttons, e.g. ["simplify", "ship", "sync"].
+    private(set) var chains: [[String]] = []
+    /// How many times each chain ran to the end — the measure for an applied chain.
+    private(set) var chainRuns: [String: Int] = [:]
+    /// Chains running now: which step comes next; `paused` when Claude ended a step with a question.
+    private(set) var runningChains: [Int64: (commands: [String], next: Int, paused: Bool)] = [:]
+
+    var visibleSuggestions: [Noticing.Suggestion] {
+        suggestions.filter { suggestion in
+            let state = suggestionStates[suggestion.id]
+            guard state?.appliedAt == nil else { return false }
+            return state?.dismissedAt.map { suggestion.count >= 2 * $0 } ?? true
+        }
+    }
+
+    /// Reads history.jsonl off the main thread and finds chains and repeated requests.
+    func refreshSuggestions() async {
+        let known = Set(commandsByProject.values.flatMap { $0.map(\.name) } + CommandCatalog.builtIns.map(\.name))
+        suggestions = await Task.detached {
+            let text = (try? String(contentsOf: Automations.historyFile, encoding: .utf8)) ?? ""
+            let entries = Noticing.entries(historyLines: text.split(separator: "\n"))
+            let since = Date.now.addingTimeInterval(-Noticing.window)
+            return Noticing.chains(entries, known: known, since: since) + Noticing.repeatedPrompts(entries, since: since)
+        }.value
+    }
+
+    func dismissSuggestion(_ suggestion: Noticing.Suggestion) {
+        suggestionStates[suggestion.id, default: SuggestionState()].dismissedAt = suggestion.count
+        saveSuggestionStates()
+    }
+
+    func addChain(_ commands: [String], from suggestion: Noticing.Suggestion? = nil) {
+        if !chains.contains(commands) { chains.append(commands) }
+        defaults.set(try? JSONEncoder().encode(chains), forKey: Self.chainsKey)
+        if let suggestion { markApplied(suggestion) }
+    }
+
+    func removeChain(_ commands: [String]) {
+        chains.removeAll { $0 == commands }
+        defaults.set(try? JSONEncoder().encode(chains), forKey: Self.chainsKey)
+        if let key = suggestionStates.keys.first(where: { $0 == "chain:" + commands.joined(separator: ">") }) {
+            suggestionStates[key]?.appliedAt = nil
+            saveSuggestionStates()
+        }
+    }
+
+    func markApplied(_ suggestion: Noticing.Suggestion) {
+        suggestionStates[suggestion.id, default: SuggestionState()].appliedAt = .now
+        saveSuggestionStates()
+    }
+
+    private func saveSuggestionStates() {
+        defaults.set(try? JSONEncoder().encode(suggestionStates), forKey: Self.suggestionsKey)
+    }
+
+    /// Chains this project can run: every command in it exists here (own or built in).
+    func chains(for projectId: Int64) -> [[String]] {
+        let names = Set((commandsByProject[projectId] ?? []).map(\.name))
+        return chains.filter { $0.allSatisfy(names.contains) }
+    }
+
+    /// Types the first command; each next one follows the session's real end of turn (a Stop with no
+    /// background work). A step that ends with a question pauses the chain until the user resumes it.
+    func runChain(_ commands: [String], in sessionId: Int64) {
+        guard let first = commands.first else { return }
+        runningChains[sessionId] = (commands, 1, false)
+        type("/\(first)\r", into: sessionId)
+    }
+
+    func resumeChain(_ sessionId: Int64) {
+        guard let run = runningChains[sessionId] else { return }
+        runningChains[sessionId]?.paused = false
+        advanceChain(sessionId, run: (run.commands, run.next, false))
+    }
+
+    func stopChain(_ sessionId: Int64) { runningChains[sessionId] = nil }
+
+    private func advanceChain(_ sessionId: Int64, run: (commands: [String], next: Int, paused: Bool)) {
+        guard run.next < run.commands.count else {
+            runningChains[sessionId] = nil
+            chainRuns[run.commands.joined(separator: ">"), default: 0] += 1
+            defaults.set(chainRuns, forKey: Self.chainRunsKey)
+            return
+        }
+        runningChains[sessionId] = (run.commands, run.next + 1, false)
+        type("/\(run.commands[run.next])\r", into: sessionId)
+    }
+
+    /// Called for every hook event of a session with a chain running.
+    private func stepChain(_ payload: HookPayload, sessionId: Int64) {
+        guard let run = runningChains[sessionId], !run.paused else { return }
+        if payload.event == "StopFailure" { runningChains[sessionId] = nil; return }
+        guard payload.event == "Stop", payload.backgroundTasks == 0 else { return }
+        let reply = (payload.lastAssistantMessage ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if reply.hasSuffix("?") || reply.hasSuffix("？") {
+            runningChains[sessionId]?.paused = true // Claude asked something: the user answers first
+            return
+        }
+        advanceChain(sessionId, run: run)
+    }
+
+    /// A first draft of a personal skill for a request the user keeps typing — `claude -p`, only on click.
+    func draftSkill(for phrase: String) async throws -> String {
+        let text = (try? String(contentsOf: Automations.historyFile, encoding: .utf8)) ?? ""
+        let examples = Noticing.entries(historyLines: text.split(separator: "\n"))
+            .filter { Noticing.normalized($0.display) == phrase }.suffix(5).map(\.display)
+        let prompt = """
+            Write a Claude Code skill file (SKILL.md) for a request this user types again and again in Claude Code.
+            Their words, most recent last:
+            \(examples.map { "- " + $0 }.joined(separator: "\n"))
+
+            Output only the file. Start with YAML frontmatter: `name` (short, lowercase, latin letters and hyphens), \
+            `description` (one line: what it does and when to use it, in English). Then short, concrete instructions for \
+            Claude in the user's language. Don't invent project details you can't see.
+            """
+        guard let login = loginEnvironment else { throw ClaudeHeadless.Failure(errorDescription: "claude isn't found in the login shell") }
+        let draft = try await ClaudeHeadless.run(prompt, claude: login.claudePath, environment: login.environment)
+        // A model may wrap the file in a code fence; the file is what's inside.
+        return draft.replacingOccurrences(of: #"^```[a-z]*\n|\n```$"#, with: "", options: .regularExpression)
+    }
+
+    /// Saves a drafted skill as the user's own (~/.claude/skills/<name>/SKILL.md); never overwrites one.
+    func saveSkill(named name: String, text: String, for suggestion: Noticing.Suggestion) throws -> URL {
+        let slug = ClaudeLauncher.worktreeSlug(name)
+        guard !slug.isEmpty else { throw ClaudeHeadless.Failure(errorDescription: "The name needs latin letters or digits") }
+        let file = bridge.settingsURL.deletingLastPathComponent().appending(path: "skills/\(slug)/SKILL.md")
+        guard !FileManager.default.fileExists(atPath: file.path) else {
+            throw ClaudeHeadless.Failure(errorDescription: "You already have a skill called \(slug)")
+        }
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try text.write(to: file, atomically: true, encoding: .utf8)
+        ChangeLog.record("New skill /\(slug)", file: file, backup: nil, backups: backupsDir)
+        markApplied(suggestion)
+        refreshProjects()
+        return file
     }
 
     // MARK: Automations — the user's skills and commands, how they're used, their settings
@@ -354,6 +508,7 @@ final class AppStore {
         }
         reload()
         if sessionId == selectedSessionId { reloadEvents() }
+        stepChain(payload, sessionId: sessionId)
         if payload.event == "Stop", payload.backgroundTasks == 0, relayingSessionIds.contains(sessionId) {
             finishRelay(sessionId, summary: payload.lastAssistantMessage)
             return nil

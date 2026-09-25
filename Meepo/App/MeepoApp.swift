@@ -39,6 +39,7 @@ struct MeepoApp: App {
                     await services.requestNotificationPermission(store: store)
                     services.bindScreenshotHotKey(store.screenshotHotKey, store: store)
                     await store.restoreSessions()
+                    await store.refreshSuggestions()
                     quitHandler.store = store
                     store.terminate = { NSApp.terminate(nil) }
                     Task { // Updates like Claude Code: at launch, then every 6 hours; installed at quit.
