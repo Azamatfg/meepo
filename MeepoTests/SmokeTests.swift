@@ -42,6 +42,10 @@ final class SessionSwitchSmokeTests: XCTestCase {
         // Option+Tab as the tester does it: single presses, then held down (key repeat ~30 ms), and clicks.
         let ids = store.orderedSessions.compactMap(\.id)
         for step in 0..<150 {
+            // A narrow window too: the stage bar then no longer fits (the tester's crash was in its fitting).
+            if step.isMultiple(of: 25) {
+                window.setContentSize(NSSize(width: step.isMultiple(of: 50) ? 1060 : 1280, height: 800))
+            }
             if step % 50 < 20 {
                 store.selectSession(offset: 1)                       // Option+Tab
                 try await Task.sleep(for: .milliseconds(300))
