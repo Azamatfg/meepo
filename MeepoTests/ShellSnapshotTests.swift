@@ -118,4 +118,45 @@ final class ShellSnapshotTests: XCTestCase {
         view.cacheDisplay(in: view.bounds, to: rep)
         try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path!).appending(path: "onboarding.png"))
     }
+
+    /// The README's screenshots: demo mode's made-up projects in each layout, at 1440 × 900.
+    /// TEST_RUNNER_MEEPO_SCREENSHOT_DIR=docs/screenshots xcodebuild test -only-testing:MeepoTests/ShellSnapshotTests/testDemoScreens
+    func testDemoScreens() async throws {
+        let path = ProcessInfo.processInfo.environment["MEEPO_SCREENSHOT_DIR"]
+        try XCTSkipIf(path == nil, "screenshots only on request")
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let tmp = FileManager.default.temporaryDirectory.appending(path: "demo-\(UUID().uuidString)")
+        let store = AppStore(db: db, bridge: BridgeInstaller(settingsURL: tmp.appending(path: "s.json"), meepoHome: tmp),
+                             usageRoot: tmp, defaults: UserDefaults(suiteName: "meepo-demo-\(UUID().uuidString)")!)
+        await store.loadDemo()
+        let homeView = UserDefaults.standard.string(forKey: "homeView")
+        defer { UserDefaults.standard.set(homeView, forKey: "homeView") }
+        // A fresh window per picture: terminals resized inside a window already on screen came out black here.
+        func shoot(_ name: String) async throws {
+            let window = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 1440, height: 900),
+                                  styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+            window.titlebarAppearsTransparent = true
+            window.contentView = NSHostingView(rootView: MainView().environment(store))
+            window.makeKeyAndOrderFront(nil)
+            defer { window.orderOut(nil); window.contentView = nil }
+            try await Task.sleep(for: .milliseconds(1500))
+            // As the window server composites it: cacheDisplay leaves the terminals' layer backgrounds out.
+            let image = try XCTUnwrap(CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber),
+                                                              [.boundsIgnoreFraming, .bestResolution]))
+            let rep = NSBitmapImageRep(cgImage: image)
+            try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path!).appending(path: "\(name).png"))
+        }
+        store.applyPreset(.deck)
+        try await shoot("deck")
+        store.applyPreset(.focus)
+        try await shoot("focus")
+        store.applyPreset(.full)
+        try await shoot("full")
+        store.isHomeShown = true
+        UserDefaults.standard.set("deck", forKey: "homeView")
+        try await shoot("home")
+        UserDefaults.standard.set("timeline", forKey: "homeView")
+        try await shoot("timeline")
+    }
 }

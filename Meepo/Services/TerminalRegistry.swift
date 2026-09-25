@@ -51,6 +51,18 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
         views[id] = view
     }
 
+    /// Demo mode: a terminal that shows a fixed page and runs nothing.
+    func showText(_ text: String, for sessionId: Int64) {
+        // About a pane's width: SwiftTerm wraps text when it's fed and doesn't reflow it later.
+        let view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 700, height: 700))
+        view.font = Fonts.terminal(13)
+        view.nativeBackgroundColor = NSColor(hex: 0xF6F3EC)
+        view.nativeForegroundColor = NSColor(hex: 0x1B1A17)
+        view.caretColor = NSColor(hex: 0x2140D9)
+        view.feed(text: text)
+        views[sessionId] = view
+    }
+
     /// Types into the session's terminal as if the user did ("\r" = Enter).
     func send(_ text: String, to sessionId: Int64) {
         views[sessionId]?.send(txt: text)

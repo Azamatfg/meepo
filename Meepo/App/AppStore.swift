@@ -1905,3 +1905,94 @@ final class AppStore {
         }
     }
 }
+
+// MARK: Demo mode
+
+extension AppStore {
+    /// Fills an empty store with Demo's made-up projects: real git folders in a temp directory (so Source
+    /// Control and Explorer work), sessions in every state, an hour of events, live numbers, a summary and
+    /// suggestions. Nothing of the user's is read or written.
+    func loadDemo() async {
+        let root = FileManager.default.temporaryDirectory.appending(path: "Meepo Demo")
+        try? FileManager.default.removeItem(at: root)
+        let identity = ["-c", "user.name=Meepo", "-c", "user.email=demo@meepo.app"]
+        for project in Demo.projects {
+            let folder = root.appending(path: project.name)
+            for (file, text) in project.files {
+                let url = folder.appending(path: file)
+                try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? text.write(to: url, atomically: true, encoding: .utf8)
+            }
+            _ = GitService.runReportingError(["init", "-q", "-b", "main"], in: folder.path)
+            _ = GitService.runReportingError(["add", "."], in: folder.path)
+            _ = GitService.runReportingError(identity + ["commit", "-q", "-m", "Start"], in: folder.path)
+            _ = GitService.runReportingError(["remote", "add", "origin", "git@github.com:acme/\(project.name).git"], in: folder.path)
+            let changed = folder.appending(path: project.change.file)
+            try? FileManager.default.createDirectory(at: changed.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? project.change.text.write(to: changed, atomically: true, encoding: .utf8)
+            try? addProject(at: folder)
+        }
+        isBridgeInstalled = true
+        isLoginResolved = true
+        for spec in Demo.sessions {
+            guard let project = projects.first(where: { $0.name == spec.project }), let projectId = project.id else { continue }
+            try? createSession(projectId: projectId, model: nil, prompt: nil, name: spec.name)
+            guard let session = sessions.last, let id = session.id else { continue }
+            // An hour of activity for the Timeline, then the event that sets today's state.
+            let start = Date.now.addingTimeInterval(-Double.random(in: 1200...3000))
+            _ = try? await db.write { db in
+                var events = [HookEvent(sessionId: id, name: "UserPromptSubmit", summary: spec.request, isFailure: false, createdAt: start)]
+                for (i, file) in spec.files.enumerated() {
+                    events.append(HookEvent(sessionId: id, name: "PostToolUse", summary: "Write: \(project.path)/\(file)",
+                                            isFailure: false, createdAt: start.addingTimeInterval(Double(i + 1) * 240)))
+                }
+                for minute in stride(from: 3, to: 20, by: 4) {
+                    events.append(HookEvent(sessionId: id, name: "PreToolUse", summary: "Bash: npm test", isFailure: false,
+                                            createdAt: start.addingTimeInterval(Double(minute) * 60)))
+                }
+                for var event in events { try event.insert(db) }
+            }
+            let event: HookPayload = switch spec.state {
+            case "permission": HookPayload(event: "PermissionRequest", claudeSessionId: session.claudeSessionId, toolName: "Bash",
+                                           toolTarget: "pytest tests/monitoring -q")
+            case "question": HookPayload(event: "Stop", claudeSessionId: session.claudeSessionId,
+                                         lastAssistantMessage: "Should sessions last 30 days, or 24 hours?")
+            case "ready": HookPayload(event: "Stop", claudeSessionId: session.claudeSessionId,
+                                      lastAssistantMessage: "Done. The welcome screen now says “Your rides, one tap away”.")
+            default: HookPayload(event: "PreToolUse", claudeSessionId: session.claudeSessionId, toolName: "Edit",
+                                 toolTarget: "src/admin/report.ts")
+            }
+            handleHookEvent(event, sessionId: id)
+            if spec.state == "ready" { // finished earlier: ready for the next task, not waiting on an answer
+                handleHookEvent(HookPayload(event: "SessionStart", claudeSessionId: session.claudeSessionId), sessionId: id)
+            }
+            terminals.showText(spec.terminal, for: id)
+            runningSessionIds.insert(id)
+            sessionUsage[id] = SessionUsage(tokensToday: spec.tokens, contextTokens: Int(spec.context * 10_000), model: spec.model)
+            if let status = StatusLine(json: Demo.statusLine(for: spec)) { applyStatusLine(status, sessionId: id) }
+        }
+        // A finished run with its summary, for What changed.
+        if let first = sessions.first, let id = first.id {
+            let started = Date.now.addingTimeInterval(-5400)
+            _ = try? await db.write { db in
+                var submit = HookEvent(sessionId: id, name: "UserPromptSubmit", summary: "add refunds for Kaspi payments to the checkout",
+                                       isFailure: false, createdAt: started)
+                try submit.insert(db)
+                var edit = HookEvent(sessionId: id, name: "PostToolUse", summary: "Write: src/payments/refund.ts", isFailure: false,
+                                     createdAt: started.addingTimeInterval(300))
+                try edit.insert(db)
+                var stop = HookEvent(sessionId: id, name: "Stop", summary: "Refunds work end to end.", isFailure: false,
+                                     createdAt: started.addingTimeInterval(900))
+                try stop.insert(db)
+                try db.execute(sql: "INSERT INTO runSummary (sessionId, startedAt, json, createdAt) VALUES (?, ?, ?, ?)",
+                               arguments: [id, started, Demo.summary, Date.now])
+            }
+        }
+        suggestions = [Noticing.Suggestion(kind: .chain(["simplify", "ship", "sync"]), count: 25),
+                       Noticing.Suggestion(kind: .skill(phrase: "check the staging deploy and tell me what broke"), count: 7)]
+        defaults.set("2.1.281", forKey: "claudeCodeVersionSeen")
+        let changelog = (try? String(contentsOf: ClaudeChangelog.cacheFile, encoding: .utf8)) ?? ""
+        noteClaudeVersion("2.1.282", changelog: changelog)
+        selectedSessionId = sessions.first?.id
+    }
+}

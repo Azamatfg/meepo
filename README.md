@@ -1,37 +1,56 @@
 # Meepo
 
-> One player. Many agents. Press Tab.
+> A comfortable home for Claude Code on your Mac.
 
-Meepo is a native macOS control panel for running several [Claude Code](https://claude.com/claude-code) sessions across projects at once. It replaces "a VS Code window, a terminal and `claude` per project" with one window: every session is a unit on the map, and the ones waiting for you glow orange.
+[Claude Code](https://claude.com/claude-code) is a great way to build software. Meepo makes it easier to live with every day: all your Claude Code sessions in one window, a glance at which one is working and which one waits for you, and what changed — in your product's terms, not just in the code.
 
-<!-- Screenshot: main window with three projects, one session waiting -->
-<!-- GIF: Option+Tab through sessions, answering a permission request -->
+Meepo doesn't write code and isn't another agent. Claude Code does the work, with your own settings, skills and hooks; Meepo is the place around it.
+
+![Home: every session at a glance](docs/screenshots/home.png)
 
 ## What it does
 
-- **Sessions side by side.** Real terminals (SwiftTerm) running `claude`, grouped by project. `Option+Tab` / `Option+Shift+Tab` moves between them, `Ctrl+Tab` jumps to the next one that is waiting for you.
-- **Knows what each session needs.** A hook bridge reports status, permission requests, questions and failures; notifications say *which* session wants *what*.
-- **Stages.** PLAN → CODE → QA → SHIP → SYNC per session, each a click that runs your own slash command. Meepo reminds you to QA again if code changed after the last QA.
-- **Context and tokens.** Context-window bar per session, tokens today, stats by project and model; when a session gets full, Meepo relays it into a fresh one with a summary.
-- **What the agent changed.** Next to each session: every file it touched since it started, committed or not, with PUSH/PULL. COMPARE opens the diff exactly as VS Code shows it (it's VS Code's own editor, Monaco); EXPLAIN says what changed in plain words.
-- **Parallel features.** New sessions in their own git worktree (`claude -w`) with their own port range.
-- **Mornings and evenings.** Turn a task list into running sessions with one button; end-of-day summary per project with commits, stages, tokens and the TODOs the agent left.
-- **Screenshots straight into a session.** A global hotkey captures an area and pastes it into the selected session. No files are saved.
-- **CI.** GitHub Actions (`gh`) and GitLab CI (`glab`): each project's default-branch pipeline step by step, with a RUN button for the manual deploy step. Failed runs can be rerun, or fixed by a new session that opens a PR. Meepo never pushes to main and never fixes a deploy on its own.
-- **Tools.** Compare commands, hooks and agents across projects against a shared library (DIFF, LIFT, OVERWRITE, with backups). Clean up stopped Docker containers by project.
-- **Release notes.** Draft a post about the commits since the last one, in the voice of your own sample posts. You edit it and copy it wherever it goes.
-- **Import from Claude Code.** Every folder you've worked on with Claude Code — from any editor or a terminal — comes in with one click, with its latest conversation to continue (`claude --resume`). Folders without git work too. Every project has an "Open in VS Code / Cursor / Zed" menu, because Meepo has no editor of its own.
-- **Desktop widget.** Tokens today, running sessions, waiting sessions.
+**Every session in one window.** Tabs for each Claude session across your projects, Home to see them all at once, up to four terminals side by side. Name sessions to tell two in the same project apart. `Ctrl+Tab` jumps to the session that needs you.
 
-## Requirements
+![Four sessions: working, waiting for a permission, waiting for an answer, ready](docs/screenshots/deck.png)
 
-- macOS 14 or later, Apple silicon or Intel
-- [Claude Code](https://docs.claude.com/en/docs/claude-code) (`claude`) and `git`
-- Optional: `gh` (GitHub CI), `glab` (GitLab CI), Docker
+**What changed — in your product's terms.** Every request you give Claude is a run. One click asks the session that did the work to explain it for your users: what they will notice and where, what to check before shipping (money, accounts, anything it assumed), and how to try it. The code diff is still one click away.
 
-On first launch Meepo checks for these and shows how to install anything that is missing.
+![What changed: a run explained for users](docs/screenshots/focus.png)
+
+**Your layout.** Focus (one terminal and what changed), Deck (four sessions), Full (Explorer, Source Control and two terminals, like VS Code) — or move any panel yourself. Point at an icon to see what it is; every panel has a **?**.
+
+![Full: Explorer, Source Control, two terminals, events and CI](docs/screenshots/full.png)
+
+**Git like VS Code, teammates included.** CHANGES, INCOMING and OUTGOING per repo, Compare in VS Code's own editor (Monaco), Explain in plain words. Teammates' commits come in by themselves once your work is committed, and the agent is told what changed under it. Projects that hold several repos, and sessions that also work in a second project (`claude --add-dir`), show every repo.
+
+**CI and deploys.** GitHub Actions and GitLab CI, step by step, with a Run button for the manual deploy step.
+
+**Knows Claude Code.**
+- Plan limits (5 hours, 7 days) with reset times, the real model and effort of each session, context as Claude Code counts it.
+- *New in Claude Code*: after an update, the changes that touch your setup come first.
+- *Claude Code Setup*: finds things that quietly work against you — an effort level that no longer reaches the model you use, hook timeouts written in milliseconds, allow rules like `Bash(sudo:*)`, skills that push which Claude may start by itself — each with a fix and an exact undo.
+
+**Learns from how you work.** *Automations* shows your skills and commands with how often you really use them, effort and model per skill, and which ones Claude may start by itself. Meepo notices what you repeat — commands in a row, requests you keep typing — and offers a button or a personal skill for it. Then it checks whether it helped.
+
+**Stages.** PLAN → CODE → QA → SECURITY → SIMPLIFY → SHIP → SYNC, each a click that runs your own command — or Claude Code's built-in one (`/verify`, `/security-review`, `/commit-push-pr`) when a project has none.
+
+**For people new to Claude Code.** Onboarding installs and signs in Claude Code step by step and starts a first project. *Guided mode* makes Claude explain what it does and ask before anything risky — pushing, deleting folders, `sudo`, `.env` secrets.
+
+## Built on Claude Code
+
+Everything Meepo shows comes from Claude Code itself, and everything it does goes through it:
+
+- the real `claude` CLI in each terminal, with your login, settings, skills, hooks and memory
+- Claude Code's own hooks and statusline for what each session is doing, its plan limits and effort
+- Claude Code's built-in commands and features where they exist — `/verify`, `/security-review`, `/commit-push-pr`, `/rewind`, worktrees, `--add-dir`, Remote Control, output styles, `skillOverrides`
+- Claude Code's own changelog, to point out what a new release means for your setup
+
+Meepo follows Claude Code as it grows: when Claude Code gains something, Meepo uses it rather than building its own.
 
 ## Install
+
+macOS 14 or later. You need [Claude Code](https://docs.claude.com/en/docs/claude-code) and `git`; `gh` / `glab` for CI.
 
 ```bash
 brew tap azamatfg/meepo
@@ -39,13 +58,38 @@ brew trust azamatfg/meepo     # newer Homebrew asks you to trust third-party tap
 brew install --cask meepo
 ```
 
-Then `meepo` opens it from any terminal, and `meepo .` adds the current folder as a project with a Claude session in it.
+`meepo` opens it from any terminal; `meepo .` adds the current folder with a session in it.
 
-Meepo keeps itself up to date like Claude Code: it downloads new versions in the background and installs them when you quit (or RESTART from the title bar). `meepo update` checks right away; Settings → Updates turns it off or switches between the beta and stable channels. An update is installed only if it's signed by the same developer and notarized by Apple.
+Meepo updates itself: new versions download in the background, and the status bar offers a restart (or it installs when you quit). `meepo update` checks right away. Updates install only if they are signed by the same developer and notarized by Apple.
 
-Or download `Meepo.zip` from [Releases](https://github.com/Azamatfg/meepo/releases), unzip it and move `Meepo.app` to Applications. Builds are signed and notarized by Apple, so macOS opens them without warnings.
+Or download `Meepo.zip` from [Releases](https://github.com/Azamatfg/meepo/releases) and move `Meepo.app` to Applications.
 
-### Build from source
+### Try it without your projects
+
+```bash
+open -n -a Meepo --args --demo
+```
+
+Made-up projects, no `claude` started, nothing of yours read or written — for a look around, screenshots or a demo.
+
+### Uninstall
+
+Meepo menu → **Remove Hook Bridge** takes its hooks out of `~/.claude/settings.json`; then `brew uninstall --cask meepo` (add `--zap` to delete `~/.meepo`). If you skip the first step, the leftover hook entries do nothing.
+
+## Your phone
+
+Meepo is the control panel on your Mac. On your phone, use the Claude app through Claude Code's **Remote Control**: turn it on for new sessions in Settings, or press **PHONE** on a running one. From the phone you can see that a session is waiting, read the request and answer it.
+
+## Privacy and safety
+
+- Everything stays on your Mac: `~/.meepo/meepo.sqlite`, backups in `~/.meepo/backups`. No telemetry. A crash report is shown to you to copy, never sent.
+- Meepo talks to Claude Code through hooks and a statusline, posted to a server on `127.0.0.1` only, with a local token.
+- It stores no API keys or passwords; GitHub, GitLab and Claude use their own CLIs and logins.
+- `claude -p` runs only when you click (Explain, drafts, release notes) and never with tools or your hooks.
+- Push, pull and deploy happen on your click with a confirmation; Meepo never force-pushes. Quitting while an agent works asks first.
+- Every change Meepo makes to your files is backed up and can be undone (≡ → Tools → Changes); team files under git are never edited.
+
+## Build from source
 
 ```bash
 brew install xcodegen
@@ -55,26 +99,7 @@ xcodebuild -downloadComponent MetalToolchain   # once, for SwiftTerm's shaders
 xcodebuild -project Meepo.xcodeproj -scheme Meepo -skipPackagePluginValidation build
 ```
 
-## Your phone
-
-Meepo is the control panel on your Mac. On your phone, use the official Claude app through Claude Code's **Remote Control**:
-
-- **Settings → Remote Control for new sessions** starts sessions with `claude --remote-control "project · branch"`. They show up under those names in the Claude app and on claude.ai. This needs a claude.ai login.
-- **PHONE** on a running session turns Remote Control on without restarting it.
-
-From the phone you can see that a session is waiting, read the request and approve it.
-
-## Security
-
-- Meepo talks to Claude Code through hooks. The bridge posts to a server that listens on `127.0.0.1` only, and every request carries a local token from `~/.meepo/token`.
-- Meepo stores no API keys or passwords. GitHub, GitLab and Claude use their own CLIs and logins (`gh`, `glab`, `claude`).
-- It never pushes to main/master, never force-pushes, and never fixes a failing deploy automatically. Deploys start only when you click RUN and confirm.
-- Changes to your files (the hook bridge in `~/.claude/settings.json`, shared commands in Tools) are backed up to `~/.meepo/backups` first.
-- Release notes are written by `claude -p` with no tools and no settings files, so nothing runs and no hooks fire.
-
-## Data
-
-Everything lives on your Mac: `~/.meepo/meepo.sqlite` (sessions, events, tasks, notes), `~/.meepo/backups`, `~/.meepo/release-style.md`. Token usage is read from Claude Code's own transcripts in `~/.claude/projects`.
+Screenshots in this README come from demo mode: `TEST_RUNNER_MEEPO_SCREENSHOT_DIR=docs/screenshots xcodebuild … test -only-testing:MeepoTests/ShellSnapshotTests/testDemoScreens`.
 
 ## License
 

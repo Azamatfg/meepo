@@ -13,12 +13,19 @@ struct MeepoApp: App {
     init() {
         Fonts.register()
         do {
-            let db = isTesting ? try DatabaseQueue() : try AppDatabase.openShared()
-            if isTesting { try AppDatabase.migrator.migrate(db) }
-            let store = AppStore(db: db)
+            // Demo mode: made-up projects, nothing of the user's read or written (see Demo).
+            let isolated = isTesting || Demo.isOn
+            let db = isolated ? try DatabaseQueue() : try AppDatabase.openShared()
+            if isolated { try AppDatabase.migrator.migrate(db) }
+            var defaults = UserDefaults.standard
+            if Demo.isOn, let demo = UserDefaults(suiteName: "com.azamatfg.meepo.demo") {
+                demo.removePersistentDomain(forName: "com.azamatfg.meepo.demo")
+                defaults = demo
+            }
+            let store = AppStore(db: db, defaults: defaults)
             _store = State(initialValue: store)
             hotkeys = HotkeyMonitor(store: store)
-            services = isTesting ? nil : LiveServices(store: store)
+            services = isolated ? nil : LiveServices(store: store)
         } catch {
             fatalError("Cannot open ~/.meepo/meepo.sqlite: \(error)")
         }
@@ -34,6 +41,7 @@ struct MeepoApp: App {
                 }
                 .onChange(of: store.screenshotHotKey) { services?.bindScreenshotHotKey(store.screenshotHotKey, store: store) }
                 .task {
+                    if Demo.isOn { await store.loadDemo(); return }
                     guard let services else { return }
                     // Asking in App.init is too early: macOS answers "not allowed" before launch finishes.
                     await services.requestNotificationPermission(store: store)
