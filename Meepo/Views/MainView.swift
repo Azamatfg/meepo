@@ -102,6 +102,7 @@ private struct TitleBar: View {
     @State private var isFullScreen = false
     @State private var isSetupShown = false
     @State private var isAutomationsShown = false
+    @State private var isWelcomeShown = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -141,6 +142,9 @@ private struct TitleBar: View {
                 Button("Tools — practices, Docker, ports, changes") { isToolsShown = true }
                 Button("Notes — release notes") { isNotesShown = true }
                 Divider()
+                Toggle("Guided mode", isOn: Binding(get: { store.guidedMode }, set: { store.guidedMode = $0 }))
+                Button("Welcome…") { isWelcomeShown = true }
+                Divider()
                 Button("Automations…") { isAutomationsShown = true }
                 Button("Claude Code Setup…") { isSetupShown = true }
                 Button("Send Feedback…") { NSWorkspace.shared.open(CrashNotice.newIssue(title: "", body: "")) }
@@ -160,6 +164,7 @@ private struct TitleBar: View {
         .background(WindowDragArea())
         .sheet(isPresented: $isSetupShown) { SetupView() }
         .sheet(isPresented: $isAutomationsShown) { AutomationsView() }
+        .sheet(isPresented: $isWelcomeShown) { OnboardingView() }
         .overlay(alignment: .bottom) { Rectangle().fill(Tokens.line).frame(height: 1) }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in isFullScreen = true }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in isFullScreen = false }

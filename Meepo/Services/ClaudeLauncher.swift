@@ -6,14 +6,24 @@ enum ClaudeLauncher {
     /// the light theme for Meepo's paper-light terminals, ultracode when that's the chosen effort —
     /// ultracode is a setting, not an `--effort` value (2.1.282 accepts low…max there) — and the statusline.
     /// `statusLine`: Meepo's statusline command, when the bridge is there to receive it.
-    static func sessionSettings(effort: String?, statusLine: String? = nil) -> [String] {
+    static func sessionSettings(effort: String?, statusLine: String? = nil, guided: Bool = false) -> [String] {
         var settings: [String: Any] = ["theme": "light"]
         if effort == ultracode { settings["ultracode"] = true }
+        if guided {
+            settings["outputStyle"] = "Explanatory"
+            settings["permissions"] = ["ask": guidedAsks]
+        }
         if let statusLine { settings["statusLine"] = ["type": "command", "command": statusLine, "padding": 0] }
         let json = (try? JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys, .withoutEscapingSlashes]))
             .map { String(decoding: $0, as: UTF8.self) } ?? #"{"theme":"light"}"#
         return ["--settings", json]
     }
+
+    /// Guided mode (people new to Claude Code): Claude explains what it does, and asks before anything hard to
+    /// take back — even in auto mode (`permissions.ask` holds there since 2.1.28x). Not `--safe-mode`, which
+    /// turns hooks off, Meepo's bridge included.
+    static let guidedAsks = ["Bash(git push:*)", "Bash(git reset --hard:*)", "Bash(rm -rf:*)", "Bash(sudo:*)",
+                             "Bash(npm publish:*)", "Edit(**/.env*)"]
 
     static let ultracode = "ultracode"
     /// "" = Claude Code's default.
@@ -23,6 +33,21 @@ enum ClaudeLauncher {
     /// Existing transcript: `--resume <uuid>`; the initial prompt is never re-sent.
     /// `remoteControl`: session name shown in the Claude app / claude.ai (`--remote-control <name>`),
     /// so the session can be followed and answered from the phone. Verified on 2.1.280.
+    /// `claude auth status` → signed in or not; nil when it can't tell. Blocking; call off the main thread.
+    static func isLoggedIn(login: LoginEnvironment) -> Bool? {
+        let process = Process()
+        process.executableURL = URL(filePath: login.claudePath)
+        process.arguments = ["auth", "status"]
+        process.environment = login.environment
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        do { try process.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitForExit()
+        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["loggedIn"] as? Bool
+    }
+
     /// `claude --version`'s first line, e.g. "2.1.282 (Claude Code)". Blocking; call off the main thread.
     static func versionOutput(login: LoginEnvironment) -> String? {
         let process = Process()

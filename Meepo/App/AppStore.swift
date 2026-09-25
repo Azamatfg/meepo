@@ -61,6 +61,7 @@ final class AppStore {
         self.defaults = defaults
         contextWindows = Self.load([String: Int].self, Self.contextWindowsKey, from: defaults) ?? [:]
         stages = Self.load([Stage].self, Self.stagesKey, from: defaults) ?? Stage.defaults
+        guidedMode = defaults.bool(forKey: Self.guidedKey)
         suggestionStates = Self.load([String: SuggestionState].self, Self.suggestionsKey, from: defaults) ?? [:]
         chains = Self.load([[String]].self, Self.chainsKey, from: defaults) ?? []
         chainRuns = (defaults.dictionary(forKey: Self.chainRunsKey) as? [String: Int]) ?? [:]
@@ -118,6 +119,41 @@ final class AppStore {
             let changelog = await Task.detached { try? String(contentsOf: ClaudeChangelog.cacheFile, encoding: .utf8) }.value
             if let version = output.flatMap(ClaudeChangelog.version(fromCLI:)) { noteClaudeVersion(version, changelog: changelog ?? "") }
         }
+        await checkClaudeLogin()
+    }
+
+    // MARK: Onboarding — the two ways in
+
+    private static let guidedKey = "guidedMode"
+
+    /// For people new to Claude Code: Meepo's sessions explain as they go and ask before risky commands.
+    /// Takes effect for sessions started (or restarted) after the change.
+    var guidedMode: Bool {
+        didSet { defaults.set(guidedMode, forKey: Self.guidedKey) }
+    }
+
+    /// `claude auth status` after the login shell is known; nil = couldn't tell.
+    private(set) var isClaudeLoggedIn: Bool?
+
+    func checkClaudeLogin() async {
+        guard let login = loginEnvironment else { isClaudeLoggedIn = nil; return }
+        isClaudeLoggedIn = await Task.detached { ClaudeLauncher.isLoggedIn(login: login) }.value
+    }
+
+    /// A new, empty project: the folder, `git init` (so changes are tracked and can be compared), added to Meepo.
+    @discardableResult
+    func createProject(named name: String, in parent: URL) throws -> Project? {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, !clean.contains("/") else { throw ClaudeHeadless.Failure(errorDescription: "Give the project a name") }
+        let folder = parent.appending(path: clean)
+        guard !FileManager.default.fileExists(atPath: folder.path) else {
+            throw ClaudeHeadless.Failure(errorDescription: "\(folder.path) already exists — add it with + instead")
+        }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        if let error = GitService.runReportingError(["init", "-q"], in: folder.path) { throw ClaudeHeadless.Failure(errorDescription: error) }
+        try addProject(at: folder)
+        let real = folder.resolvingSymlinksInPath().path // /var vs /private/var and the like
+        return projects.first { URL(filePath: $0.path).resolvingSymlinksInPath().path == real }
     }
 
     // MARK: Claude Code's version and what's new in it
@@ -1705,7 +1741,8 @@ final class AppStore {
         guard let session = sessions.first(where: { $0.id == sessionId }) else { return }
         terminals.start(session, projectPath: project.path, initialPrompt: initialPrompts.removeValue(forKey: sessionId),
                         login: login,
-                        remoteControlName: remoteControlForNewSessions ? [project.name, session.branch].compactMap { $0 }.joined(separator: " · ") : nil)
+                        remoteControlName: remoteControlForNewSessions ? [project.name, session.branch].compactMap { $0 }.joined(separator: " · ") : nil,
+                        guided: guidedMode)
         runningSessionIds.insert(sessionId)
     }
 

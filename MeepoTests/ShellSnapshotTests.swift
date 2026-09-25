@@ -99,4 +99,23 @@ final class ShellSnapshotTests: XCTestCase {
         view.cacheDisplay(in: view.bounds, to: rep)
         try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path!).appending(path: "automations.png"))
     }
+
+    func testOnboarding() async throws {
+        let path = ProcessInfo.processInfo.environment["MEEPO_SNAPSHOT_DIR"]
+        try XCTSkipIf(path == nil, "pictures only on request")
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let tmp = FileManager.default.temporaryDirectory.appending(path: "snapo-\(UUID().uuidString)")
+        let store = AppStore(db: db, bridge: BridgeInstaller(settingsURL: tmp.appending(path: "s.json"), meepoHome: tmp),
+                             usageRoot: tmp, defaults: UserDefaults(suiteName: "meepo-snap-\(UUID().uuidString)")!)
+        let window = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 820, height: 680), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = NSHostingView(rootView: OnboardingView().environment(store))
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+        try await Task.sleep(for: .seconds(1))
+        let view = try XCTUnwrap(window.contentView)
+        let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: rep)
+        try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path!).appending(path: "onboarding.png"))
+    }
 }

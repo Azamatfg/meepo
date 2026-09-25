@@ -12,7 +12,7 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     func start(_ session: Session, projectPath: String, initialPrompt: String?,
-               login: ClaudeLauncher.LoginEnvironment, remoteControlName: String? = nil) {
+               login: ClaudeLauncher.LoginEnvironment, remoteControlName: String? = nil, guided: Bool = false) {
         guard let id = session.id, views[id] == nil else { return }
         let (directory, createWorktree) = ClaudeLauncher.location(worktreeName: session.worktreeName, projectPath: projectPath)
         // Sessions start before they're on screen; a zero frame would start claude in a 0-column terminal.
@@ -25,7 +25,8 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
         let bridge = BridgeInstaller()
         let hasBridge = FileManager.default.isExecutableFile(atPath: bridge.scriptURL.path)
         let args = ClaudeLauncher.sessionSettings(effort: session.effort,
-                                                  statusLine: hasBridge ? bridge.statusLineCommand : nil)
+                                                  statusLine: hasBridge ? bridge.statusLineCommand : nil,
+                                                  guided: guided)
             + ClaudeLauncher.claudeArguments(
             sessionId: session.claudeSessionId,
             resume: ClaudeLauncher.hasTranscript(sessionId: session.claudeSessionId),
