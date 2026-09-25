@@ -34,10 +34,9 @@ struct MainView: View {
         .frame(minWidth: 1060, minHeight: 560)
         .preferredColorScheme(.light)
         // Explorer and Source Control share one git reading of the selected session's folder.
-        .task(id: store.selectedSession.flatMap(store.workdir(of:))) {
-            guard let path = store.selectedSession.flatMap(store.workdir(of:)) else { return }
+        .task(id: store.selectedSessionId) {
             while !Task.isCancelled {
-                await store.refreshSourceControl(path)
+                if let session = store.selectedSession { await store.refreshSourceControls(for: session) }
                 try? await Task.sleep(for: .seconds(10))
             }
         }
@@ -452,7 +451,7 @@ private struct PanelBox: View {
         case .sessions: SessionsPanel()
         case .explorer:
             if let path = store.selectedSession.flatMap(store.workdir(of:)) {
-                ExplorerSection(root: path, changes: store.sourceControl?.changes ?? [])
+                ExplorerSection(root: path, changes: store.changes(under: path))
             } else {
                 Text("Select a session to browse its folder.").font(.caption).foregroundStyle(Tokens.textDim)
             }

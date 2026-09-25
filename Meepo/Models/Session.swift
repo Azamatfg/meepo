@@ -32,6 +32,8 @@ struct Session: Codable, Identifiable, Hashable, FetchableRecord, MutablePersist
     var lastActiveAt: Date
     /// The user's name for it (`claude --name`), so two sessions of one project can be told apart.
     var name: String? = nil
+    /// Other folders this session also works in ("Also work in": `claude --add-dir`), e.g. a sibling project.
+    var extraDirs: [String]? = nil
 
     mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID

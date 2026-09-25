@@ -1,9 +1,41 @@
 import SwiftUI
 
-/// Source Control as a panel (VS Code's CHANGES / INCOMING / OUTGOING) for the selected session's folder,
-/// with COMPARE and EXPLAIN. The shell keeps `store.sourceControl` fresh; this panel only acts on it.
+/// Source Control as a panel (VS Code's CHANGES / INCOMING / OUTGOING) for every repo the selected session
+/// works in — its folder, the repos inside a plain folder, and "Also work in" projects — each with COMPARE
+/// and EXPLAIN. The shell keeps `store.sourceControls` fresh; the panel only acts on them.
 struct SourceControlPanel: View {
     @Environment(AppStore.self) private var store
+
+    var body: some View {
+        if let session = store.selectedSession, let folder = store.workdir(of: session) {
+            let repos = store.sessionRepos
+            if repos.count <= 1 {
+                RepoSourceControl(path: repos.first?.path ?? folder)
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(repos) { repo in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "arrow.triangle.branch").font(.system(size: 11, weight: .semibold))
+                                Text(repo.name).font(Fonts.ui(14, weight: .bold))
+                                if repo.isLinked { Text("also works here").font(.caption2).foregroundStyle(Tokens.work) }
+                                Text(store.sourceControls[repo.path]?.branch ?? "").font(Fonts.mono(11)).foregroundStyle(Tokens.textDim)
+                            }
+                            RepoSourceControl(path: repo.path)
+                        }
+                    }
+                }
+            }
+        } else {
+            Text("Select a session to see what it changed.").font(.caption).foregroundStyle(Tokens.textDim)
+        }
+    }
+}
+
+/// One repo's CHANGES / INCOMING / OUTGOING.
+private struct RepoSourceControl: View {
+    @Environment(AppStore.self) private var store
+    let path: String
     /// What the compare view shows; nil = closed.
     @State private var compare: Compare?
     @State private var explanation: (title: String, text: String)?
@@ -11,22 +43,16 @@ struct SourceControlPanel: View {
     @State private var explaining: String?
     @State private var isSyncing = false
 
-    private var scm: GitPanel.SourceControl? { store.sourceControl }
+    private var scm: GitPanel.SourceControl? { store.sourceControls[path] }
 
     var body: some View {
-        Group {
-            if let path = store.selectedSession.flatMap(store.workdir(of:)) {
-                sourceControl(path: path)
-                    .onChange(of: path) { explanation = nil }
-            } else {
-                Text("Select a session to see what it changed.").font(.caption).foregroundStyle(Tokens.textDim)
+        sourceControl(path: path)
+            .onChange(of: path) { explanation = nil }
+            .sheet(isPresented: Binding(get: { compare != nil }, set: { if !$0 { compare = nil } })) {
+                if let compare {
+                    DiffViewer(title: compare.title, sources: compare.sources(in: path), selected: compare.selected)
+                }
             }
-        }
-        .sheet(isPresented: Binding(get: { compare != nil }, set: { if !$0 { compare = nil } })) {
-            if let compare, let path = store.selectedSession.flatMap(store.workdir(of:)) {
-                DiffViewer(title: compare.title, sources: compare.sources(in: path), selected: compare.selected)
-            }
-        }
     }
 
     // MARK: Source Control — CHANGES, INCOMING, OUTGOING (like VS Code)
@@ -181,12 +207,31 @@ struct CIPanel: View {
     var body: some View {
         Group {
             if let session = store.selectedSession, let project = store.project(for: session) {
-                ciSection(project, session)
+                VStack(alignment: .leading, spacing: 12) {
+                    if project.remote != nil || store.sessionRepos.count <= 1 { ciSection(project, session) }
+                    // Repos inside a plain project folder, and "Also work in" folders.
+                    ForEach(store.sessionRepos.filter { $0.path != project.path }) { repo in
+                        if let linked = store.projects.first(where: { $0.path == repo.path }) {
+                            repoHeader(repo)
+                            ciSection(linked, session)
+                        } else if let ci = store.repoCI[repo.path] {
+                            repoHeader(repo)
+                            RepoCI(repo: repo, runs: ci.runs, pipeline: ci.pipeline)
+                        }
+                    }
+                }
             } else {
                 Button("All CI") { isCIShown = true }.buttonStyle(PixelButtonStyle(compact: true))
             }
         }
         .sheet(isPresented: $isCIShown) { CISheet() }
+    }
+
+    private func repoHeader(_ repo: Repo) -> some View {
+        HStack(spacing: 6) {
+            Text(repo.name).font(Fonts.ui(14, weight: .bold))
+            if repo.isLinked { Text("also works here").font(.caption2).foregroundStyle(Tokens.work) }
+        }
     }
 
     @ViewBuilder
@@ -226,6 +271,48 @@ struct CIPanel: View {
                 Text("\(head.failureReason ?? "") — CI didn't run the code").font(.caption).foregroundStyle(Tokens.warn)
             }
             if let failing { CIRunRow(run: failing, project: project) }
+        }
+    }
+}
+
+/// CI of a repo that isn't a Meepo project: the default branch's pipeline, RUN for a manual step, the
+/// latest failed run. Shown, not acted on — autofix and notifications stay with projects.
+private struct RepoCI: View {
+    @Environment(AppStore.self) private var store
+    let repo: Repo
+    let runs: [CIRun]
+    let pipeline: Pipeline?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let pipeline {
+                HStack(spacing: 6) {
+                    ForEach(pipeline.steps) { step in
+                        Text(StepLook.symbol(step.state) + step.name).font(Fonts.mono(11))
+                            .foregroundStyle(StepLook.color(step.state)).lineLimit(1)
+                    }
+                }
+                if let step = pipeline.steps.first(where: { $0.trigger != nil && pipeline.canStart($0) }) {
+                    HStack {
+                        Text("\(step.name) ready on \(pipeline.branch) @ \(pipeline.sha.prefix(7))").font(.caption).foregroundStyle(Tokens.textDim)
+                        Spacer()
+                        Button("Run") {
+                            store.confirmation = PixelConfirmation(
+                                title: "Run \(step.name)?",
+                                message: "\(repo.name) · \(pipeline.branch) @ \(pipeline.sha.prefix(7))",
+                                action: "Run"
+                            ) { Task { await store.startRepoPipelineStep(step, in: repo) } }
+                        }
+                        .buttonStyle(PixelButtonStyle(compact: true))
+                    }
+                }
+            } else if runs.isEmpty {
+                Text("No CI").font(.caption).foregroundStyle(Tokens.textDim)
+            }
+            if let failed = runs.first(where: \.failed) {
+                Link("✗ \(failed.workflowName) on \(failed.headBranch)", destination: URL(string: failed.url) ?? URL(string: "about:blank")!)
+                    .font(.caption).foregroundStyle(Tokens.danger)
+            }
         }
     }
 }

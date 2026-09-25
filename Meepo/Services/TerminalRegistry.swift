@@ -35,7 +35,8 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
             worktree: createWorktree,
             remoteControl: remoteControlName,
             prompt: initialPrompt,
-            name: session.name
+            name: session.name,
+            addDirs: (session.extraDirs ?? []).filter { FileManager.default.fileExists(atPath: $0) }
         )
         // Lets meepo-bridge.sh tag every hook event with this session, even after /clear changes the claude id.
         var meepo = ["MEEPO_SESSION_ID": String(id), "MEEPO_PORT": String(EventServer.defaultPort)]

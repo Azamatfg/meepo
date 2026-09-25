@@ -130,6 +130,10 @@ enum AppDatabase {
             try db.alter(table: "session") { t in t.add(column: "name", .text) }
         }
 
+        migrator.registerMigration("v11-extra-dirs") { db in
+            try db.alter(table: "session") { t in t.add(column: "extraDirs", .text) }
+        }
+
         return migrator
     }
 }

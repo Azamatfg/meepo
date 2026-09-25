@@ -6,6 +6,8 @@ struct NewSessionSheet: View {
     @State private var projectId: Int64?
     @State private var model = ""
     @State private var name = ""
+    /// Other projects this session also works in (`claude --add-dir`).
+    @State private var alsoIn: Set<String> = []
     @State private var effort = ""
     /// Worktrees need git; a plain folder project runs sessions in the folder itself. Read off the main
     /// thread when the project changes — never from `body` (running git there crashed, 2026-09-25).
@@ -48,6 +50,22 @@ struct NewSessionSheet: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 260)
                     .help("Tells this session apart from others in the same project; Claude Code shows it too")
+            }
+            if store.projects.count > 1 {
+                FieldRow("Also work in") {
+                    Menu {
+                        ForEach(store.projects.filter { $0.id != projectId }) { other in
+                            Toggle(other.name, isOn: Binding(
+                                get: { alsoIn.contains(other.path) },
+                                set: { if $0 { alsoIn.insert(other.path) } else { alsoIn.remove(other.path) } }))
+                        }
+                    } label: {
+                        Text(alsoIn.isEmpty ? "Only this project"
+                             : store.projects.filter { alsoIn.contains($0.path) }.map(\.name).joined(separator: ", "))
+                    }
+                    .fixedSize()
+                    .help("The session can read and change these projects too (claude --add-dir), and shows their Source Control and CI")
+                }
             }
             FieldRow("Model") {
                 PixelMenu(selection: store.modelChoices().first { $0.value == model }?.title ?? model) {
@@ -148,7 +166,8 @@ struct NewSessionSheet: View {
             try store.createSession(projectId: projectId, model: model.isEmpty ? nil : model,
                                     prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines),
                                     effort: effort.isEmpty ? nil : effort,
-                                    worktree: useWorktree ? featureName : nil, name: name)
+                                    worktree: useWorktree ? featureName : nil, name: name,
+                                    extraDirs: store.projects.filter { alsoIn.contains($0.path) && $0.id != projectId }.map(\.path))
             dismiss()
         } catch {
             self.error = error.localizedDescription

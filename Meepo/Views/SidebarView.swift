@@ -169,7 +169,8 @@ private struct ProjectHeader: View {
                     .font(Fonts.ui(15, weight: .bold))
                     .foregroundStyle(isActive ? Tokens.text : Tokens.textDim)
                     .lineLimit(1)
-                Text(project.remote ?? "no remote")
+                Text(project.remote ?? store.nestedRepos[project.path].flatMap { repos in
+                        repos.isEmpty ? nil : "\(repos.count) repos: " + repos.map(\.name).joined(separator: ", ") } ?? "no remote")
                     .font(.caption)
                     .foregroundStyle(Tokens.textDim)
                     .lineLimit(1)

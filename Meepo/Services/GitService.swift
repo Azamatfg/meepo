@@ -67,6 +67,10 @@ enum GitService {
     }
 
     /// The file is committed or staged in the repository (not just present on disk).
+    static func isRepository(_ path: String) -> Bool {
+        succeeds(["rev-parse", "--is-inside-work-tree"], in: path)
+    }
+
     static func isTracked(_ file: String, in path: String) -> Bool {
         succeeds(["ls-files", "--error-unmatch", "--", file], in: path)
     }

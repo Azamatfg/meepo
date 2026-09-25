@@ -1016,15 +1016,37 @@ final class AppStore {
         return Array((ids[start...] + ids[..<start]).prefix(count))
     }
 
-    /// Git state of the selected session's folder, shared by Explorer and Source Control.
-    private(set) var sourceControl: GitPanel.SourceControl?
-    private(set) var sourceControlPath: String?
+    /// The repos the selected session works in (its folder, the repos inside it, "Also work in" folders).
+    private(set) var sessionRepos: [Repo] = []
+    /// Git state per repo path, shared by Explorer and Source Control.
+    private(set) var sourceControls: [String: GitPanel.SourceControl] = [:]
+
+    func refreshSourceControls(for session: Session) async {
+        guard let folder = workdir(of: session) else { sessionRepos = []; return }
+        let extra = session.extraDirs ?? []
+        let repos = await Task.detached {
+            Repos.find(in: folder) + extra.flatMap { dir in Repos.find(in: dir).map { Repo(name: $0.name, path: $0.path, isLinked: true) } }
+        }.value
+        if repos != sessionRepos { sessionRepos = repos }
+        for repo in repos { await refreshSourceControl(repo.path) }
+    }
 
     func refreshSourceControl(_ path: String) async {
-        if sourceControlPath != path { sourceControl = nil }
-        sourceControlPath = path
         let result = await Task.detached { GitPanel.sourceControl(in: path) }.value
-        if sourceControlPath == path { sourceControl = result }
+        if sourceControls[path] != result { sourceControls[path] = result }
+    }
+
+    /// Changes of every repo under `root`, with paths relative to `root` — for the Explorer's colors.
+    func changes(under root: String) -> [GitPanel.FileChange] {
+        sessionRepos.filter { $0.path == root || $0.path.hasPrefix(root + "/") }.flatMap { repo -> [GitPanel.FileChange] in
+            let prefix = repo.path == root ? "" : String(repo.path.dropFirst(root.count + 1)) + "/"
+            return (sourceControls[repo.path]?.changes ?? []).map { change in
+                var moved = GitPanel.FileChange(status: change.status, path: prefix + change.path, added: change.added, removed: change.removed)
+                moved.isUncommitted = change.isUncommitted
+                moved.oldPath = change.oldPath.map { prefix + $0 }
+                return moved
+            }
+        }
     }
 
     /// Hook events of every session since `date`, oldest first — the Home timeline.
@@ -1339,7 +1361,46 @@ final class AppStore {
                 }
             }
         }
+        await refreshRepoCI()
         isCIPrimed = true
+    }
+
+    /// CI of repos that aren't Meepo projects themselves: the ones inside a plain project folder and "Also work
+    /// in" folders. Shown next to the project's CI; no autofix or notifications for them.
+    private(set) var repoCI: [String: (runs: [CIRun], pipeline: Pipeline?)] = [:]
+
+    /// Repos inside a project folder that isn't one itself (charge-ev → ocpi, ocpp2.0, …), by project path.
+    private(set) var nestedRepos: [String: [Repo]] = [:]
+
+    private func refreshRepoCI() async {
+        let projectPaths = Set(projects.map(\.path))
+        let paths = projects.map(\.path)
+        let nested = await Task.detached {
+            Dictionary(uniqueKeysWithValues: paths.map { path in (path, Repos.find(in: path).filter { $0.path != path }) })
+        }.value
+        if nested != nestedRepos { nestedRepos = nested }
+        let folders = projects.map(\.path) + sessions.flatMap { $0.extraDirs ?? [] }
+        let repos = await Task.detached {
+            Set(folders.flatMap(Repos.find)).filter { !projectPaths.contains($0.path) }
+                .map { (repo: $0, remote: GitService.remoteURL(in: $0.path)) }
+        }.value
+        for (repo, remote) in repos {
+            let stand = Project(name: repo.name, path: repo.path, remote: remote)
+            guard let provider = ciProvider(for: stand) else { continue }
+            let runs = await provider.runs(in: repo.path).sorted { $0.createdAt > $1.createdAt }
+            var latest: [String: CIRun] = [:]
+            for run in runs where latest[run.key] == nil { latest[run.key] = run }
+            repoCI[repo.path] = (latest.values.sorted { $0.createdAt > $1.createdAt }, await provider.pipeline(runs: runs, in: repo.path))
+        }
+    }
+
+    /// A manual step (deploy) of a repo that isn't a project — on click only, like the project's own.
+    func startRepoPipelineStep(_ step: Pipeline.Step, in repo: Repo) async {
+        let stand = Project(name: repo.name, path: repo.path, remote: GitService.remoteURL(in: repo.path))
+        guard let pipeline = repoCI[repo.path]?.pipeline, let provider = ciProvider(for: stand) else { return }
+        if let error = await provider.start(step, of: pipeline, in: repo.path) { bridgeError = error }
+        else { onCINotice?("\(step.name) started", "\(repo.name) · \(pipeline.branch) @ \(pipeline.sha.prefix(7))") }
+        await refreshCI()
     }
 
     /// Fix session in its own worktree with the failed step's log and guardrails in its first prompt.
@@ -1677,7 +1738,7 @@ final class AppStore {
     /// `worktree`: a feature name — the session runs in its own git worktree (`claude -w`), SPEC module 5.
     /// `resuming`: an existing Claude Code conversation (e.g. imported from an IDE); it opens with `--resume`.
     func createSession(projectId: Int64, model: String?, prompt: String?, effort: String? = nil, stage: String? = nil,
-                       worktree: String? = nil, resuming: String? = nil, name: String? = nil) throws {
+                       worktree: String? = nil, resuming: String? = nil, name: String? = nil, extraDirs: [String] = []) throws {
         guard let project = projects.first(where: { $0.id == projectId }) else { return }
         let worktreeName = worktree.map(ClaudeLauncher.worktreeSlug).flatMap { $0.isEmpty ? nil : $0 }
         if worktreeName != nil { GitService.ensureWorktreesIgnored(in: project.path, backups: backupsDir) }
@@ -1694,7 +1755,8 @@ final class AppStore {
             status: .idle,
             createdAt: .now,
             lastActiveAt: .now,
-            name: name.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0.trimmingCharacters(in: .whitespaces) }
+            name: name.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0.trimmingCharacters(in: .whitespaces) },
+            extraDirs: extraDirs.isEmpty ? nil : extraDirs
         )
         try db.write { try session.insert($0) }
         if let prompt, !prompt.isEmpty { initialPrompts[session.id!] = prompt }
@@ -1750,7 +1812,9 @@ final class AppStore {
             portBase: keepsPorts ? old.portBase : nextPortBase(),
             status: .idle,
             createdAt: .now,
-            lastActiveAt: .now
+            lastActiveAt: .now,
+            name: old.name,
+            extraDirs: old.extraDirs
         )
         try db.write { try fresh.insert($0) }
         if let prompt, !prompt.isEmpty { initialPrompts[fresh.id!] = prompt }
