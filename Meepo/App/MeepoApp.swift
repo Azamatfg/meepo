@@ -4,6 +4,7 @@ import SwiftUI
 @main
 struct MeepoApp: App {
     @State private var store: AppStore
+    @NSApplicationDelegateAdaptor(QuitHandler.self) private var quitHandler
     private let hotkeys: HotkeyMonitor
     private let services: LiveServices?
     /// Unit tests host the app: keep them off the real database and away from real sessions.
@@ -38,10 +39,11 @@ struct MeepoApp: App {
                     await services.requestNotificationPermission(store: store)
                     services.bindScreenshotHotKey(store.screenshotHotKey, store: store)
                     await store.restoreSessions()
-                    Task {
+                    quitHandler.store = store
+                    Task { // Updates like Claude Code: at launch, then every 6 hours; installed at quit.
                         while !Task.isCancelled {
-                            store.availableUpdate = await UpdateCheck.newer()
-                            try? await Task.sleep(for: .seconds(24 * 3600))
+                            await store.checkForUpdates()
+                            try? await Task.sleep(for: .seconds(6 * 3600))
                         }
                     }
                     Task { // Teammates' commits: every 5 minutes, and when the user comes back to Meepo.
@@ -168,5 +170,14 @@ final class LiveServices {
         } catch {
             store.bridgeError = error.localizedDescription
         }
+    }
+}
+
+/// Installs a downloaded update as Meepo quits, so it's the new version next time (like Claude Code).
+final class QuitHandler: NSObject, NSApplicationDelegate {
+    weak var store: AppStore?
+
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated { _ = store?.installStagedUpdate() }
     }
 }

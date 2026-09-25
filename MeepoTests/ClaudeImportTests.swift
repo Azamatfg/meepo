@@ -72,13 +72,3 @@ final class PlainFolderProjectTests: XCTestCase {
         XCTAssertFalse(GitPanel.sourceControl(in: folder.path).isRepository)   // inspector offers git init
     }
 }
-
-final class UpdateCheckTests: XCTestCase {
-    func testVersionsCompareByNumberNotText() {
-        XCTAssertTrue(UpdateCheck.isNewer("0.10.0", than: "0.9.3"))   // text order would say no
-        XCTAssertTrue(UpdateCheck.isNewer("1.0", than: "0.9.9"))
-        XCTAssertFalse(UpdateCheck.isNewer("0.1.0", than: "0.1"))
-        XCTAssertFalse(UpdateCheck.isNewer("0.1.0", than: "0.2.0"))
-        XCTAssertEqual(UpdateCheck.Release(tag_name: "v0.2.0", html_url: "u").version, "0.2.0")
-    }
-}

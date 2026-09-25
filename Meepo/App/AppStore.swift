@@ -63,6 +63,9 @@ final class AppStore {
         autofixProjectIds = Set((defaults.array(forKey: Self.autofixKey) as? [Int64]) ?? [])
         fixAttempts = (defaults.dictionary(forKey: Self.fixAttemptsKey) as? [String: Int]) ?? [:]
         screenshotHotKey = defaults.string(forKey: Self.shotHotKeyKey) ?? "⌘⇧6"
+        autoUpdate = defaults.object(forKey: Self.autoUpdateKey) as? Bool ?? true
+        updateChannel = defaults.string(forKey: Self.channelKey).flatMap(Updater.Channel.init(rawValue:))
+            ?? (Updater.currentVersion?.isPrerelease ?? true ? .beta : .stable)
         libraryFolder = defaults.string(forKey: Self.libraryKey)
             ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude").path
         // Processes restart with Meepo, so statuses from the previous run are stale.
@@ -245,8 +248,87 @@ final class AppStore {
         refreshProjects()
     }
 
-    /// A newer Meepo on GitHub Releases, checked daily.
-    var availableUpdate: UpdateCheck.Release?
+    // MARK: Updates (like Claude Code, 2026-09-25)
+
+    enum UpdateState: Equatable {
+        case idle, checking, upToDate
+        case downloading(String)
+        /// Downloaded and verified; installs when Meepo quits.
+        case ready(version: String, notes: String)
+        /// Newer version out, but this copy can't replace itself: the user updates (brew / download).
+        case manual(version: String, page: String)
+    }
+
+    private static let autoUpdateKey = "autoUpdate"
+    private static let channelKey = "updateChannel"
+
+    private(set) var updateState = UpdateState.idle
+    private var stagedUpdate: URL?
+
+    var autoUpdate: Bool {
+        didSet { defaults.set(autoUpdate, forKey: Self.autoUpdateKey) }
+    }
+
+    /// Betas by default while Meepo itself is a beta, stable afterwards.
+    var updateChannel: Updater.Channel {
+        didSet { defaults.set(updateChannel.rawValue, forKey: Self.channelKey) }
+    }
+
+    /// At launch, every few hours, and on `meepo update`: find, download and verify a newer release.
+    func checkForUpdates(userInitiated: Bool = false) async {
+        guard let current = Updater.currentVersion else {
+            if userInitiated { notice("NO UPDATES FOR THIS BUILD", "It isn't a release build (built from source).") }
+            return
+        }
+        guard autoUpdate || userInitiated else { return }
+        if case .ready = updateState { if userInitiated { notice("UPDATE READY", "It installs when you quit Meepo.") }; return }
+        updateState = .checking
+        do {
+            let releases = try await Updater.fetchReleases()
+            guard let release = Updater.pick(releases, channel: updateChannel, current: current), let version = release.version else {
+                updateState = .upToDate
+                if userInitiated { notice("MEEPO IS UP TO DATE", "\(current) is the newest on the \(updateChannel.rawValue) channel.") }
+                return
+            }
+            let target = Bundle.main.bundleURL
+            guard Updater.canReplace(target) else {
+                updateState = .manual(version: version.text, page: release.html_url)
+                return
+            }
+            updateState = .downloading(version.text)
+            let app = try await Updater.download(release)
+            let own = await Task.detached { Updater.signature(of: target) }.value
+            guard let team = own.team, let bundleID = own.identifier else { throw Updater.Failure("this copy of Meepo isn't signed") }
+            if let problem = await Task.detached(operation: { Updater.verify(app, team: team, bundleID: bundleID) }).value {
+                try? FileManager.default.removeItem(at: app.deletingLastPathComponent())
+                throw Updater.Failure("\(version) was rejected: \(problem)")
+            }
+            stagedUpdate = app
+            updateState = .ready(version: version.text, notes: release.body ?? "")
+        } catch {
+            updateState = .idle
+            if userInitiated { notice("UPDATE FAILED", error.localizedDescription) }
+        }
+    }
+
+    /// At quit (and RESTART NOW): puts the verified download in place of this app. True when it did.
+    @discardableResult
+    func installStagedUpdate() -> Bool {
+        guard let staged = stagedUpdate else { return false }
+        do {
+            try Updater.install(staged, over: Bundle.main.bundleURL,
+                                backup: Updater.stagingDir.appending(path: "previous/Meepo.app"))
+            stagedUpdate = nil
+            return true
+        } catch {
+            bridgeError = "Update not installed: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    private func notice(_ title: String, _ message: String) {
+        confirmation = PixelConfirmation(title: title, message: message, action: "OK", cancel: nil, isDestructive: false) {}
+    }
 
     private var widgetSnapshot = WidgetSnapshot()
 
@@ -991,6 +1073,10 @@ final class AppStore {
 
     /// `meepo <folder>` (via meepo://open?path=…): the folder's project — added if new — with a session open in it.
     func openFromCommandLine(_ url: URL) {
+        if url.scheme == "meepo", url.host() == "update" {             // `meepo update`, like `claude update`
+            Task { await checkForUpdates(userInitiated: true) }
+            return
+        }
         guard url.scheme == "meepo", url.host() == "open",
               let path = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "path" })?.value
         else { return }

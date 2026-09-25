@@ -111,6 +111,22 @@ struct SettingsView: View {
                     }
                 }
             }
+            FieldRow("Updates") {
+                HStack(spacing: 6) {
+                    Button(store.autoUpdate ? "AUTO" : "OFF") { store.autoUpdate.toggle() }
+                        .help("Download new versions in the background and install them when Meepo quits")
+                    PixelMenu(selection: store.updateChannel.rawValue.uppercased()) {
+                        ForEach(Updater.Channel.allCases, id: \.self) { channel in
+                            Button(channel == .beta ? "Beta — newest, may have rough edges" : "Stable — releases only") {
+                                store.updateChannel = channel
+                            }
+                        }
+                    }
+                    Button("CHECK NOW") { Task { await store.checkForUpdates(userInitiated: true) } }
+                        .help("Same as `meepo update` in a terminal")
+                }
+                .buttonStyle(PixelButtonStyle())
+            }
             FieldRow("Remote Control for new sessions") {
                 Button(store.remoteControlForNewSessions ? "ON" : "OFF") { store.remoteControlForNewSessions.toggle() }
                     .buttonStyle(PixelButtonStyle())

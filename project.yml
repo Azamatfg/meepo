@@ -22,6 +22,8 @@ settings:
     DEVELOPMENT_TEAM: ZKXQWVLBRG
     CODE_SIGN_IDENTITY: Developer ID Application
     CODE_SIGN_STYLE: Manual
+    # The release workflow sets the tag (v0.1.4-beta); local builds leave it empty and never self-update.
+    MEEPO_RELEASE_TAG: ""
   configs:
     # Notarization rejects get-task-allow (the debugger entitlement Xcode injects); Debug keeps it for tests.
     Release:
@@ -53,6 +55,7 @@ targets:
     info:
       path: Meepo/Info.plist
       properties:
+        MeepoReleaseTag: $(MEEPO_RELEASE_TAG)
         CFBundleURLTypes:
           - CFBundleURLName: com.azamatfg.meepo
             CFBundleURLSchemes: [meepo]

@@ -29,5 +29,7 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>MeepoReleaseTag</key>
+	<string>$(MEEPO_RELEASE_TAG)</string>
 </dict>
 </plist>

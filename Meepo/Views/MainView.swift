@@ -109,12 +109,7 @@ private struct TitleBar: View {
                     .help("Sessions waiting for you: \(store.waitingCount) — Ctrl+Tab")
             }
             Spacer()
-            if let update = store.availableUpdate, let url = URL(string: update.html_url) {
-                Link("UPDATE \(update.version)", destination: url)
-                    .font(Fonts.title(16))
-                    .foregroundStyle(Tokens.selection)
-                    .help("brew upgrade --cask meepo, or download it from the release page")
-            }
+            UpdateBadge()
             // Less frequent things live behind one menu so the bar stays readable.
             PixelMenu(selection: "≡") {
                 Button(isFeedShown ? "Hide Session Panel" : "Show Session Panel") { isFeedShown.toggle() }
@@ -254,5 +249,44 @@ private struct TerminalHost: NSViewRepresentable {
         terminal.needsLayout = true
         terminal.needsDisplay = true
         DispatchQueue.main.async { terminal.window?.makeFirstResponder(terminal) }
+    }
+}
+
+/// Title-bar update state: downloading, ready (installs at quit, or RESTART now), or update by hand.
+private struct UpdateBadge: View {
+    @Environment(AppStore.self) private var store
+
+    var body: some View {
+        switch store.updateState {
+        case let .downloading(version):
+            Text("↓ \(version)").font(Fonts.mono(12)).foregroundStyle(Tokens.textDim)
+                .help("Downloading Meepo \(version)")
+        case let .ready(version, notes):
+            Button("\(version) READY") {
+                store.confirmation = PixelConfirmation(
+                    title: "RESTART INTO \(version.uppercased())?",
+                    message: (notes.isEmpty ? "" : String(notes.prefix(400)) + "\n\n")
+                        + "Sessions come back where they were (claude --resume). Or keep working: it installs when you quit Meepo.",
+                    action: "RESTART",
+                    isDestructive: false
+                ) {
+                    if store.installStagedUpdate() {
+                        Updater.relaunch(Bundle.main.bundleURL)
+                        NSApp.terminate(nil)
+                    }
+                }
+            }
+            .foregroundStyle(Tokens.selection)
+            .help("Meepo \(version) is downloaded and checked; it installs when you quit, or restart now")
+        case let .manual(version, page):
+            if let url = URL(string: page) {
+                Link("UPDATE \(version)", destination: url)
+                    .font(Fonts.title(16))
+                    .foregroundStyle(Tokens.selection)
+                    .help("This copy can't update itself here: brew upgrade --cask meepo, or download it")
+            }
+        default:
+            EmptyView()
+        }
     }
 }

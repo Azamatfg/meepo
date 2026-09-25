@@ -10,6 +10,8 @@ cask "meepo" do
   homepage "https://github.com/Azamatfg/meepo"
 
   depends_on macos: :sonoma
+  # Meepo updates itself (like Claude Code); brew shouldn't fight it.
+  auto_updates true
 
   app "Meepo.app"
   binary "#{appdir}/Meepo.app/Contents/Resources/meepo"

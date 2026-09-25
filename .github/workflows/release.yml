@@ -59,6 +59,7 @@ jobs:
           xcodebuild -project Meepo.xcodeproj -scheme Meepo -configuration Release -skipPackagePluginValidation \
             -derivedDataPath build ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
             MARKETING_VERSION="${VERSION:-0.0.0}" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            MEEPO_RELEASE_TAG="${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}" \
             OTHER_CODE_SIGN_FLAGS="--timestamp" \
             build
 

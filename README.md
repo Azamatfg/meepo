@@ -41,6 +41,8 @@ brew install --cask meepo
 
 Then `meepo` opens it from any terminal, and `meepo .` adds the current folder as a project with a Claude session in it.
 
+Meepo keeps itself up to date like Claude Code: it downloads new versions in the background and installs them when you quit (or RESTART from the title bar). `meepo update` checks right away; Settings → Updates turns it off or switches between the beta and stable channels. An update is installed only if it's signed by the same developer and notarized by Apple.
+
 Or download `Meepo.zip` from [Releases](https://github.com/Azamatfg/meepo/releases), unzip it and move `Meepo.app` to Applications. Builds are signed and notarized by Apple, so macOS opens them without warnings.
 
 ### Build from source

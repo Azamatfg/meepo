@@ -36,6 +36,10 @@ final class MeepoCommandTests: XCTestCase {
         XCTAssertEqual(path, URL(filePath: String(cString: realpath(folder.path, nil))).path)   // spaces and Cyrillic intact
     }
 
+    func testUpdateChecksNowLikeClaudeUpdate() throws {
+        XCTAssertEqual(try run(["update"]).opened, "meepo://update ")
+    }
+
     func testMissingFolderFails() throws {
         XCTAssertEqual(try run(["/nowhere/at/all"]).status, 1)
     }
