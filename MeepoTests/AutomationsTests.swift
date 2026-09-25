@@ -25,7 +25,7 @@ final class AutomationsUsageTests: XCTestCase {
 
     func testFadingIsAMonthUnusedAndNeverBuiltIns() {
         func item(_ owner: Automations.Owner, lastUsed: Date?) -> Automations.Item {
-            Automations.Item(name: "x", description: nil, file: nil, owner: owner, projects: [],
+            Automations.Item(name: "x", description: nil, personalFiles: [], teamFiles: [], owner: owner, projects: [],
                              usage: Automations.Usage(weekly: [], lastUsed: lastUsed), effort: nil, model: nil)
         }
         XCTAssertTrue(Automations.isFading(item(.personal, lastUsed: now.addingTimeInterval(-40 * 86_400)), now: now))
@@ -63,7 +63,15 @@ final class AutomationsStoreTests: XCTestCase {
         try "mine".write(to: commands.appending(path: "mynotes.md"), atomically: true, encoding: .utf8)
         try store.addProject(at: repo)
 
+        let other = try makeTempRepo()                     // the same personal command in a second project
+        try FileManager.default.createDirectory(at: other.appending(path: ".claude/commands"), withIntermediateDirectories: true)
+        try "theirs".write(to: other.appending(path: ".claude/commands/mynotes.md"), atomically: true, encoding: .utf8)
+        try store.addProject(at: other)
+
         let items = await store.automations()
+        XCTAssertEqual(items.filter { $0.name == "mynotes" }.count, 1, "one row per command, however many projects have it")
+        XCTAssertEqual(Set(items.map(\.id)).count, items.count, "ids must be unique, or SwiftUI repeats a row")
+        XCTAssertEqual(items.first { $0.name == "mynotes" }?.personalFiles.count, 2)
         XCTAssertEqual(items.first { $0.name == "teamship" }?.owner, .team)
         XCTAssertEqual(items.first { $0.name == "mynotes" }?.owner, .personal, "in the project but not in git: the user's own")
         XCTAssertEqual(items.first { $0.name == "verify" }?.owner, .builtIn)
@@ -78,6 +86,8 @@ final class AutomationsStoreTests: XCTestCase {
         let mine = try XCTUnwrap(items.first { $0.name == "mynotes" })
         try store.setFrontmatter(mine, "effort", to: "high")
         XCTAssertEqual(try String(contentsOf: commands.appending(path: "mynotes.md"), encoding: .utf8), "---\neffort: high\n---\nmine")
+        XCTAssertEqual(try String(contentsOf: other.appending(path: ".claude/commands/mynotes.md"), encoding: .utf8),
+                       "---\neffort: high\n---\ntheirs", "every personal copy")
         let team = try XCTUnwrap(items.first { $0.name == "teamship" })
         try store.setFrontmatter(team, "effort", to: "high")
         XCTAssertFalse(try String(contentsOf: commands.appending(path: "teamship.md"), encoding: .utf8).contains("effort"))

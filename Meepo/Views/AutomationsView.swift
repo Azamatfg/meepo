@@ -134,7 +134,8 @@ struct AutomationsView: View {
     private func nameCell(_ item: Automations.Item) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("/" + item.name).font(Fonts.mono(13).weight(.semibold)).lineLimit(1)
-            Text([item.owner.rawValue, item.projects.isEmpty ? nil : item.projects.joined(separator: ", ")]
+            Text([item.owner.rawValue, item.projects.isEmpty ? nil : item.projects.count > 3
+                  ? "\(item.projects.count) projects" : item.projects.joined(separator: ", ")]
                 .compactMap { $0 }.joined(separator: " · "))
                 .font(.caption).foregroundStyle(Tokens.textDim).lineLimit(1)
         }
@@ -143,13 +144,15 @@ struct AutomationsView: View {
 
     @ViewBuilder
     private func frontmatterMenu(_ item: Automations.Item, key: String, value: String?, options: [(value: String, title: String)]) -> some View {
-        if item.owner == .personal, item.file != nil {
+        if item.canEdit {
             PixelMenu(selection: value ?? "Default") {
                 ForEach(options, id: \.value) { option in
                     Button(option.title) { apply { try store.setFrontmatter(item, key, to: option.value.isEmpty ? nil : option.value) } }
                 }
             }
-            .help(key == "model" ? "Switching model mid-conversation drops the prompt cache for that turn" : "Claude Code uses this effort while the skill runs")
+            .help((key == "model" ? "Switching model mid-conversation drops the prompt cache for that turn" : "Claude Code uses this effort while the skill runs")
+                  + (item.personalFiles.count > 1 ? ". Set on all \(item.personalFiles.count) of your copies" : "")
+                  + (item.teamFiles.isEmpty ? "" : "; the team's copy in git stays as it is"))
         } else {
             Text(value ?? "—").foregroundStyle(Tokens.textDim)
                 .help(item.owner == .team ? "A team file under git — change it in the repo, for everyone" : "Built into Claude Code")

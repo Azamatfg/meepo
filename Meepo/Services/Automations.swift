@@ -5,17 +5,23 @@ import Foundation
 enum Automations {
     enum Owner: String { case personal = "Personal", team = "Team", builtIn = "Built into Claude Code" }
 
+    /// One command name, however many copies of it projects have (history counts it by name anyway).
     struct Item: Identifiable, Equatable {
         let name: String
         let description: String?
-        let file: URL?
-        let owner: Owner
+        /// The user's own copies (~/.claude, or project files not in git): effort and model are set on all of them.
+        var personalFiles: [URL]
+        /// Copies in git — the team's; never edited.
+        var teamFiles: [URL]
+        /// Team if any copy is the team's, else personal; built-in when there is no file at all.
+        var owner: Owner
         /// Projects it's available in (empty = everywhere: personal ~/.claude or built-in).
         var projects: [String]
         var usage: Usage
         var effort: String?
         var model: String?
         var id: String { name }
+        var canEdit: Bool { !personalFiles.isEmpty }
     }
 
     struct Usage: Equatable {

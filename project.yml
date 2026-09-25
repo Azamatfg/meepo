@@ -25,6 +25,10 @@ settings:
     # The release workflow sets the tag (v0.1.4-beta); local builds leave it empty and never self-update.
     MEEPO_RELEASE_TAG: ""
   configs:
+    # Warn about expressions slow to type-check: CI's release build gave up on one that Debug here accepted
+    # (0.2.6, 2026-09-25). Fix any such warning before tagging.
+    Debug:
+      OTHER_SWIFT_FLAGS: "$(inherited) -Xfrontend -warn-long-expression-type-checking=500"
     # Notarization rejects get-task-allow (the debugger entitlement Xcode injects); Debug keeps it for tests.
     Release:
       CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
