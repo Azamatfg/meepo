@@ -1,21 +1,15 @@
 import AppKit
 
-/// Menu bar icon (design §7): a one-colour hood silhouette, template image so macOS tints it for the theme.
+/// Menu bar icon: the app icon's "m." in one colour, a template image so macOS tints it for the theme.
 enum MenuBarIcon {
-    static let hood: NSImage = {
-        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
-            let hood = NSBezierPath()
-            hood.move(to: NSPoint(x: 9, y: 17.5)) // pointed tip
-            hood.curve(to: NSPoint(x: 14.5, y: 7), controlPoint1: NSPoint(x: 13, y: 16), controlPoint2: NSPoint(x: 14.5, y: 11.5))
-            hood.line(to: NSPoint(x: 17, y: 0.5))
-            hood.line(to: NSPoint(x: 1, y: 0.5))
-            hood.line(to: NSPoint(x: 3.5, y: 7))
-            hood.curve(to: NSPoint(x: 9, y: 17.5), controlPoint1: NSPoint(x: 3.5, y: 11.5), controlPoint2: NSPoint(x: 5, y: 16))
-            hood.close()
-            hood.append(NSBezierPath(ovalIn: NSRect(x: 5.5, y: 3.5, width: 7, height: 8))) // face opening
-            hood.windingRule = .evenOdd
+    static let mark: NSImage = {
+        let image = NSImage(size: NSSize(width: 20, height: 18), flipped: false) { _ in
+            let font = NSFont(name: "TT Commons Bold", size: 17) ?? .systemFont(ofSize: 16, weight: .heavy)
+            let m = NSAttributedString(string: "m", attributes: [.font: font, .foregroundColor: NSColor.black])
+            let size = m.size()
+            m.draw(at: NSPoint(x: 0, y: (18 - size.height) / 2))
             NSColor.black.setFill()
-            hood.fill()
+            NSBezierPath(ovalIn: NSRect(x: size.width + 1, y: 3.5, width: 4, height: 4)).fill()
             return true
         }
         image.isTemplate = true

@@ -40,17 +40,17 @@ private struct ChoosePath: View {
         VStack(spacing: 18) {
             HStack { Spacer(); Button("Skip") { dismiss() }.keyboardShortcut(.cancelAction).buttonStyle(PixelButtonStyle(compact: true)) }
             Text("You describe. Claude Code builds.").font(Fonts.ui(40, weight: .bold)).multilineTextAlignment(.center)
-            Text("Meepo keeps every Claude Code session on track. How do you want to start?")
+            Text("meepo keeps every Claude Code session on track. How do you want to start?")
                 .font(Fonts.ui(17)).foregroundStyle(Tokens.textDim)
             HStack(alignment: .top, spacing: 18) {
                 card("I already use Claude Code",
-                     "Meepo reads what Claude Code already has. Your setup stays yours.",
+                     "meepo reads what Claude Code already has. Your setup stays yours.",
                      ["Your projects and conversations, found for you",
                       "Your skills, hooks and settings, untouched — Automations shows how you use them",
                       "Explorer, Source Control and two terminals side by side"],
                      "Bring my setup") { choose(.experienced) }
                 card("I'm new to this",
-                     "Tell Claude what to build; Meepo explains each step in plain words.",
+                     "Tell Claude what to build; meepo explains each step in plain words.",
                      ["Claude Code installed and signed in, step by step",
                       "A first project — a folder you have, or a new one",
                       "Guided mode: Claude explains, and asks before anything risky",
@@ -174,16 +174,16 @@ private struct BridgeStep: View {
 
     var body: some View {
         Step(number: number, title: "See what every session is doing", isDone: store.isBridgeInstalled) {
-            Text("So Meepo can show who's working, who waits for you and what changed, Claude Code tells it through hooks.")
+            Text("So meepo can show who's working, who waits for you and what changed, Claude Code tells it through hooks.")
                 .foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
             if store.isBridgeInstalled {
-                Text("On. Remove it any time: Meepo menu → Remove Hook Bridge.").foregroundStyle(Tokens.work)
+                Text("On. Remove it any time: meepo menu → Remove Hook Bridge.").foregroundStyle(Tokens.work)
             } else {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("What this changes:").font(Fonts.ui(13, weight: .semibold))
                     Text("• ~/.claude/settings.json gets \(BridgeInstaller.events.count) hook entries that call ~/.meepo/bin/meepo-bridge.sh")
                     Text("• your own hooks and settings stay as they are; a backup goes to ~/.meepo/backups")
-                    Text("• sessions outside Meepo aren't affected, and if Meepo is removed the entries do nothing")
+                    Text("• sessions outside meepo aren't affected, and if meepo is removed the entries do nothing")
                 }
                 .font(.caption).foregroundStyle(Tokens.textDim)
                 Button("Turn on") { store.installBridge() }.buttonStyle(PixelButtonStyle(isPrimary: true))
@@ -229,7 +229,7 @@ private struct ExperiencedSetup: View {
                         Text("In a teammate's repo for the first time? Run /team-onboarding in a session there: Claude Code writes a guide from how the team works.")
                             .font(.caption).foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
                     }
-                    Step(number: 4, title: "Optional: CI in Meepo", isDone: Self.optional.allSatisfy { store.toolPath($0.0) != nil }) {
+                    Step(number: 4, title: "Optional: CI in meepo", isDone: Self.optional.allSatisfy { store.toolPath($0.0) != nil }) {
                         ForEach(Self.optional, id: \.0) { name, use, install in
                             HStack(spacing: 8) {
                                 Text(store.toolPath(name) != nil ? "✓" : "–").foregroundStyle(Tokens.work)
@@ -244,7 +244,7 @@ private struct ExperiencedSetup: View {
             }
             HStack {
                 Spacer()
-                Button("Open Meepo") { finish(.experienced, false) }.buttonStyle(PixelButtonStyle(large: true, isPrimary: true))
+                Button("Open meepo") { finish(.experienced, false) }.buttonStyle(PixelButtonStyle(large: true, isPrimary: true))
             }
         }
         .padding(24)
@@ -298,7 +298,7 @@ private struct NewcomerSetup: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text("• Claude explains what it does and why (Claude Code's Explanatory style)")
                             Text("• it asks first before pushing code, deleting folders, using sudo, publishing, or touching .env secrets")
-                            Text("• only in Meepo's sessions; turn it off later in ≡ → Guided mode")
+                            Text("• only in meepo's sessions; turn it off later in ≡ → Guided mode")
                         }
                         .font(.caption).foregroundStyle(Tokens.textDim)
                     }

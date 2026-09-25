@@ -285,7 +285,7 @@ private struct ChangesView: View {
         VStack(alignment: .leading, spacing: 8) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
-                    if entries.isEmpty { Text("Meepo hasn't changed any of your files yet.").foregroundStyle(Tokens.textDim) }
+                    if entries.isEmpty { Text("meepo hasn't changed any of your files yet.").foregroundStyle(Tokens.textDim) }
                     ForEach(entries) { entry in
                         HStack(spacing: 8) {
                             VStack(alignment: .leading, spacing: 2) {
@@ -302,7 +302,7 @@ private struct ChangesView: View {
                                 confirmation = PixelConfirmation(
                                     title: "RESTORE \(URL(filePath: entry.file).lastPathComponent.uppercased())?",
                                     message: entry.backup == nil
-                                        ? "Meepo created this file; restoring deletes it. The current file is backed up first."
+                                        ? "meepo created this file; restoring deletes it. The current file is backed up first."
                                         : "Puts back the file as it was before “\(entry.action)”. The current file is backed up first.",
                                     action: "RESTORE"
                                 ) { restore(entry) }

@@ -27,7 +27,7 @@ enum NotifyGuard {
         let backup = backupDir.appending(path: "\(name)-\(file.lastPathComponent)-\(UUID().uuidString.prefix(8))")
         try data.write(to: backup)
         try Data(updated.utf8).write(to: file.resolvingSymlinksInPath(), options: .atomic)
-        ChangeLog.record(enabled ? "Quiet own Notification hooks in Meepo" : "Restore own Notification hooks",
+        ChangeLog.record(enabled ? "Quiet own Notification hooks in meepo" : "Restore own Notification hooks",
                          file: file.resolvingSymlinksInPath(), backup: backup, backups: backupDir)
         return changed
     }

@@ -114,7 +114,7 @@ struct SettingsView: View {
             FieldRow("Updates") {
                 HStack(spacing: 6) {
                     Button(store.autoUpdate ? "AUTO" : "OFF") { store.autoUpdate.toggle() }
-                        .help("Download new versions in the background and install them when Meepo quits")
+                        .help("Download new versions in the background and install them when meepo quits")
                     PixelMenu(selection: store.updateChannel.rawValue.uppercased()) {
                         ForEach(Updater.Channel.allCases, id: \.self) { channel in
                             Button(channel == .beta ? "Beta — newest, may have rough edges" : "Stable — releases only") {

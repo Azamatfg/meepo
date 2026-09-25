@@ -188,9 +188,9 @@ enum GitPanel {
     static func teammateNote(commits: [String], files: [String], upstream: String, pulled: Bool) -> String {
         // Only tells, never asks for git: the user chose "wait for a clean tree" over "have the agent commit"
         // (2026-09-24), and commits happen only when the user asks. Commit messages are quoted as data.
-        var lines = ["[Meepo] Teammates pushed \(commits.count) new commit\(commits.count == 1 ? "" : "s") to \(upstream)"
+        var lines = ["[meepo] Teammates pushed \(commits.count) new commit\(commits.count == 1 ? "" : "s") to \(upstream)"
             + (pulled ? ", already pulled into this folder (git pull --rebase). Their commit messages, quoted:"
-                      : ". Not pulled yet: this folder has uncommitted changes, and Meepo pulls them itself once it's clean."
+                      : ". Not pulled yet: this folder has uncommitted changes, and meepo pulls them itself once it's clean."
                         + " Don't commit, pull or rebase because of this note. Their commit messages, quoted:")]
         lines += commits.prefix(15).map { "- \"\($0)\"" }
         if !files.isEmpty {

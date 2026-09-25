@@ -20,7 +20,7 @@ struct AutomationsView: View {
                 Spacer()
                 Button("Close") { dismiss() }.keyboardShortcut(.cancelAction).buttonStyle(PixelButtonStyle())
             }
-            Text("Skills and commands you have, counted from your own Claude Code history — every session, in Meepo or not. Settings are yours: effort and model go into your own skill files; the rest into your ~/.claude/settings.json, so team files stay untouched.")
+            Text("Skills and commands you have, counted from your own Claude Code history — every session, in meepo or not. Settings are yours: effort and model go into your own skill files; the rest into your ~/.claude/settings.json, so team files stay untouched.")
                 .foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
             if let error { Text(error).foregroundStyle(Tokens.danger) }
             if let items {

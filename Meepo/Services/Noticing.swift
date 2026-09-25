@@ -104,6 +104,6 @@ enum Noticing {
     /// Things Meepo itself now does, the command each one should make less needed, and since when —
     /// Meepo checks its own changes against the user's real behavior.
     static let meepoReplacements: [(command: String, feature: String, since: Date)] = [
-        ("usage", "Plan limits in Meepo's status bar (0.2.3)", Date(timeIntervalSince1970: 1_790_345_945)),
+        ("usage", "Plan limits in meepo's status bar (0.2.3)", Date(timeIntervalSince1970: 1_790_345_945)),
     ]
 }

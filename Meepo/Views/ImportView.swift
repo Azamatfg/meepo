@@ -36,7 +36,7 @@ struct ImportList: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
                     if let folders, folders.isEmpty {
-                        Text("Every folder Claude Code has worked in is already in Meepo.").foregroundStyle(Tokens.textDim)
+                        Text("Every folder Claude Code has worked in is already in meepo.").foregroundStyle(Tokens.textDim)
                     } else if folders == nil {
                         Text("Reading Claude Code's history…").foregroundStyle(Tokens.textDim)
                     }

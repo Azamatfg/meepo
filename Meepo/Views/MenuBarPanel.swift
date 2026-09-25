@@ -25,7 +25,7 @@ struct MenuBarPanel: View {
                 .font(Fonts.mono(12))
                 .foregroundStyle(Tokens.screen)
             HStack {
-                Button("Open Meepo") { open() }
+                Button("Open meepo") { open() }
                 Button("Quit") { NSApp.terminate(nil) }
             }
             .buttonStyle(PixelButtonStyle())

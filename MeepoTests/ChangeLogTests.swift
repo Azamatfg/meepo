@@ -51,7 +51,7 @@ final class ChangeLogTests: XCTestCase {
 
         let actions = ChangeLog.entries(backups: home.appending(path: "backups")).map(\.action)
         XCTAssertTrue(actions.contains("Hook bridge"))
-        XCTAssertTrue(actions.contains("Quiet own Notification hooks in Meepo"))
+        XCTAssertTrue(actions.contains("Quiet own Notification hooks in meepo"))
         XCTAssertTrue(actions.contains("Ignore .claude/worktrees"))
     }
 }

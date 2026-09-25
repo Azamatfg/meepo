@@ -183,9 +183,9 @@ private struct ProjectHeader: View {
                 }
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: project.path)]) }
                 Divider()
-                Button("Remove from Meepo…") {
+                Button("Remove from meepo…") {
                     store.confirmation = PixelConfirmation(
-                        title: "Remove \(project.name) from Meepo?",
+                        title: "Remove \(project.name) from meepo?",
                         message: "Its sessions close. The folder, git and Claude's conversations stay — add it again any time.",
                         action: "Remove"
                     ) { store.removeProject(project.id!) }
@@ -197,7 +197,7 @@ private struct ProjectHeader: View {
             .menuIndicator(.hidden)
             .buttonStyle(PixelButtonStyle(compact: true))
             .fixedSize()
-            .help("Open \(project.name) in an editor (Meepo has none)")
+            .help("Open \(project.name) in an editor (meepo has none)")
             Button(action: onNewSession) {
                 Image(systemName: "plus")
             }
@@ -237,7 +237,7 @@ struct BridgeIssues: View {
             if !store.isBridgeInstalled {
                 Button("No statuses: install the hook bridge") { store.installBridge() }
                     .buttonStyle(.plain).foregroundStyle(Tokens.need)
-                    .help("Adds meepo-bridge.sh to ~/.claude/settings.json next to your hooks; your own Notification hooks stay quiet in Meepo sessions. Backups go to ~/.meepo/backups")
+                    .help("Adds meepo-bridge.sh to ~/.claude/settings.json next to your hooks; your own Notification hooks stay quiet in meepo sessions. Backups go to ~/.meepo/backups")
             }
         }
     }

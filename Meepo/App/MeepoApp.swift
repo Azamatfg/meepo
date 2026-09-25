@@ -32,7 +32,7 @@ struct MeepoApp: App {
     }
 
     var body: some Scene {
-        Window("Meepo", id: "main") {
+        Window("meepo", id: "main") {
             MainView()
                 .environment(store)
                 .onOpenURL { url in
@@ -118,7 +118,7 @@ struct MeepoApp: App {
             // Badge: sessions waiting for the user.
             let waiting = store.waitingCount
             HStack {
-                Image(nsImage: MenuBarIcon.hood)
+                Image(nsImage: MenuBarIcon.mark)
                 if waiting > 0 { Text("\(waiting)") }
             }
         }

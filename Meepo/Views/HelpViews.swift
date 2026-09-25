@@ -53,22 +53,22 @@ struct GuideSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     private let sections: [(String, String)] = [
-        ("The idea", "You tell Claude Code what to build; Meepo keeps every session in one window and shows what's going on — who works, who waits for you, what changed."),
+        ("The idea", "You tell Claude Code what to build; meepo keeps every session in one window and shows what's going on — who works, who waits for you, what changed."),
         ("Sessions", "A session is one Claude conversation in a project. Start one with + (New Session). Give it a name to tell two sessions of one project apart. Ctrl+Tab jumps to the session that needs you; Option+Tab to the next one."),
         ("Tabs and Home", "Tabs at the top: Home, then every session. " + Explain.home),
         ("Layout", Explain.presets + " The icons on the left show or hide panels; point at one to see its name."),
         ("Stages", Explain.stages),
         ("What changed", Explain.panel(.product)),
         ("Git and CI", Explain.panel(.changes) + " Teammates' commits come in by themselves when your work is committed. " + Explain.panel(.ci)),
-        ("Automations", "≡ → Automations: your skills and commands and how often you use them. Meepo notices what you repeat — commands in a row, requests you keep typing — and offers a button or a skill for it."),
+        ("Automations", "≡ → Automations: your skills and commands and how often you use them. meepo notices what you repeat — commands in a row, requests you keep typing — and offers a button or a skill for it."),
         ("Guided mode", "≡ → Guided mode: Claude explains what it does, and asks before anything risky (push, deleting folders, secrets). For people new to Claude Code."),
-        ("Updates", "Meepo updates itself: when a new version is downloaded, the status bar says so — Restart, or it installs when you quit."),
+        ("Updates", "meepo updates itself: when a new version is downloaded, the status bar says so — Restart, or it installs when you quit."),
     ]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("How Meepo works").font(Fonts.title(26))
+                Text("How meepo works").font(Fonts.title(26))
                 Spacer()
                 Button("Close") { dismiss() }.keyboardShortcut(.cancelAction).buttonStyle(PixelButtonStyle())
             }

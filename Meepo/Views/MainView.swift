@@ -149,7 +149,7 @@ private struct TitleBar: View {
                 Button("Notes — release notes") { isNotesShown = true }
                 Divider()
                 Toggle("Guided mode", isOn: Binding(get: { store.guidedMode }, set: { store.guidedMode = $0 }))
-                Button("How Meepo works…") { isGuideShown = true }
+                Button("How meepo works…") { isGuideShown = true }
                 Button("Welcome…") { isWelcomeShown = true }
                 Divider()
                 Button("Automations…") { isAutomationsShown = true }
@@ -279,7 +279,7 @@ private struct Rail: View {
                 }
             }
             Spacer()
-            RailButton(symbol: "gearshape", isOn: false, name: "Settings", hint: "Meepo's settings", click: "⌘,") { openSettings() }
+            RailButton(symbol: "gearshape", isOn: false, name: "Settings", hint: "meepo's settings", click: "⌘,") { openSettings() }
                 .padding(.bottom, 8)
         }
         .padding(.top, 10)
@@ -617,7 +617,7 @@ private struct TerminalPane: View {
             if store.interruptedSessionIds.contains(sessionId) {
                 Button("Continue") { store.continueInterrupted(sessionId) }
                     .buttonStyle(PixelButtonStyle(compact: true, isPrimary: true))
-                    .help("Meepo closed while this session was working; its last turn stopped halfway. Asks claude to pick it up")
+                    .help("meepo closed while this session was working; its last turn stopped halfway. Asks claude to pick it up")
             }
             Spacer(minLength: 4)
             if !isSplit { // the status bar shows the selected session's model anyway
@@ -720,16 +720,16 @@ private struct StatusBar: View {
             if let report = store.lastCrashReport { CrashNotice(report: report) }
             Spacer(minLength: 8)
             if case let .ready(version, _) = store.updateState {
-                Button("Meepo \(version) ready · Restart") {
+                Button("meepo \(version) ready · Restart") {
                     store.relaunchAfterQuit = true
                     NSApp.terminate(nil)
                 }
                 .buttonStyle(.plain).foregroundStyle(Tokens.work).fontWeight(.semibold)
-                .help("Downloaded and checked. Restart now, or it installs when you quit Meepo")
+                .help("Downloaded and checked. Restart now, or it installs when you quit meepo")
             }
             if let claude = store.claudeVersion { Text("Claude Code \(claude)") }
             Text(store.shellPreset.title)
-            if let version = Updater.currentVersion { Text("Meepo \(version.description)") }
+            if let version = Updater.currentVersion { Text("meepo \(version.description)") }
         }
         .font(Fonts.ui(12))
         .foregroundStyle(Tokens.textDim)
@@ -754,7 +754,7 @@ private struct LimitLabel: View {
     }
 }
 
-/// "Meepo quit unexpectedly last time": the report stays on this Mac until the user copies or opens it.
+/// "meepo quit unexpectedly last time": the report stays on this Mac until the user copies or opens it.
 private struct CrashNotice: View {
     @Environment(AppStore.self) private var store
     let report: URL
@@ -762,7 +762,7 @@ private struct CrashNotice: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text("Meepo quit unexpectedly last time").foregroundStyle(Tokens.need)
+            Text("meepo quit unexpectedly last time").foregroundStyle(Tokens.need)
             Button(isCopied ? "Copied" : "Copy report") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(CrashReports.text(of: report), forType: .string)
@@ -770,8 +770,8 @@ private struct CrashNotice: View {
             }
             .buttonStyle(.plain).foregroundStyle(Tokens.work)
             Button("Report on GitHub") {
-                NSWorkspace.shared.open(Self.newIssue(title: "Crash in Meepo \(Updater.currentVersion?.description ?? "")",
-                                                      body: "What were you doing?\n\n(Copy report in Meepo, then paste it here.)"))
+                NSWorkspace.shared.open(Self.newIssue(title: "Crash in meepo \(Updater.currentVersion?.description ?? "")",
+                                                      body: "What were you doing?\n\n(Copy report in meepo, then paste it here.)"))
             }
             .buttonStyle(.plain).foregroundStyle(Tokens.work)
             Button("Show") { NSWorkspace.shared.activateFileViewerSelecting([report]) }
@@ -862,7 +862,7 @@ private struct LaunchState: View {
                 Text("Starting claude…").foregroundStyle(Tokens.textDim)
             } else if store.loginEnvironment == nil {
                 Text("CLAUDE NOT FOUND").font(Fonts.title(16)).foregroundStyle(Tokens.warn)
-                Text("Meepo asks your login shell ($SHELL -l -i) for `claude` and got nothing: it isn't installed, it's only an alias, or ~/.zshrc took over 15 s.")
+                Text("meepo asks your login shell ($SHELL -l -i) for `claude` and got nothing: it isn't installed, it's only an alias, or ~/.zshrc took over 15 s.")
                     .font(.caption).foregroundStyle(Tokens.text).multilineTextAlignment(.center)
                 Text("curl -fsSL https://claude.ai/install.sh | bash")
                     .font(Fonts.mono(12)).foregroundStyle(Tokens.screen).textSelection(.enabled)
@@ -883,13 +883,13 @@ private struct UpdateBadge: View {
         switch store.updateState {
         case let .downloading(version):
             Text("↓ \(version)").font(Fonts.mono(12)).foregroundStyle(Tokens.textDim)
-                .help("Downloading Meepo \(version)")
+                .help("Downloading meepo \(version)")
         case let .ready(version, notes):
             Button("\(version) READY") {
                 store.confirmation = PixelConfirmation(
                     title: "RESTART INTO \(version.uppercased())?",
                     message: (notes.isEmpty ? "" : String(notes.prefix(400)) + "\n\n")
-                        + "Sessions come back where they were (claude --resume); if an agent is mid-turn, Meepo asks first. Or keep working: it installs when you quit Meepo.",
+                        + "Sessions come back where they were (claude --resume); if an agent is mid-turn, meepo asks first. Or keep working: it installs when you quit meepo.",
                     action: "RESTART",
                     isDestructive: false
                 ) {
@@ -898,7 +898,7 @@ private struct UpdateBadge: View {
                 }
             }
             .foregroundStyle(Tokens.selection)
-            .help("Meepo \(version) is downloaded and checked; it installs when you quit, or restart now")
+            .help("meepo \(version) is downloaded and checked; it installs when you quit, or restart now")
         case let .manual(version, page):
             if let url = URL(string: page) {
                 Link("UPDATE \(version)", destination: url)

@@ -554,7 +554,7 @@ final class AppStore {
         if isQuitConfirmed || working == 0 { return true }
         confirmation = PixelConfirmation(
             title: working == 1 ? "An agent is still working" : "\(working) agents are still working",
-            message: "Quitting now stops them mid-turn. Their conversations come back when Meepo opens (claude --resume), but the unfinished turn is lost.",
+            message: "Quitting now stops them mid-turn. Their conversations come back when meepo opens (claude --resume), but the unfinished turn is lost.",
             action: "Quit now",
             alternative: ("Quit when they finish", { [weak self] in self?.quitWhenIdle = true }),
             onCancel: { [weak self] in self?.relaunchAfterQuit = false }
@@ -829,7 +829,7 @@ final class AppStore {
             updateState = .downloading(version.text)
             let app = try await Updater.download(release)
             let own = await Task.detached { Updater.signature(of: target) }.value
-            guard let team = own.team, let bundleID = own.identifier else { throw Updater.Failure("this copy of Meepo isn't signed") }
+            guard let team = own.team, let bundleID = own.identifier else { throw Updater.Failure("this copy of meepo isn't signed") }
             if let problem = await Task.detached(operation: { Updater.verify(app, team: team, bundleID: bundleID) }).value {
                 try? FileManager.default.removeItem(at: app.deletingLastPathComponent())
                 throw Updater.Failure("\(version) was rejected: \(problem)")
@@ -1629,7 +1629,7 @@ final class AppStore {
 
     /// Plain text for copying or sharing.
     static func dayText(_ days: [ProjectDay], date: Date = .now) -> String {
-        var lines = ["Meepo — \(date.formatted(date: .abbreviated, time: .omitted))"]
+        var lines = ["meepo — \(date.formatted(date: .abbreviated, time: .omitted))"]
         for day in days {
             lines.append("")
             lines.append("■ \(day.project.name) — \(TokenFormat.short(day.tokens)) tokens")
