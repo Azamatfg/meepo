@@ -233,7 +233,7 @@ private struct PresetPicker: View {
 
     private func help(_ preset: ShellLayout.Preset) -> String {
         switch preset {
-        case .focus: "One terminal; what changed and who waits on the right"
+        case .focus: "One terminal; what changed for users and who waits on the right"
         case .deck: "Four terminals at once, sessions on the left"
         case .full: "Explorer and Source Control on the left, two terminals, events and CI below"
         case .custom: "Your own arrangement — move any panel and it's saved here"
@@ -423,6 +423,7 @@ private struct PanelBox: View {
         case .ci: CIPanel()
         case .events: EventsPanel()
         case .waiting: WaitingPanel()
+        case .product: WhatChangedPanel()
         }
     }
 
@@ -434,6 +435,7 @@ private struct PanelBox: View {
         case .ci: "CI"
         case .events: "Events"
         case .waiting: "Needs you"
+        case .product: "What changed"
         }
     }
 
@@ -445,6 +447,7 @@ private struct PanelBox: View {
         case .ci: "checkmark.seal"
         case .events: "bolt"
         case .waiting: "bell"
+        case .product: "sparkles"
         }
     }
 }

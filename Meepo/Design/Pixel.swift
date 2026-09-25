@@ -47,7 +47,18 @@ struct PixelButtonStyle: ButtonStyle {
     var isPrimary = false
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        Label(configuration: configuration, style: self)
+    }
+
+    /// A view, so it can read `isEnabled`: a ButtonStyle alone doesn't dim disabled buttons.
+    private struct Label: View {
+        let configuration: Configuration
+        let style: PixelButtonStyle
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            let (large, compact, isPrimary) = (style.large, style.compact, style.isPrimary)
+            configuration.label
             .font(Fonts.ui(large ? 15 : 13, weight: .semibold))
             .foregroundStyle(isPrimary ? Tokens.surface : Tokens.text)
             .lineLimit(1)
@@ -55,7 +66,8 @@ struct PixelButtonStyle: ButtonStyle {
             .padding(.horizontal, large ? 18 : compact ? 9 : 12)
             .padding(.vertical, large ? 9 : compact ? 4 : 6)
             .background(isPrimary ? Tokens.text : Tokens.ghost, in: Capsule())
-            .opacity(configuration.isPressed ? 0.7 : 1)
+            .opacity(!isEnabled ? 0.4 : configuration.isPressed ? 0.7 : 1)
+        }
     }
 }
 

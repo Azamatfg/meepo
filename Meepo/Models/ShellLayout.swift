@@ -4,7 +4,7 @@ import Foundation
 /// sessions' terminals share the center. Presets are fixed layouts; moving anything makes it Custom.
 struct ShellLayout: Codable, Equatable {
     enum Panel: String, Codable, CaseIterable, Identifiable {
-        case sessions, explorer, changes, ci, events, waiting
+        case sessions, explorer, changes, ci, events, waiting, product
         var id: String { rawValue }
     }
 
@@ -27,7 +27,8 @@ struct ShellLayout: Codable, Equatable {
     /// nil for `.custom` — that one is whatever the user saved.
     static func preset(_ preset: Preset) -> ShellLayout? {
         switch preset {
-        case .focus: ShellLayout(left: [], right: [.changes, .waiting], bottom: [], split: 1)
+        // Focus is the simplest view: what changed for users first, then who waits.
+        case .focus: ShellLayout(left: [], right: [.product, .waiting], bottom: [], split: 1)
         // Side zones on both sides leave ~780 pt at 1440 wide — one terminal. Presets with several keep one side.
         case .deck: ShellLayout(left: [.sessions], right: [], bottom: [], split: 4)
         case .full: ShellLayout(left: [.explorer, .changes], right: [], bottom: [.events, .ci], split: 2)

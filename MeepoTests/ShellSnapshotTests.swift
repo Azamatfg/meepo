@@ -33,6 +33,20 @@ final class ShellSnapshotTests: XCTestCase {
         store.handleHookEvent(HookPayload(event: "UserPromptSubmit", claudeSessionId: sessions[0].claudeSessionId,
                                           prompt: "run the tests"), sessionId: sessions[0].id!)
         store.selectedSessionId = sessions[0].id
+        // A finished run with its product summary, for the What changed panel.
+        let started = Date.now.addingTimeInterval(-600)
+        try await db.write { db in
+            for (name, summary, second) in [("UserPromptSubmit", "add refunds for Kaspi payments", 0.0),
+                                            ("PostToolUse", "Edit: /repo/Refund.swift", 60), ("Stop", "Done.", 300)] {
+                var event = HookEvent(sessionId: sessions[0].id!, name: name, summary: summary, isFailure: false,
+                                      createdAt: started.addingTimeInterval(second))
+                try event.insert(db)
+            }
+            try db.execute(sql: "INSERT INTO runSummary (sessionId, startedAt, json, createdAt) VALUES (?, ?, ?, ?)", arguments: [
+                sessions[0].id!, started,
+                #"{"headline":"Drivers can refund a Kaspi payment","changes":[{"kind":"new","what":"A Refund button on a paid trip","where":"Driver app → Trips → Payment"},{"kind":"changed","what":"Refunds show in the daily report","where":"Admin → Finance"}],"check":["Refunds over 50 000 ₸ need a manager's OK — intended?"],"how_to_try":"Open a paid trip in the driver app and press Refund."}"#,
+                Date.now])
+        }
 
         let window = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 1440, height: 900),
                               styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)

@@ -14,10 +14,10 @@ final class ShellLayoutTests: XCTestCase {
 
     func testMovingTakesThePanelOutOfItsOldZone() {
         var layout = ShellLayout.preset(.focus)!
-        layout.move(.changes, to: .left)
-        XCTAssertEqual(layout.left, [.changes])
+        layout.move(.product, to: .left)
+        XCTAssertEqual(layout.left, [.product])
         XCTAssertEqual(layout.right, [.waiting])
-        XCTAssertEqual(layout.zone(of: .changes), .left)
+        XCTAssertEqual(layout.zone(of: .product), .left)
     }
 
     func testTogglingHidesAShownPanelAndOpensAHiddenOneOnTheLeft() {

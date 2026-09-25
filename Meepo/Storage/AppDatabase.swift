@@ -115,6 +115,17 @@ enum AppDatabase {
             }
         }
 
+        migrator.registerMigration("v9-run-summaries") { db in
+            try db.create(table: "runSummary") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.belongsTo("session", onDelete: .cascade).notNull()
+                t.column("startedAt", .datetime).notNull()
+                t.column("json", .text).notNull()
+                t.column("createdAt", .datetime).notNull()
+                t.uniqueKey(["sessionId", "startedAt"])
+            }
+        }
+
         return migrator
     }
 }

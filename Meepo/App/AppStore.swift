@@ -172,6 +172,58 @@ final class AppStore {
         }
     }
 
+    // MARK: What changed — runs and what they mean for the product's users
+
+    /// Explanations being written right now, by run id.
+    private(set) var explainingRuns: Set<String> = []
+
+    /// The session's runs over the events Meepo keeps (7 days), newest first.
+    func runs(of sessionId: Int64) -> [Run] {
+        let events = (try? db.read { try HookEvent.filter(Column("sessionId") == sessionId).fetchAll($0) }) ?? []
+        return Runs.from(events).reversed()
+    }
+
+    func summary(of run: Run) -> ProductSummary? {
+        let json = try? db.read { db in
+            try String.fetchOne(db, sql: "SELECT json FROM runSummary WHERE sessionId = ? AND startedAt = ?",
+                                arguments: [run.sessionId, run.startedAt])
+        }
+        return json.flatMap { try? JSONDecoder().decode(ProductSummary.self, from: Data($0.utf8)) }
+    }
+
+    /// Asks a fork of the session's own conversation what the run changed for users — on click only, then kept.
+    func explain(_ run: Run) async throws -> ProductSummary {
+        guard let login = loginEnvironment else { throw ClaudeHeadless.Failure(errorDescription: "claude isn't found in the login shell") }
+        guard let session = sessions.first(where: { $0.id == run.sessionId }), let folder = workdir(of: session) else {
+            throw ClaudeHeadless.Failure(errorDescription: "The session is gone")
+        }
+        explainingRuns.insert(run.id)
+        defer { explainingRuns.remove(run.id) }
+        let data = try await ClaudeHeadless.askFork(of: session.claudeSessionId, in: folder,
+                                                    prompt: Runs.prompt(for: run, language: GitPanel.userLanguage),
+                                                    schema: Runs.schema, claude: login.claudePath, environment: login.environment)
+        let summary = try JSONDecoder().decode(ProductSummary.self, from: data)
+        let json = String(decoding: data, as: UTF8.self)
+        try await db.write { db in
+            try db.execute(sql: """
+                INSERT OR REPLACE INTO runSummary (sessionId, startedAt, json, createdAt) VALUES (?, ?, ?, ?)
+                """, arguments: [run.sessionId, run.startedAt, json, Date.now])
+        }
+        return summary
+    }
+
+    /// Something listening in the session's own port range (PORT…PORT+9): its preview, if it has one running.
+    func previewURL(of session: Session) async -> URL? {
+        guard let base = session.portBase else { return nil }
+        let ports = await Task.detached { Ports.listening().map(\.port) }.value
+        return ports.first { (base..<base + Ports.blockSize).contains($0) }.flatMap { URL(string: "http://localhost:\($0)") }
+    }
+
+    /// Claude Code's own checkpoint picker: it puts back what Claude's edits changed, not what shell commands did.
+    func rewind(_ sessionId: Int64) {
+        type("/rewind\r", into: sessionId)
+    }
+
     // MARK: Noticing — suggestions from the user's own history, applied with their say-so, then measured
 
     struct SuggestionState: Codable, Equatable {
