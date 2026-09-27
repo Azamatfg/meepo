@@ -10,34 +10,40 @@ meepo doesn't write code and isn't another agent. Claude Code does the work, wit
 
 ## What it does
 
-**Every session in one window.** Tabs for each Claude session across your projects, Home to see them all at once, up to four terminals side by side. Name sessions to tell two in the same project apart. `Ctrl+Tab` jumps to the session that needs you.
+**Every session in one window.** Tabs for each Claude session across your projects, up to four terminals side by side, `Ctrl+Tab` to the session that needs you. Home answers the questions you'd otherwise check tab by tab: *Deck* — for each session, is it waiting on me, how did the last request end, what isn't sent yet; *Today* — what you sent today, project by project, and what's still left (a file not committed, a deploy waiting for your click, a question Claude asked).
 
 ![Four sessions: working, waiting for a permission, waiting for an answer, ready](docs/screenshots/deck.png)
 
-**What changed — in your product's terms.** Every request you give Claude is a run. One click asks the session that did the work to explain it for your users: what they will notice and where, what to check before shipping (money, accounts, anything it assumed), and how to try it. The code diff is still one click away.
+**What changed — in your product's terms.** Work is counted the way it reaches people: by push. *What changed* shows a block for each push ("Sent to GitHub · 11:53 · 2 commits") and one for what isn't sent yet, with the requests behind it and the next step. One click writes it for your users — "in Leasing you can now import a payment schedule from Excel" — with what to check before shipping and how to try it. The code diff is still one click away.
 
 ![What changed: a run explained for users](docs/screenshots/focus.png)
 
-**Your layout.** Focus (one terminal and what changed), Deck (four sessions), Full (Explorer, Source Control and two terminals, like VS Code) — or move any panel yourself. Point at an icon to see what it is; every panel has a **?**.
+**Your layout, set once.** Focus (one terminal and what changed), Deck (four sessions), Full (Explorer, Source Control and two terminals, like VS Code). Move, hide or add panels and that layout keeps it; right-click to reset. Every panel names its project and has a **?**.
 
 ![Full: Explorer, Source Control, two terminals, events and CI](docs/screenshots/full.png)
 
-**Git like VS Code, teammates included.** CHANGES, INCOMING and OUTGOING per repo, Compare in VS Code's own editor (Monaco), Explain in plain words. Teammates' commits come in by themselves once your work is committed, and the agent is told what changed under it. Projects that hold several repos, and sessions that also work in a second project (`claude --add-dir`), show every repo.
+**Git like VS Code, teammates included.** CHANGES, INCOMING, OUTGOING and HISTORY per repo — click a commit for its message, files and page on GitHub or GitLab — with Compare in VS Code's own editor (Monaco) and Explain in plain words. Teammates' commits come in by themselves once your work is committed, and the agent is told what changed under it. Projects that hold several repos, and sessions that also work in a second project (`claude --add-dir`), show every repo.
 
-**CI and deploys.** GitHub Actions and GitLab CI, step by step, with a Run button for the manual deploy step.
+**Files in, screenshots in.** Drop a screenshot on a terminal and Claude gets it as an image; drop or paste (⌘V) files into Explorer to copy them into the project.
+
+**Talk instead of typing.** VOICE turns on Claude Code's own dictation: click SPEAK, talk, click SEND — no key to hold.
+
+**CI and deploys.** GitHub Actions and GitLab CI as the steps of your latest commit — what each step does, how long it took, a live clock while it runs, and one line on what's up to you. Run for a deploy (always confirmed), Fix with Claude for a failure, Rerun, and the log.
 
 **Knows Claude Code.**
 - Plan limits (5 hours, 7 days) with reset times, the real model and effort of each session, context as Claude Code counts it.
 - *New in Claude Code*: after an update, the changes that touch your setup come first.
 - *Claude Code Setup*: finds things that quietly work against you — an effort level that no longer reaches the model you use, hook timeouts written in milliseconds, allow rules like `Bash(sudo:*)`, skills that push which Claude may start by itself — each with a fix and an exact undo.
 
-**Learns from how you work.** *Automations* shows your skills and commands with how often you really use them, effort and model per skill, and which ones Claude may start by itself. meepo notices what you repeat — commands in a row, requests you keep typing — and offers a button or a personal skill for it. Then it checks whether it helped.
+**Learns from how you work.** *Automations* shows your skills and commands with how often you really use them, effort and model per skill, and which ones Claude may start by itself. meepo notices what you repeat — commands in a row, requests you keep typing — and offers a button or a personal skill for it, and *New command…* makes one from a sentence. Then it checks whether it helped.
 
 **Workflows of your own.** *New workflow…* builds automations as plain Claude Code files, shown before they're saved: a button that runs steps in order (a skill of yours, so `/name` works in any terminal), which you can repeat while a session is open (`/loop`) or schedule in the cloud (`/schedule`); and a check after every answer (a Stop hook: if `npm test` fails, Claude reads why and fixes it). Workflows with several agents at once are Claude Code's own — save one there and meepo lists it with a Run button.
 
 **Stages.** PLAN → CODE → QA → SECURITY → SIMPLIFY → SHIP → SYNC, each a click that runs your own command — or Claude Code's built-in one (`/verify`, `/security-review`, `/commit-push-pr`) when a project has none.
 
-**For people new to Claude Code.** Onboarding installs and signs in Claude Code step by step and starts a first project. *Guided mode* makes Claude explain what it does and ask before anything risky — pushing, deleting folders, `sudo`, `.env` secrets.
+**For people new to Claude Code.** Onboarding installs and signs in Claude Code step by step and lets you pick or create the folder Claude works in. *Guided mode* makes Claude explain what it does and ask before anything risky — pushing, deleting folders, `sudo`, publishing a package, editing `.env` secrets — and offers to restart the sessions that aren't mid-turn so it applies right away.
+
+**Around the work.** *Tools* shows where Docker's disk space went and clears only what's safe, lists which program holds which port by project (Stop only for your own), and keeps every change meepo made to your files, undoable. *Notes* turns what you shipped into release notes to paste into Telegram or Slack, formatted.
 
 ## Built on Claude Code
 
@@ -87,7 +93,8 @@ meepo is the control panel on your Mac. On your phone, use the Claude app throug
 - Everything stays on your Mac: `~/.meepo/meepo.sqlite`, backups in `~/.meepo/backups`. No telemetry. A crash report is shown to you to copy, never sent.
 - meepo talks to Claude Code through hooks and a statusline, posted to a server on `127.0.0.1` only, with a local token.
 - It stores no API keys or passwords; GitHub, GitLab and Claude use their own CLIs and logins.
-- `claude -p` runs only when you click (Explain, drafts, release notes) and never with tools or your hooks.
+- `claude -p` runs only when you click (Explain, drafts, release notes) — one short call, never with tools or your hooks.
+- A button never answers for you: while Claude asks for a permission or asks a question, meepo types nothing that ends in Enter.
 - Push, pull and deploy happen on your click with a confirmation; meepo never force-pushes. Quitting while an agent works asks first.
 - Every change meepo makes to your files is backed up and can be undone (≡ → Tools → Changes); team files under git are never edited.
 

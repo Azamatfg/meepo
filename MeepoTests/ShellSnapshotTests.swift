@@ -183,6 +183,9 @@ final class ShellSnapshotTests: XCTestCase {
                                   styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
             window.titlebarAppearsTransparent = true
             window.contentView = NSHostingView(rootView: MainView().environment(store))
+            // The test host runs as a background app; macOS may draw its windows dimmed. Pictures want it in front.
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
             defer { window.orderOut(nil); window.contentView = nil }
             try await Task.sleep(for: .milliseconds(1500))
