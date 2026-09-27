@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The Home tab: every session at a glance — as cards (Deck) or as lanes over the last hour (Timeline).
+/// The Home tab: every session at a glance — as cards (Deck) or as the day's requests (Today).
 struct HomeView: View {
     @Environment(AppStore.self) private var store
     @AppStorage("homeView") private var mode = "deck"
@@ -21,7 +21,7 @@ struct HomeView: View {
                 if !store.claudeNews.isEmpty { ClaudeNewsCard() }
                 if let noticed = store.visibleSuggestions.first { NoticedRow(suggestion: noticed, isCard: true) }
                 HStack(spacing: 2) {
-                    ForEach([("deck", "Deck"), ("timeline", "Timeline")], id: \.0) { key, title in
+                    ForEach([("deck", "Deck"), ("today", "Today")], id: \.0) { key, title in
                         Button(title) { mode = key }
                             .buttonStyle(.plain)
                             .font(Fonts.ui(13, weight: .semibold))
@@ -36,11 +36,16 @@ struct HomeView: View {
                 .overlay(alignment: .trailing) { InfoButton(title: "Home", text: Explain.home).offset(x: 26) }
                 if sessions.isEmpty {
                     Text("No sessions yet — start one with + above.").foregroundStyle(Tokens.textDim)
-                } else if mode == "timeline" {
-                    TimelineLanes(sessions: sessions)
+                } else if mode != "deck" {
+                    TodayList(sessions: sessions)
                 } else {
+                    // One read for every card: the last day's events, grouped by session.
+                    let events = Dictionary(grouping: store.events(since: .now.addingTimeInterval(-24 * 3600)), by: \.sessionId)
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 14)], spacing: 14) {
-                        ForEach(sessions) { SessionCard(session: $0) }
+                        ForEach(sessions) { session in
+                            let own = events[session.id!] ?? []
+                            SessionCard(session: session, run: Runs.from(own).last, now: own.last.flatMap(EventStory.line(for:)))
+                        }
                     }
                 }
             }
@@ -50,10 +55,13 @@ struct HomeView: View {
     }
 }
 
-/// A session as a card: state, project and branch, what it's doing, its stage on the workflow.
+/// A session as a card: state, what was asked last, what Claude is doing now in plain words, what it changed.
 private struct SessionCard: View {
     @Environment(AppStore.self) private var store
     let session: Session
+    /// The latest request of the last day, and the latest step in plain words.
+    let run: Run?
+    let now: EventStory.Line?
 
     var body: some View {
         let look = store.look(of: session)
@@ -70,13 +78,28 @@ private struct SessionCard: View {
                         .foregroundStyle(isWaiting ? Tokens.need : look.ring == .working ? Tokens.work : Tokens.textDim)
                         .lineLimit(1)
                 }
-                Text(lastLine)
-                    .font(Fonts.mono(12)).foregroundStyle(Tokens.textDim)
-                    .lineLimit(3)
-                    .frame(maxWidth: .infinity, minHeight: 54, alignment: .topLeading)
-                    .padding(10)
-                    .background(Tokens.terminalBg, in: RoundedRectangle(cornerRadius: 10))
-                StageProgress(current: session.stage, isWaiting: isWaiting)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(run.map { "“\(Notifier.plainText($0.request, limit: 140))”" } ?? "Nothing asked yet")
+                        .font(Fonts.ui(14, weight: .semibold)).lineLimit(2)
+                        .foregroundStyle(run == nil ? Tokens.textDim : Tokens.text)
+                    if let now {
+                        HStack(spacing: 6) {
+                            Image(systemName: now.icon).font(.system(size: 11))
+                            Text((look.ring == .working ? "Now: " : "Last: ") + now.title).lineLimit(1)
+                        }
+                        .font(.caption).foregroundStyle(isWaiting ? Tokens.need : look.ring == .working ? Tokens.work : Tokens.textDim)
+                    }
+                    if let run {
+                        Text(["started " + run.startedAt.formatted(date: .omitted, time: .shortened),
+                              "worked " + PipelineView.duration(run.worked()),
+                              run.files.isEmpty ? nil : "\(run.files.count) file\(run.files.count == 1 ? "" : "s") changed"]
+                            .compactMap { $0 }.joined(separator: " · "))
+                            .font(.caption).foregroundStyle(Tokens.textDim)
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 70, alignment: .topLeading)
+                .padding(10)
+                .background(Tokens.terminalBg, in: RoundedRectangle(cornerRadius: 10))
             }
             .padding(16)
             .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 16))
@@ -87,122 +110,7 @@ private struct SessionCard: View {
         .contextMenu { SessionMenu(session: session) }
     }
 
-    /// The latest hook event with text, else the model — never an invented line.
-    private var lastLine: String {
-        let latest = store.events(since: .now.addingTimeInterval(-24 * 3600))
-            .last { $0.sessionId == session.id && !($0.summary ?? "").isEmpty }
-        return latest.flatMap(\.summary).map { Notifier.plainText($0, limit: 200) }
-            ?? [session.stage?.uppercased(), session.model].compactMap { $0 }.joined(separator: " · ")
-    }
-}
 
-/// The workflow as thin segments: done ones in blue, the current one orange when it waits for you.
-private struct StageProgress: View {
-    @Environment(AppStore.self) private var store
-    let current: String?
-    let isWaiting: Bool
-
-    var body: some View {
-        let stages = store.stages
-        let index = stages.firstIndex { $0.name == current }
-        HStack(spacing: 5) {
-            ForEach(Array(stages.enumerated()), id: \.element.id) { i, stage in
-                let done = index.map { i < $0 } ?? false
-                let now = i == index
-                VStack(alignment: .leading, spacing: 5) {
-                    Capsule().fill(done ? Tokens.work : now ? (isWaiting ? Tokens.need : Tokens.work.opacity(0.45)) : Tokens.line)
-                        .frame(height: 4)
-                    Text(stage.label).font(Fonts.ui(10, weight: .bold)).tracking(0.8)
-                        .foregroundStyle(done || now ? Tokens.text : Tokens.textDim)
-                }
-            }
-        }
-    }
-}
-
-/// One lane per session over the last hour, a cell per minute: blue when it worked, orange when it waited
-/// for you, empty when nothing happened. Built from the hook events Meepo already keeps.
-private struct TimelineLanes: View {
-    @Environment(AppStore.self) private var store
-    let sessions: [Session]
-
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
-            let start = context.date.addingTimeInterval(-3600)
-            let events = store.events(since: start)
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(sessions) { session in
-                    lane(session, cells: Self.cells(events.filter { $0.sessionId == session.id }, start: start))
-                }
-                HStack {
-                    Text("60 min ago"); Spacer(); Text("30 min"); Spacer(); Text("now")
-                }
-                .font(Fonts.ui(11)).foregroundStyle(Tokens.textDim)
-                .padding(.leading, 212)
-                HStack(spacing: 14) {
-                    Text("Each square is one minute.").foregroundStyle(Tokens.textDim)
-                    legend(Tokens.work.opacity(0.55), "Claude worked")
-                    legend(Tokens.need, "waited for you")
-                    legend(Tokens.line.opacity(0.5), "nothing happened")
-                }
-                .font(Fonts.ui(12))
-                .padding(.leading, 212)
-            }
-        }
-    }
-
-    private func legend(_ color: Color, _ text: String) -> some View {
-        HStack(spacing: 5) {
-            RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 10, height: 10)
-            Text(text)
-        }
-    }
-
-    private func lane(_ session: Session, cells: [Cell]) -> some View {
-        let look = store.look(of: session)
-        return Button { store.selectedSessionId = session.id } label: {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 7) {
-                        SelectionRing(kind: look.ring)
-                        Text(store.project(for: session)?.name ?? "?").font(Fonts.ui(15, weight: .bold)).lineLimit(1)
-                    }
-                    Text(store.displayName(of: session)).font(.caption).lineLimit(1).padding(.leading, 15)
-                    Text(look.text).font(.caption).foregroundStyle(look.ring == .waiting ? Tokens.need : Tokens.textDim)
-                        .lineLimit(1).padding(.leading, 15)
-                }
-                .frame(width: 200, alignment: .leading)
-                HStack(spacing: 2) {
-                    ForEach(cells.indices, id: \.self) { i in
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(cells[i] == .waiting ? Tokens.need : cells[i] == .working ? Tokens.work.opacity(0.55) : Tokens.line.opacity(0.5))
-                            .frame(height: 26)
-                            .help("\(60 - i) min ago: " + (cells[i] == .waiting ? "waited for you" : cells[i] == .working ? "Claude worked" : "nothing happened"))
-                    }
-                }
-            }
-            .padding(.horizontal, 14)
-            .frame(height: 58)
-            .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Tokens.line))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    enum Cell { case empty, working, waiting }
-
-    /// 60 one-minute cells; waiting wins over working within a minute.
-    static func cells(_ events: [HookEvent], start: Date) -> [Cell] {
-        var cells = [Cell](repeating: .empty, count: 60)
-        for event in events {
-            let minute = Int(event.createdAt.timeIntervalSince(start) / 60)
-            guard cells.indices.contains(minute) else { continue }
-            let waits = event.name == "PermissionRequest" || event.name == "Notification"
-            if waits { cells[minute] = .waiting } else if cells[minute] == .empty { cells[minute] = .working }
-        }
-        return cells
-    }
 }
 
 /// "Claude Code 2.1.281 → 2.1.282": what changed, the lines that touch this setup first. From the changelog

@@ -327,9 +327,9 @@ struct EventsPanel: View {
                 Text(store.isBridgeInstalled ? "No events yet" : "Install the bridge to see events")
                     .font(.caption).foregroundStyle(Tokens.textDim)
             }
-            ForEach(store.selectedEvents.prefix(8)) { EventRow(event: $0) }
-            if store.selectedEvents.count > 8 {
-                Button("All \(store.selectedEvents.count)") { areEventsShown = true }.buttonStyle(PixelButtonStyle(compact: true))
+            EventStoryList(events: store.selectedEvents, limit: 10)
+            if store.selectedEvents.count > 10 {
+                Button("Everything") { areEventsShown = true }.buttonStyle(PixelButtonStyle(compact: true))
             }
         }
         .sheet(isPresented: $areEventsShown) { EventsSheet() }
@@ -472,10 +472,7 @@ private struct EventsSheet: View {
                 Button("Close") { dismiss() }.keyboardShortcut(.cancelAction).buttonStyle(PixelButtonStyle())
             }
             ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(store.selectedEvents) { EventRow(event: $0) }
-                }
-                .padding(8)
+                EventStoryList(events: store.selectedEvents).padding(8)
             }
             .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 10)).sunken()
         }

@@ -70,7 +70,7 @@ final class ShellSnapshotTests: XCTestCase {
         store.isHomeShown = true
         UserDefaults.standard.set("deck", forKey: "homeView")
         try await shoot("home-deck")
-        UserDefaults.standard.set("timeline", forKey: "homeView")
+        UserDefaults.standard.set("today", forKey: "homeView")
         try await shoot("home-timeline")
         window.setContentSize(NSSize(width: 1060, height: 640))
         store.selectedSessionId = sessions[0].id
@@ -201,7 +201,7 @@ final class ShellSnapshotTests: XCTestCase {
         store.isHomeShown = true
         UserDefaults.standard.set("deck", forKey: "homeView")
         try await shoot("home")
-        UserDefaults.standard.set("timeline", forKey: "homeView")
-        try await shoot("timeline")
+        UserDefaults.standard.set("today", forKey: "homeView")
+        try await shoot("today")
     }
 }

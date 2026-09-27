@@ -106,4 +106,13 @@ struct Stage: Codable, Hashable, Identifiable {
         Stage(name: "ship", command: "ship"),
         Stage(name: "sync", command: "sync"),
     ]
+
+    /// A hidden default stage back in the bar, where it stands in the default order.
+    static func adding(_ stage: Stage, to stages: [Stage]) -> [Stage] {
+        let rank = { (name: String) in defaults.firstIndex { $0.name == name } ?? defaults.count }
+        var result = stages.filter { $0.name != stage.name }
+        let index = result.firstIndex { rank($0.name) > rank(stage.name) } ?? result.count
+        result.insert(stage, at: index)
+        return result
+    }
 }

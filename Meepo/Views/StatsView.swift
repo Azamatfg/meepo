@@ -149,8 +149,8 @@ struct SettingsView: View {
     }
 }
 
-/// Workflow order and the model/effort a new session gets in each stage.
-private struct StagesEditor: View {
+/// Workflow order and the model/effort a new session gets in each stage; hidden ones can be added back.
+struct StagesEditor: View {
     @Environment(AppStore.self) private var store
     private let efforts = ClaudeLauncher.effortLevels
 
@@ -184,9 +184,40 @@ private struct StagesEditor: View {
                 }
                 .buttonStyle(PixelButtonStyle())
             }
+            let hidden = Stage.defaults.filter { stage in !store.stages.contains { $0.name == stage.name } }
+            if !hidden.isEmpty {
+                HStack(spacing: 6) {
+                    Text("Hidden:").font(.caption).foregroundStyle(Tokens.textDim)
+                    ForEach(hidden) { stage in
+                        Button("+ \(stage.label)") { store.stages = Stage.adding(stage, to: store.stages) }
+                            .buttonStyle(PixelButtonStyle(compact: true))
+                    }
+                }
+            }
         }
         .padding(8)
         .background(Tokens.dirt)
         .sunken()
+    }
+}
+
+/// The stages bar's own editor (right-click a stage → Edit stages…).
+struct StagesSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Stages").font(Fonts.title(22))
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction).buttonStyle(PixelButtonStyle(isPrimary: true))
+            }
+            Text("The buttons under the terminal, left to right. ✕ hides one; hidden ones can be added back below.")
+                .foregroundStyle(Tokens.textDim)
+            StagesEditor()
+        }
+        .padding(20)
+        .frame(width: 600)
+        .paperSheet()
     }
 }

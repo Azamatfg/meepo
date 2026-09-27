@@ -11,6 +11,19 @@ struct Run: Identifiable, Equatable {
     var reply: String?
     var id: String { "\(sessionId)-\(startedAt.timeIntervalSince1970)" }
     var isDone: Bool { endedAt != nil }
+
+    enum Outcome { case working, askedYou, done, stopped }
+
+    /// Still working, ended with a question for the user, done — or stopped before Claude replied (Esc).
+    var outcome: Outcome {
+        guard isDone else { return .working }
+        guard reply != nil else { return .stopped }
+        let last = (reply ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return last.hasSuffix("?") || last.hasSuffix("？") ? .askedYou : .done
+    }
+
+    /// How long Claude worked on it — until now while it still runs.
+    func worked(now: Date = .now) -> TimeInterval { (endedAt ?? now).timeIntervalSince(startedAt) }
 }
 
 /// What a run changed, in the product's terms — written by the agent that did the work, on the user's click.
@@ -45,9 +58,13 @@ enum Runs {
             let id = event.sessionId
             switch event.name {
             case "UserPromptSubmit", "UserPromptExpansion":
-                // "/qa" arrives as an expansion, then a submit of the same request: one run.
-                if event.name == "UserPromptSubmit", let current = open[id], current.files.isEmpty { continue }
-                if let current = open.removeValue(forKey: id) { runs.append(current) } // never saw its end
+                // "/qa" arrives as an expansion, then a submit of the same request, moments apart: one run.
+                if event.name == "UserPromptSubmit", let current = open[id], current.files.isEmpty,
+                   event.createdAt.timeIntervalSince(current.startedAt) < 5 { continue }
+                if var current = open.removeValue(forKey: id) { // never saw its end: stopped (Esc) — it ends here
+                    current.endedAt = event.createdAt
+                    runs.append(current)
+                }
                 open[id] = Run(sessionId: id, startedAt: event.createdAt, request: event.summary ?? "", files: [])
             case "PostToolUse":
                 guard let summary = event.summary, let file = editedFile(summary) else { continue }

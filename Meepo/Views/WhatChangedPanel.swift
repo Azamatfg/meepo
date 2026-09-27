@@ -9,6 +9,7 @@ struct WhatChangedPanel: View {
     @State private var selectedRun: String?
     @State private var error: String?
     @State private var preview: URL?
+    @State private var openFile: String?
 
     var body: some View {
         if let session = store.selectedSession, let sessionId = session.id {
@@ -23,7 +24,11 @@ struct WhatChangedPanel: View {
                         }
                         .buttonStyle(.plain)
                     }
+                    if run.id != (runs.first(where: \.isDone) ?? runs.first)?.id, selectedRun != nil {
+                        Button("← Back to the latest") { selectedRun = nil }.buttonStyle(.plain).font(.caption).foregroundStyle(Tokens.work)
+                    }
                     runHeader(run)
+                    files(run)
                     if let summary = store.summary(of: run) {
                         SummaryView(summary: summary, preview: preview)
                     } else {
@@ -34,6 +39,9 @@ struct WhatChangedPanel: View {
                     if runs.count > 1 { earlier(runs.filter { $0.id != run.id }) }
                 }
                 .task(id: sessionId) { preview = await store.previewURL(of: session) }
+                .sheet(isPresented: Binding(get: { openFile != nil }, set: { if !$0 { openFile = nil } })) {
+                    if let openFile { FileViewer(root: "", path: openFile) }
+                }
             } else {
                 Text("Nothing yet. Ask Claude for something — each request becomes a run here.")
                     .font(.caption).foregroundStyle(Tokens.textDim)
@@ -52,6 +60,28 @@ struct WhatChangedPanel: View {
                   run.files.isEmpty ? "no files edited" : "\(run.files.count) file\(run.files.count == 1 ? "" : "s") edited"]
                 .compactMap { $0 }.joined(separator: " · "))
                 .font(.caption).foregroundStyle(run.isDone ? Tokens.textDim : Tokens.work)
+        }
+    }
+
+    /// The files the run edited; a click opens one.
+    @ViewBuilder
+    private func files(_ run: Run) -> some View {
+        if !run.files.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(run.files.prefix(8), id: \.self) { file in
+                    Button { openFile = file } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: FileIcon.symbol(for: file)).font(.system(size: 11)).foregroundStyle(FileIcon.color(for: file))
+                            Text(URL(filePath: file).lastPathComponent).font(.caption).lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(file)
+                }
+                if run.files.count > 8 { Text("and \(run.files.count - 8) more").font(.caption).foregroundStyle(Tokens.textDim) }
+            }
         }
     }
 
@@ -91,13 +121,15 @@ struct WhatChangedPanel: View {
 
     private func earlier(_ runs: [Run]) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("EARLIER").font(Fonts.ui(11, weight: .bold)).tracking(1.2).foregroundStyle(Tokens.textDim).padding(.top, 6)
+            Text("EARLIER REQUESTS — CLICK ONE TO SEE WHAT IT CHANGED").font(Fonts.ui(11, weight: .bold)).tracking(1.2)
+                .foregroundStyle(Tokens.textDim).padding(.top, 6).fixedSize(horizontal: false, vertical: true)
             ForEach(runs.prefix(8)) { run in
                 Button { selectedRun = run.id } label: {
                     HStack(spacing: 6) {
                         Text(run.startedAt.formatted(date: .omitted, time: .shortened)).font(Fonts.mono(11)).foregroundStyle(Tokens.textDim)
                         Text(Notifier.plainText(run.request, limit: 80)).lineLimit(1)
                         Spacer(minLength: 0)
+                        if !run.files.isEmpty { Text("\(run.files.count)").font(Fonts.mono(10)).foregroundStyle(Tokens.textDim).help("files changed") }
                         if store.summary(of: run) != nil { Image(systemName: "text.bubble").font(.caption).foregroundStyle(Tokens.work) }
                     }
                     .font(.caption)
@@ -105,6 +137,7 @@ struct WhatChangedPanel: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .foregroundStyle(run.id == selectedRun ? Tokens.work : Tokens.text)
             }
         }
     }

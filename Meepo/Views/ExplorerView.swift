@@ -111,12 +111,14 @@ struct ExplorerSection: View {
     }
 }
 
-/// One file from the Explorer in VS Code's editor, read-only: syntax colors, minimap.
-private struct FileViewer: View {
+/// One file in VS Code's editor, read-only: syntax colors, minimap. `root` may be empty for an absolute path.
+struct FileViewer: View {
     @Environment(\.dismiss) private var dismiss
     let root: String
     let path: String
     @State private var content = MonacoDiffView.Content(message: "Loading…")
+
+    private var file: String { root.isEmpty ? path : root + "/" + path }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -125,7 +127,7 @@ private struct FileViewer: View {
                 Text((path as NSString).deletingLastPathComponent).font(.system(size: 12)).foregroundStyle(Tokens.vsTextDim)
                     .lineLimit(1).truncationMode(.head)
                 Spacer()
-                Button { NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: "\(root)/\(path)")]) } label: {
+                Button { NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: file)]) } label: {
                     Image(systemName: "folder").font(.system(size: 13)).foregroundStyle(Tokens.vsText).frame(width: 22, height: 22)
                 }
                 .buttonStyle(.plain)
@@ -145,7 +147,7 @@ private struct FileViewer: View {
         .frame(minWidth: 900, idealWidth: 1100, minHeight: 600, idealHeight: 780)
         .background(Tokens.vsEditor)
         .preferredColorScheme(.dark)
-        .task { content = await Task.detached { [root, path] in Self.load("\(root)/\(path)", as: path) }.value }
+        .task { content = await Task.detached { [file, path] in Self.load(file, as: path) }.value }
     }
 
     /// Too big or binary files get a message instead of an editor.

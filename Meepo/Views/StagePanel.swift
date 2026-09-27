@@ -15,6 +15,7 @@ struct StagePanel: View {
     @State private var scheduling: String?
     @State private var scheduleWhen = ""
     @State private var buttonError: String?
+    @State private var isStagesEdited = false
 
     var body: some View {
         // Scrolls sideways when the window is narrow. Not ViewThatFits: on macOS 15 it measures its options on
@@ -23,6 +24,7 @@ struct StagePanel: View {
         ScrollView(.horizontal, showsIndicators: false) { row }
             .padding(6)
             .background(Tokens.frameMid)
+            .sheet(isPresented: $isStagesEdited) { StagesSheet() }
     }
 
     /// Stages, then session tools.
@@ -50,6 +52,10 @@ struct StagePanel: View {
                             planTask = ""
                             execute(task.isEmpty ? "plan" : "plan \(task)")
                         }
+                    }
+                    .contextMenu {
+                        Button("Hide \(stage.label) from this bar") { store.stages.removeAll { $0.id == stage.id } }
+                        Button("Edit stages…") { isStagesEdited = true }
                     }
                     .overlay { if index == current { Capsule().fill(Tokens.work.opacity(0.14)).allowsHitTesting(false) } }
                     .overlay { if index == next { Capsule().strokeBorder(Tokens.work, lineWidth: 1.5) } }

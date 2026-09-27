@@ -183,6 +183,7 @@ private struct TitleBar: View {
 private struct SessionTab: View {
     @Environment(AppStore.self) private var store
     let session: Session
+    @State private var isHovered = false
 
     var body: some View {
         let look = store.look(of: session)
@@ -193,9 +194,32 @@ private struct SessionTab: View {
             SelectionRing(kind: look.ring)
             Text(siblings > 1 ? "\(project) · \(store.displayName(of: session))" : project)
                 .lineLimit(1).truncationMode(.middle).frame(maxWidth: 200)
+            Color.clear.frame(width: 14, height: 14) // room for the ×, laid over the tab below
         }
+        .overlay(alignment: .trailing) {
+            Button(action: close) {
+                Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).frame(width: 18, height: 18).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Tokens.textDim)
+            .padding(.trailing, 9)
+            .opacity(isHovered ? 1 : 0)
+            .allowsHitTesting(isHovered)
+            .help("Close this session")
+        }
+        .onHover { isHovered = $0 }
         .contextMenu { SessionMenu(session: session) }
         .help("\(project) · \(look.text)")
+    }
+
+    /// Closes right away when claude is between turns; asks first while it works or waits on you mid-turn.
+    private func close() {
+        guard store.look(of: session).ring != .idle else { return store.closeSession(session.id!) }
+        store.confirmation = PixelConfirmation(
+            title: "Close this session in the middle of a turn?",
+            message: "claude stops mid-turn. Files and commits stay; the conversation stays in Claude Code (claude --resume).",
+            action: "Close"
+        ) { store.closeSession(session.id!) }
     }
 }
 
@@ -228,7 +252,8 @@ private struct PresetPicker: View {
         HStack(spacing: 2) {
             ForEach(ShellLayout.Preset.allCases) { preset in
                 let isOn = store.shellPreset == preset
-                Button(preset.title) { store.applyPreset(preset) }
+                let isEdited = store.editedLayouts[preset] != nil
+                Button(preset.title + (isEdited ? "•" : "")) { store.applyPreset(preset) }
                     .buttonStyle(.plain)
                     .font(Fonts.ui(13, weight: .semibold))
                     .foregroundStyle(isOn ? Tokens.text : Tokens.textDim)
@@ -237,7 +262,10 @@ private struct PresetPicker: View {
                     .background(isOn ? Tokens.raised : .clear, in: RoundedRectangle(cornerRadius: 7))
                     .shadow(color: isOn ? .black.opacity(0.10) : .clear, radius: 2, y: 1)
                     .fixedSize()
-                    .help(help(preset))
+                    .help(help(preset) + (isEdited ? ". • = you changed it; right-click to reset" : ""))
+                    .contextMenu {
+                        Button("Reset \(preset.title) to default") { store.resetPreset(preset) }.disabled(!isEdited)
+                    }
             }
         }
         .padding(3)
@@ -249,7 +277,6 @@ private struct PresetPicker: View {
         case .focus: "One terminal; what changed for users and who waits on the right"
         case .deck: "Four terminals at once, sessions on the left"
         case .full: "Explorer and Source Control on the left, two terminals, events and CI below"
-        case .custom: "Your own arrangement — move any panel and it's saved here"
         }
     }
 }

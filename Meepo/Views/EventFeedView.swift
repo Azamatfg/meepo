@@ -1,51 +1,5 @@
 import SwiftUI
 
-/// One hook event: what happened, when, and its text.
-struct EventRow: View {
-    let event: HookEvent
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Text(Self.title(for: event.name))
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(event.isFailure ? Tokens.danger : Tokens.text)
-                Spacer()
-                Text(event.createdAt, format: .dateTime.hour().minute().second())
-                    .font(Fonts.mono(11))
-                    .foregroundStyle(Tokens.textDim)
-            }
-            if let summary = event.summary, !summary.isEmpty {
-                Text(Notifier.plainText(summary, limit: 300))
-                    .font(.caption)
-                    .foregroundStyle(Tokens.textDim)
-                    .lineLimit(3)
-            }
-        }
-        .padding(.vertical, 2)
-    }
-
-    private static func title(for name: String) -> String {
-        switch name {
-        case "SessionStart": "Session started"
-        case "SessionEnd": "Session ended"
-        case "UserPromptSubmit": "Prompt"
-        case "PreToolUse": "Tool"
-        case "PostToolUse": "Tool done"
-        case "PostToolUseFailure": "Tool failed"
-        case "PermissionRequest": "Permission request"
-        case "PermissionDenied": "Denied"
-        case "Notification": "Notification"
-        case "Stop": "Reply ready"
-        case "StopFailure": "Reply failed"
-        case "PreCompact": "Compacting context"
-        case "UserPromptExpansion": "Command"
-        case "HookBlocked": "Blocked by your hook"
-        default: name
-        }
-    }
-}
-
 /// Who listens on which port (SPEC module 5), with the Meepo session or project it belongs to.
 struct PortsView: View {
     @Environment(AppStore.self) private var store

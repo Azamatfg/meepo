@@ -1,7 +1,7 @@
 import Foundation
 
 /// Where the window's panels sit (Meepo 2.0, layout "c"): three zones around the terminals, and how many
-/// sessions' terminals share the center. Presets are fixed layouts; moving anything makes it Custom.
+/// sessions' terminals share the center. Each preset starts from its default and keeps the user's changes.
 struct ShellLayout: Codable, Equatable {
     enum Panel: String, Codable, CaseIterable, Identifiable {
         case sessions, explorer, changes, ci, events, waiting, product
@@ -11,7 +11,7 @@ struct ShellLayout: Codable, Equatable {
     enum Zone: String, Codable, CaseIterable { case left, right, bottom }
 
     enum Preset: String, Codable, CaseIterable, Identifiable {
-        case focus, deck, full, custom
+        case focus, deck, full
         var id: String { rawValue }
         var title: String { rawValue.capitalized }
     }
@@ -24,15 +24,14 @@ struct ShellLayout: Codable, Equatable {
 
     static let splits = [1, 2, 4]
 
-    /// nil for `.custom` — that one is whatever the user saved.
-    static func preset(_ preset: Preset) -> ShellLayout? {
+    /// A preset as it comes, before the user changes it.
+    static func preset(_ preset: Preset) -> ShellLayout {
         switch preset {
         // Focus is the simplest view: what changed for users first, then who waits.
         case .focus: ShellLayout(left: [], right: [.product, .waiting], bottom: [], split: 1)
         // Side zones on both sides leave ~780 pt at 1440 wide — one terminal. Presets with several keep one side.
         case .deck: ShellLayout(left: [.sessions], right: [], bottom: [], split: 4)
         case .full: ShellLayout(left: [.explorer, .changes], right: [], bottom: [.events, .ci], split: 2)
-        case .custom: nil
         }
     }
 

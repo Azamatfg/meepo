@@ -5,7 +5,7 @@ import XCTest
 final class ShellLayoutTests: XCTestCase {
     func testPresetsNeverShowAPanelTwice() {
         for preset in ShellLayout.Preset.allCases {
-            guard let layout = ShellLayout.preset(preset) else { continue }
+            let layout = ShellLayout.preset(preset)
             let all = layout.left + layout.right + layout.bottom
             XCTAssertEqual(all.count, Set(all).count, "\(preset)")
             XCTAssertTrue(ShellLayout.splits.contains(layout.split), "\(preset)")
@@ -13,7 +13,7 @@ final class ShellLayoutTests: XCTestCase {
     }
 
     func testMovingTakesThePanelOutOfItsOldZone() {
-        var layout = ShellLayout.preset(.focus)!
+        var layout = ShellLayout.preset(.focus)
         layout.move(.product, to: .left)
         XCTAssertEqual(layout.left, [.product])
         XCTAssertEqual(layout.right, [.waiting])
@@ -21,7 +21,7 @@ final class ShellLayoutTests: XCTestCase {
     }
 
     func testTogglingHidesAShownPanelAndOpensAHiddenOneOnTheLeft() {
-        var layout = ShellLayout.preset(.focus)!
+        var layout = ShellLayout.preset(.focus)
         layout.toggle(.waiting)
         XCTAssertNil(layout.zone(of: .waiting))
         layout.toggle(.explorer)
@@ -29,7 +29,7 @@ final class ShellLayoutTests: XCTestCase {
     }
 
     func testSurvivesSaving() throws {
-        let layout = ShellLayout.preset(.full)!
+        let layout = ShellLayout.preset(.full)
         XCTAssertEqual(try JSONDecoder().decode(ShellLayout.self, from: JSONEncoder().encode(layout)), layout)
     }
 }
@@ -48,32 +48,63 @@ final class ShellStoreTests: XCTestCase {
                          usageRoot: tmp, defaults: defaults)
     }
 
-    func testAnEditByHandBecomesCustomAndComesBack() {
+    func testEachPresetKeepsItsOwnChanges() {
         store.applyPreset(.focus)
         store.editShell { $0.move(.ci, to: .bottom) }
-        XCTAssertEqual(store.shellPreset, .custom)
+        XCTAssertEqual(store.shellPreset, .focus, "changing Focus keeps you in Focus")
         store.applyPreset(.deck)
-        XCTAssertEqual(store.shell, ShellLayout.preset(.deck))
-        store.applyPreset(.custom)
-        XCTAssertEqual(store.shell.bottom, [.ci], "Custom is the arrangement made by hand, not the last preset")
+        XCTAssertEqual(store.shell, ShellLayout.preset(.deck), "other presets aren't touched")
+        store.applyPreset(.focus)
+        XCTAssertEqual(store.shell.bottom, [.ci], "Focus comes back as you set it")
+        store.resetPreset(.focus)
+        XCTAssertEqual(store.shell, ShellLayout.preset(.focus))
+        XCTAssertNil(store.editedLayouts[.focus])
     }
 
-    func testANoOpEditKeepsThePreset() {
+    func testChangingBackToTheDefaultIsNotAnEdit() {
         store.applyPreset(.full)
+        store.editShell { $0.split = 4 }
         store.editShell { $0.split = 2 }
-        XCTAssertEqual(store.shellPreset, .full)
+        XCTAssertNil(store.editedLayouts[.full])
     }
 
     func testTheLayoutOutlivesARestart() throws {
         store.applyPreset(.full)
         store.editShell { $0.split = 4 }
+        store.applyPreset(.focus)
+        let again = try restarted()
+        again.applyPreset(.full)
+        XCTAssertEqual(again.shell.split, 4)
+    }
+
+    func testAnOldCustomLayoutBecomesFulls() throws {
+        let custom = ShellLayout(left: [.sessions, .explorer], right: [.ci], bottom: [], split: 2)
+        defaults.set(try JSONEncoder().encode(custom), forKey: "shellCustom")
+        defaults.set("custom", forKey: "shellPreset")
+        let again = try restarted()
+        XCTAssertEqual(again.shellPreset, .full)
+        XCTAssertEqual(again.editedLayouts[.full], custom)
+        XCTAssertNil(defaults.object(forKey: "shellCustom"))
+    }
+
+    func testAnUnknownPresetDoesntLoseTheOthers() throws {
+        let full = ShellLayout(left: [.explorer], right: [], bottom: [], split: 2)
+        defaults.set(try JSONEncoder().encode(["full": full, "someday": full]), forKey: "shellEdited")
+        XCTAssertEqual(try restarted().editedLayouts[.full], full)
+    }
+
+    private func restarted() throws -> AppStore {
         let db = try DatabaseQueue()
         try AppDatabase.migrator.migrate(db)
         let tmp = FileManager.default.temporaryDirectory.appending(path: "shell-\(UUID().uuidString)")
-        let again = AppStore(db: db, bridge: BridgeInstaller(settingsURL: tmp.appending(path: "s.json"), meepoHome: tmp),
-                             usageRoot: tmp, defaults: defaults)
-        XCTAssertEqual(again.shellPreset, .custom)
-        XCTAssertEqual(again.shell.split, 4)
+        return AppStore(db: db, bridge: BridgeInstaller(settingsURL: tmp.appending(path: "s.json"), meepoHome: tmp),
+                        usageRoot: tmp, defaults: defaults)
+    }
+
+    func testAHiddenStageComesBackInItsPlace() {
+        let without = Stage.defaults.filter { $0.name != "qa" && $0.name != "sync" }
+        XCTAssertEqual(Stage.adding(Stage.defaults[2], to: without).map(\.name), ["plan", "code", "qa", "security", "simplify", "ship"])
+        XCTAssertEqual(Stage.adding(Stage.defaults[6], to: without).map(\.name).last, "sync")
     }
 
     func testOnlyTerminalsOnScreenCountAsSeen() throws {

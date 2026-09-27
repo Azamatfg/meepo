@@ -35,19 +35,19 @@ enum Explain {
         case .explorer: "The files of the selected session's project. Files Claude changed are colored like in VS Code. Click a file to read it; drop files from Finder to copy them in (onto a folder: into it)."
         case .changes: "What changed in git: CHANGES are edits not committed yet, INCOMING are your teammates' new commits, OUTGOING are commits not pushed yet, HISTORY the branch's last commits — click one for its hash, message and files. Compare shows the difference; Explain says it in plain words."
         case .ci: "Your project's builds, tests and deploys (GitHub Actions or GitLab CI). A step waiting for a click — like deploy — gets a Run button."
-        case .events: "Everything the agent did in this session, step by step: your requests, the tools it used, when it finished."
+        case .events: "What Claude did in this session, step by step, in plain words: what you asked, the commands it ran, the files it read or edited. Click a step for the details; a file opens in the editor."
         case .waiting: "Sessions that stopped and wait for you — a question, a permission, or a finished task. Ctrl+Tab jumps to the next one."
         case .product: "Each request you gave Claude is a run. Explain for users turns a finished run into plain words: what your users will notice, what to check before shipping, how to try it."
         }
     }
 
-    static let home = "Home shows all sessions at once. Deck: a card per session with its state and last step. Timeline: the last hour, one square per minute — blue when Claude worked, orange when it waited for you, empty when nothing happened."
+    static let home = "Home shows all sessions at once. Deck: a card per session — what you asked last, what Claude is doing now, how long it's worked. Today: every request of the day by session, how long each took and whether it's done or asked you something. Click any of them to open the session."
 
     static let stages = "Your workflow, left to right: PLAN thinks it through, CODE builds, QA checks, SECU looks for security holes, SIMP tidies the code, SHIP commits and pushes, SYNC saves what was learned. Click a stage to run it; the outlined one is next. Grey means this project has no command for it."
 
     static let workflows = "A workflow is your own automation, written as a plain Claude Code file. A button runs steps in order (a skill of yours: /name works in any terminal); right-click it to repeat it every few minutes (/loop) or schedule it in the cloud (/schedule). A check runs after every answer Claude gives (a Stop hook) — if it fails, Claude fixes it. Workflows with several agents at once are Claude Code's own: save one from Claude Code and meepo shows it under WORKFLOWS."
 
-    static let presets = "Focus: one terminal and what changed. Deck: up to four sessions at once. Full: files, git and two terminals, like VS Code. Move any panel yourself and it's saved as Custom."
+    static let presets = "Focus: one terminal and what changed. Deck: up to four sessions at once. Full: files, git and two terminals, like VS Code. Change any of them — move, hide or add panels — and it stays that way; a • marks a changed one, right-click it to reset."
 }
 
 /// ≡ → How Meepo works: the whole app on one page.

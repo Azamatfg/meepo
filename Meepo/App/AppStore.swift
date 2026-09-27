@@ -68,9 +68,12 @@ final class AppStore {
         Self.retireChains(from: defaults)
         suggestionStates = Self.load([String: SuggestionState].self, Self.suggestionsKey, from: defaults) ?? [:]
         skillButtons = defaults.stringArray(forKey: Self.skillButtonsKey) ?? []
+        Self.retireCustomLayout(from: defaults)
         let preset = defaults.string(forKey: Self.shellPresetKey).flatMap(ShellLayout.Preset.init(rawValue:)) ?? .focus
         shellPreset = preset
-        shell = Self.load(ShellLayout.self, Self.shellKey, from: defaults) ?? ShellLayout.preset(preset) ?? ShellLayout.preset(.focus)!
+        editedLayouts = Dictionary(uniqueKeysWithValues: (Self.load([String: ShellLayout].self, Self.editedLayoutsKey, from: defaults) ?? [:])
+            .compactMap { key, layout in ShellLayout.Preset(rawValue: key).map { ($0, layout) } })
+        shell = Self.load(ShellLayout.self, Self.shellKey, from: defaults) ?? ShellLayout.preset(preset)
         relayThreshold = defaults.object(forKey: Self.relayThresholdKey) as? Double ?? 0.7
         remoteControlForNewSessions = defaults.bool(forKey: Self.remoteControlKey)
         autofixProjectIds = Set((defaults.array(forKey: Self.autofixKey) as? [Int64]) ?? [])
@@ -1010,13 +1013,21 @@ final class AppStore {
 
     private static let shellKey = "shellLayout"
     private static let shellPresetKey = "shellPreset"
-    private static let customShellKey = "shellCustom"
+    private static let editedLayoutsKey = "shellEdited"
 
     var shellPreset: ShellLayout.Preset {
         didSet { defaults.set(shellPreset.rawValue, forKey: Self.shellPresetKey) }
     }
 
-    /// What the window shows now; any change by hand is kept as the Custom preset.
+    /// Each preset as the user changed it; a preset not here is as it comes.
+    private(set) var editedLayouts: [ShellLayout.Preset: ShellLayout] = [:] {
+        didSet {
+            let byName = Dictionary(uniqueKeysWithValues: editedLayouts.map { ($0.key.rawValue, $0.value) })
+            defaults.set(try? JSONEncoder().encode(byName), forKey: Self.editedLayoutsKey)
+        }
+    }
+
+    /// What the window shows now: the current preset, with the user's changes.
     private(set) var shell: ShellLayout {
         didSet { defaults.set(try? JSONEncoder().encode(shell), forKey: Self.shellKey) }
     }
@@ -1026,17 +1037,35 @@ final class AppStore {
 
     func applyPreset(_ preset: ShellLayout.Preset) {
         shellPreset = preset
-        shell = ShellLayout.preset(preset) ?? Self.load(ShellLayout.self, Self.customShellKey, from: defaults) ?? shell
+        shell = editedLayouts[preset] ?? ShellLayout.preset(preset)
     }
 
-    /// Moves, hides or opens panels by hand: the result becomes (and is saved as) Custom.
+    /// Moves, hides or opens panels by hand: the current preset keeps it — set up once, it stays that way.
     func editShell(_ change: (inout ShellLayout) -> Void) {
         var layout = shell
         change(&layout)
         guard layout != shell else { return }
         shell = layout
-        shellPreset = .custom
-        defaults.set(try? JSONEncoder().encode(layout), forKey: Self.customShellKey)
+        editedLayouts[shellPreset] = layout == ShellLayout.preset(shellPreset) ? nil : layout
+    }
+
+    /// Back to the preset as it comes.
+    func resetPreset(_ preset: ShellLayout.Preset) {
+        editedLayouts[preset] = nil
+        if shellPreset == preset { shell = ShellLayout.preset(preset) }
+    }
+
+    /// Before 0.4 a changed layout became a fourth preset, Custom. It becomes Full's own now (the closest to
+    /// a hand-made VS Code-like arrangement), so nothing set up is lost.
+    private static func retireCustomLayout(from defaults: UserDefaults) {
+        if defaults.string(forKey: shellPresetKey) == "custom" { defaults.set(ShellLayout.Preset.full.rawValue, forKey: shellPresetKey) }
+        guard let custom = defaults.data(forKey: "shellCustom") else { return }
+        if defaults.data(forKey: editedLayoutsKey) == nil,
+           let layout = try? JSONDecoder().decode(ShellLayout.self, from: custom),
+           let data = try? JSONEncoder().encode([ShellLayout.Preset.full.rawValue: layout]) {
+            defaults.set(data, forKey: editedLayoutsKey)
+        }
+        defaults.removeObject(forKey: "shellCustom")
     }
 
     /// How many terminals the center actually fits right now (a narrow window shows fewer than the split).
