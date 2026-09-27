@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Command bar under the terminal (SPEC module 4, design §5): the workflow stages as pixel buttons —
-/// current one pressed in, next one lit — plus the project's other commands, "To code" and "Relay".
+/// plus the project's other commands, "To code" and "Relay".
 struct StagePanel: View {
     @Environment(AppStore.self) private var store
     let session: Session
@@ -35,11 +35,9 @@ struct StagePanel: View {
         // All stages are always shown; ones this project lacks are dimmed and offer to add the command.
         let stages = store.stages
         let available = Set(store.stages(for: session.projectId).map(\.name))
-        let current = stages.firstIndex { $0.name == session.stage }
-        let next = current.map { $0 + 1 < stages.count ? $0 + 1 : nil } ?? 0
         HStack(spacing: 6) {
             InfoButton(title: "Stages", text: Explain.stages)
-            ForEach(Array(stages.enumerated()), id: \.element.id) { index, stage in
+            ForEach(stages) { stage in
                 Button(stage.label) { available.contains(stage.name) ? run(stage) : (missingStage = stage) }
                     .buttonStyle(PixelButtonStyle())
                     .opacity(available.contains(stage.name) ? 1 : 0.4)
@@ -59,8 +57,6 @@ struct StagePanel: View {
                         Button("Hide \(stage.label) from this bar") { store.stages.removeAll { $0.id == stage.id } }
                         Button("Edit stages…") { isStagesEdited = true }
                     }
-                    .overlay { if index == current { Capsule().fill(Tokens.work.opacity(0.14)).allowsHitTesting(false) } }
-                    .overlay { if index == next { Capsule().strokeBorder(Tokens.work, lineWidth: 1.5) } }
                     .help(help(for: stage))
             }
             ForEach(store.skillButtons(for: session.projectId), id: \.self) { name in
@@ -157,9 +153,6 @@ struct StagePanel: View {
                               ? "STOP first: the words land in the prompt a moment after, then SEND sends them"
                               : "Enter: sends what's in the prompt — what you said, and any fixes — to Claude")
                 }
-            }
-            if let port = session.portBase {
-                NumberPlate(text: "PORT \(port)").help("PORT / MEEPO_PORT_BASE for this session: \(port)–\(port + Ports.blockSize - 1)")
             }
             if store.mergedWorktreeSessionIds.contains(session.id!) {
                 Button("REMOVE WORKTREE") {
