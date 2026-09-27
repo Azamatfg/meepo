@@ -1,10 +1,10 @@
-# Meepo
+# meepo
 
 > A comfortable home for Claude Code on your Mac.
 
-[Claude Code](https://claude.com/claude-code) is a great way to build software. Meepo makes it easier to live with every day: all your Claude Code sessions in one window, a glance at which one is working and which one waits for you, and what changed — in your product's terms, not just in the code.
+[Claude Code](https://claude.com/claude-code) is a great way to build software. meepo makes it easier to live with every day: all your Claude Code sessions in one window, a glance at which one is working and which one waits for you, and what changed — in your product's terms, not just in the code.
 
-Meepo doesn't write code and isn't another agent. Claude Code does the work, with your own settings, skills and hooks; Meepo is the place around it.
+meepo doesn't write code and isn't another agent. Claude Code does the work, with your own settings, skills and hooks; meepo is the place around it.
 
 ![Home: every session at a glance](docs/screenshots/home.png)
 
@@ -31,7 +31,7 @@ Meepo doesn't write code and isn't another agent. Claude Code does the work, wit
 - *New in Claude Code*: after an update, the changes that touch your setup come first.
 - *Claude Code Setup*: finds things that quietly work against you — an effort level that no longer reaches the model you use, hook timeouts written in milliseconds, allow rules like `Bash(sudo:*)`, skills that push which Claude may start by itself — each with a fix and an exact undo.
 
-**Learns from how you work.** *Automations* shows your skills and commands with how often you really use them, effort and model per skill, and which ones Claude may start by itself. Meepo notices what you repeat — commands in a row, requests you keep typing — and offers a button or a personal skill for it. Then it checks whether it helped.
+**Learns from how you work.** *Automations* shows your skills and commands with how often you really use them, effort and model per skill, and which ones Claude may start by itself. meepo notices what you repeat — commands in a row, requests you keep typing — and offers a button or a personal skill for it. Then it checks whether it helped.
 
 **Stages.** PLAN → CODE → QA → SECURITY → SIMPLIFY → SHIP → SYNC, each a click that runs your own command — or Claude Code's built-in one (`/verify`, `/security-review`, `/commit-push-pr`) when a project has none.
 
@@ -39,14 +39,14 @@ Meepo doesn't write code and isn't another agent. Claude Code does the work, wit
 
 ## Built on Claude Code
 
-Everything Meepo shows comes from Claude Code itself, and everything it does goes through it:
+Everything meepo shows comes from Claude Code itself, and everything it does goes through it:
 
 - the real `claude` CLI in each terminal, with your login, settings, skills, hooks and memory
 - Claude Code's own hooks and statusline for what each session is doing, its plan limits and effort
 - Claude Code's built-in commands and features where they exist — `/verify`, `/security-review`, `/commit-push-pr`, `/rewind`, worktrees, `--add-dir`, Remote Control, output styles, `skillOverrides`
 - Claude Code's own changelog, to point out what a new release means for your setup
 
-Meepo follows Claude Code as it grows: when Claude Code gains something, Meepo uses it rather than building its own.
+meepo follows Claude Code as it grows: when Claude Code gains something, meepo uses it rather than building its own.
 
 ## Install
 
@@ -60,7 +60,7 @@ brew install --cask meepo
 
 `meepo` opens it from any terminal; `meepo .` adds the current folder with a session in it.
 
-Meepo updates itself: new versions download in the background, and the status bar offers a restart (or it installs when you quit). `meepo update` checks right away. Updates install only if they are signed by the same developer and notarized by Apple.
+meepo updates itself: new versions download in the background, and the status bar offers a restart (or it installs when you quit). `meepo update` checks right away. Updates install only if they are signed by the same developer and notarized by Apple.
 
 Or download `Meepo.zip` from [Releases](https://github.com/Azamatfg/meepo/releases) and move `Meepo.app` to Applications.
 
@@ -74,20 +74,20 @@ Made-up projects, no `claude` started, nothing of yours read or written — for 
 
 ### Uninstall
 
-Meepo menu → **Remove Hook Bridge** takes its hooks out of `~/.claude/settings.json`; then `brew uninstall --cask meepo` (add `--zap` to delete `~/.meepo`). If you skip the first step, the leftover hook entries do nothing.
+meepo menu → **Remove Hook Bridge** takes its hooks out of `~/.claude/settings.json`; then `brew uninstall --cask meepo` (add `--zap` to delete `~/.meepo`). If you skip the first step, the leftover hook entries do nothing.
 
 ## Your phone
 
-Meepo is the control panel on your Mac. On your phone, use the Claude app through Claude Code's **Remote Control**: turn it on for new sessions in Settings, or press **PHONE** on a running one. From the phone you can see that a session is waiting, read the request and answer it.
+meepo is the control panel on your Mac. On your phone, use the Claude app through Claude Code's **Remote Control**: turn it on for new sessions in Settings, or press **PHONE** on a running one. From the phone you can see that a session is waiting, read the request and answer it.
 
 ## Privacy and safety
 
 - Everything stays on your Mac: `~/.meepo/meepo.sqlite`, backups in `~/.meepo/backups`. No telemetry. A crash report is shown to you to copy, never sent.
-- Meepo talks to Claude Code through hooks and a statusline, posted to a server on `127.0.0.1` only, with a local token.
+- meepo talks to Claude Code through hooks and a statusline, posted to a server on `127.0.0.1` only, with a local token.
 - It stores no API keys or passwords; GitHub, GitLab and Claude use their own CLIs and logins.
 - `claude -p` runs only when you click (Explain, drafts, release notes) and never with tools or your hooks.
-- Push, pull and deploy happen on your click with a confirmation; Meepo never force-pushes. Quitting while an agent works asks first.
-- Every change Meepo makes to your files is backed up and can be undone (≡ → Tools → Changes); team files under git are never edited.
+- Push, pull and deploy happen on your click with a confirmation; meepo never force-pushes. Quitting while an agent works asks first.
+- Every change meepo makes to your files is backed up and can be undone (≡ → Tools → Changes); team files under git are never edited.
 
 ## Build from source
 
