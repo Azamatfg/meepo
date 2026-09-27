@@ -166,6 +166,34 @@ final class ShellSnapshotTests: XCTestCase {
 
     /// The README's screenshots: demo mode's made-up projects in each layout, at 1440 × 900.
     /// TEST_RUNNER_MEEPO_SCREENSHOT_DIR=docs/screenshots xcodebuild test -only-testing:MeepoTests/ShellSnapshotTests/testDemoScreens
+    /// A view's whole layer tree at 2×, as a picture.
+    static func render(_ view: NSView) throws -> NSBitmapImageRep {
+        view.layoutSubtreeIfNeeded()
+        view.displayIfNeeded()
+
+        let scale: CGFloat = 2, size = view.bounds.size
+        let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * scale), pixelsHigh: Int(size.height * scale),
+                                                 bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                                 colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        rep.size = size
+        // The rep's context already maps points to its 2× pixels; layers draw top-down, the bitmap bottom-up.
+        let cg = try XCTUnwrap(NSGraphicsContext(bitmapImageRep: rep)).cgContext
+        cg.translateBy(x: 0, y: size.height)
+        cg.scaleBy(x: 1, y: -1)
+        try XCTUnwrap(view.layer).render(in: cg)
+        // The terminals' own background (their layer's) doesn't come through a render — only their text, over a
+        // clear hole. Laid over the terminal color meepo gives them, they look as they do on screen.
+        let page = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: rep.pixelsWide, pixelsHigh: rep.pixelsHigh,
+                                                  bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                                  colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        let out = try XCTUnwrap(NSGraphicsContext(bitmapImageRep: page)).cgContext
+        let whole = CGRect(x: 0, y: 0, width: page.pixelsWide, height: page.pixelsHigh)
+        out.setFillColor(NSColor(Tokens.terminalBg).cgColor)
+        out.fill(whole)
+        out.draw(try XCTUnwrap(rep.cgImage), in: whole)
+        return page
+    }
+
     func testDemoScreens() async throws {
         let path = ProcessInfo.processInfo.environment["MEEPO_SCREENSHOT_DIR"]
         try XCTSkipIf(path == nil, "screenshots only on request")
@@ -189,10 +217,12 @@ final class ShellSnapshotTests: XCTestCase {
             window.makeKeyAndOrderFront(nil)
             defer { window.orderOut(nil); window.contentView = nil }
             try await Task.sleep(for: .milliseconds(1500))
-            // As the window server composites it: cacheDisplay leaves the terminals' layer backgrounds out.
-            let image = try XCTUnwrap(CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber),
-                                                              [.boundsIgnoreFraming, .bestResolution]))
-            let rep = NSBitmapImageRep(cgImage: image)
+            // Drawn by the app itself, layers and all: no Screen Recording permission, nothing the window server
+            // adds (a permission-less capture comes back dimmed; cacheDisplay leaves layer backgrounds out).
+            // A terminal that was just made or resized paints its background only after it has drawn once.
+            _ = try Self.render(try XCTUnwrap(window.contentView))
+            try await Task.sleep(for: .milliseconds(700))
+            let rep = try Self.render(try XCTUnwrap(window.contentView))
             try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path!).appending(path: "\(name).png"))
         }
         store.applyPreset(.deck)

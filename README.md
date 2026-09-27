@@ -14,6 +14,8 @@ meepo doesn't write code and isn't another agent. Claude Code does the work, wit
 
 ![Four sessions: working, waiting for a permission, waiting for an answer, ready](docs/screenshots/deck.png)
 
+![Today: what was sent and what's left](docs/screenshots/today.png)
+
 **What changed — in your product's terms.** Work is counted the way it reaches people: by push. *What changed* shows a block for each push ("Sent to GitHub · 11:53 · 2 commits") and one for what isn't sent yet, with the requests behind it and the next step. One click writes it for your users — "in Leasing you can now import a payment schedule from Excel" — with what to check before shipping and how to try it. The code diff is still one click away.
 
 ![What changed: a run explained for users](docs/screenshots/focus.png)
