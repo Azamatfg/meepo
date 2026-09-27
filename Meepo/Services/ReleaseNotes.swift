@@ -28,9 +28,11 @@ enum ReleaseNotes {
             can do now or what got better; leave out refactors, tests, CI and chores unless that is all there is. \
             Output only the note, no preface.
             """]
+        // meepo shows the note formatted and COPY carries the bold, so the markup must be the one it reads.
+        let format = "Formatting: **bold** for what stands out, \"- \" for list items; no # headings, tables or code blocks."
         parts.append(style.isEmpty
-            ? "No samples yet: write a short, plain post in the language of the commit messages."
-            : "<samples>\n\(style)\n</samples>")
+            ? "No samples yet: write a short, plain post in the language of the commit messages. \(format)"
+            : "<samples>\n\(style)\n</samples>\n\n\(format)")
         parts.append("<commits>\n\(commits)\n</commits>")
         if let shipReport, !shipReport.isEmpty { parts.append("<ship_report>\n\(shipReport.prefix(4_000))\n</ship_report>") }
         return parts.joined(separator: "\n\n")

@@ -52,12 +52,15 @@ struct MainView: View {
         .sheet(isPresented: $isToolsShown) { ToolsView() }
         .sheet(isPresented: $isNotesShown) { NotesView() }
         .sheet(isPresented: $isImportShown) { ImportView() }
+        .sheet(isPresented: Binding(get: { store.isSettingsShown }, set: { store.isSettingsShown = $0 })) { SettingsView() }
+        // Today's click on a push: What changed shows it even when the panel isn't in the layout.
+        .sheet(isPresented: Binding(get: { store.isWhatChangedShown }, set: { store.isWhatChangedShown = $0 })) { WhatChangedSheet() }
         .sheet(isPresented: Binding(get: { store.renamingSessionId != nil }, set: { if !$0 { store.renamingSessionId = nil } })) {
             if let id = store.renamingSessionId, let session = store.sessions.first(where: { $0.id == id }) {
                 RenameSheet(session: session)
             }
         }
-        .sheet(isPresented: Binding(get: { !isOnboarded }, set: { if !$0 { isOnboarded = true } })) { OnboardingView() }
+        .sheet(isPresented: Binding(get: { !isOnboarded }, set: { if !$0 { isOnboarded = true } })) { OnboardingView(isFirstRun: true) }
         .fileImporter(isPresented: $isPickingFolder, allowedContentTypes: [.folder]) { result in
             do {
                 try store.addProject(at: result.get())
@@ -92,10 +95,9 @@ struct MainView: View {
     }
 }
 
-/// Title bar: room for the traffic lights, Home and session tabs, +, the layout presets and the ≡ menu.
+/// Title bar: room for the traffic lights, the ≡ menu, Home and session tabs, +, and the layout presets.
 private struct TitleBar: View {
     @Environment(AppStore.self) private var store
-    @Environment(\.openSettings) private var openSettings
     @Binding var isStatsShown: Bool
     @Binding var isMorningShown: Bool
     @Binding var isDayShown: Bool
@@ -111,6 +113,32 @@ private struct TitleBar: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            Menu {
+                Button("Tasks — morning start") { isMorningShown = true }
+                Button("Day — end-of-day summary") { isDayShown = true }
+                Divider()
+                Button("Stats") { isStatsShown = true }
+                Button("Tools — Docker space, ports, meepo's edits") { isToolsShown = true }
+                Button("Notes — release notes") { isNotesShown = true }
+                Divider()
+                Toggle("Guided mode — Claude explains, asks first", isOn: Binding(get: { store.guidedMode }, set: { store.setGuidedMode($0) }))
+                Button("How meepo works…") { isGuideShown = true }
+                Button("Welcome…") { isWelcomeShown = true }
+                Divider()
+                Button("Automations…") { isAutomationsShown = true }
+                Button("Claude Code Setup…") { isSetupShown = true }
+                Button("Send Feedback…") { NSWorkspace.shared.open(CrashNotice.newIssue(title: "", body: "")) }
+                Button("Settings…") { store.isSettingsShown = true }
+            } label: {
+                Image(systemName: "line.3.horizontal").font(.system(size: 14, weight: .semibold)).foregroundStyle(Tokens.textDim)
+                    .frame(width: 30, height: 30)
+            }
+            .menuStyle(.button)
+            .menuIndicator(.hidden)
+            .buttonStyle(.plain)
+            .fixedSize()
+            .help("Menu — Tasks, Day, Stats, Tools, Automations, Settings")
+            .accessibilityLabel("Menu")
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
                     TabButton(isOn: store.isHomeShown, action: { store.isHomeShown = true }) {
@@ -140,30 +168,6 @@ private struct TitleBar: View {
             UpdateBadge()
             PresetPicker()
             InfoButton(title: "Layouts", text: Explain.presets)
-            Menu {
-                Button("Tasks — morning start") { isMorningShown = true }
-                Button("Day — end-of-day summary") { isDayShown = true }
-                Divider()
-                Button("Stats") { isStatsShown = true }
-                Button("Tools — practices, Docker, ports, changes") { isToolsShown = true }
-                Button("Notes — release notes") { isNotesShown = true }
-                Divider()
-                Toggle("Guided mode", isOn: Binding(get: { store.guidedMode }, set: { store.guidedMode = $0 }))
-                Button("How meepo works…") { isGuideShown = true }
-                Button("Welcome…") { isWelcomeShown = true }
-                Divider()
-                Button("Automations…") { isAutomationsShown = true }
-                Button("Claude Code Setup…") { isSetupShown = true }
-                Button("Send Feedback…") { NSWorkspace.shared.open(CrashNotice.newIssue(title: "", body: "")) }
-                Button("Settings…") { openSettings() }
-            } label: {
-                Image(systemName: "line.3.horizontal").font(.system(size: 14, weight: .semibold)).foregroundStyle(Tokens.textDim)
-                    .frame(width: 30, height: 30)
-            }
-            .menuStyle(.button)
-            .menuIndicator(.hidden)
-            .buttonStyle(.plain)
-            .fixedSize()
         }
         .padding(.leading, isFullScreen ? 10 : 84) // room for the traffic lights, which full screen hides
         .padding(.trailing, 10)
@@ -188,11 +192,10 @@ private struct SessionTab: View {
     var body: some View {
         let look = store.look(of: session)
         let project = store.project(for: session)?.name ?? "?"
-        let siblings = store.sessions.filter { $0.projectId == session.projectId }.count
         TabButton(isOn: !store.isHomeShown && store.selectedSessionId == session.id,
                   action: { store.selectedSessionId = session.id }) {
             SelectionRing(kind: look.ring)
-            Text(siblings > 1 ? "\(project) · \(store.displayName(of: session))" : project)
+            Text(store.tabLabel(of: session))
                 .lineLimit(1).truncationMode(.middle).frame(maxWidth: 200)
             Color.clear.frame(width: 14, height: 14) // room for the ×, laid over the tab below
         }
@@ -220,6 +223,14 @@ private struct SessionTab: View {
             message: "claude stops mid-turn. Files and commits stay; the conversation stays in Claude Code (claude --resume).",
             action: "Close"
         ) { store.closeSession(session.id!) }
+    }
+}
+
+extension AppStore {
+    /// A session tab's caption: the project, plus the session's name when the project has several.
+    func tabLabel(of session: Session) -> String {
+        let name = project(for: session)?.name ?? "?"
+        return sessions.filter { $0.projectId == session.projectId }.count > 1 ? "\(name) · \(displayName(of: session))" : name
     }
 }
 
@@ -284,7 +295,6 @@ private struct PresetPicker: View {
 /// Left edge: one icon per panel (shows or hides it), how many terminals share the center, Settings.
 private struct Rail: View {
     @Environment(AppStore.self) private var store
-    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         VStack(spacing: 4) {
@@ -306,7 +316,7 @@ private struct Rail: View {
                 }
             }
             Spacer()
-            RailButton(symbol: "gearshape", isOn: false, name: "Settings", hint: "meepo's settings", click: "⌘,") { openSettings() }
+            RailButton(symbol: "gearshape", isOn: false, name: "Settings", hint: "meepo's settings", click: "⌘,") { store.isSettingsShown = true }
                 .padding(.bottom, 8)
         }
         .padding(.top, 10)
@@ -442,8 +452,15 @@ private struct PanelBox: View {
         VStack(spacing: 0) {
             HStack(spacing: 7) {
                 Image(systemName: Self.symbol(panel)).font(.system(size: 11, weight: .semibold))
-                Text(Self.title(panel).uppercased()).font(Fonts.ui(11, weight: .bold)).tracking(1.2)
-                InfoButton(title: Self.title(panel), text: Explain.panel(panel))
+                // Whose files, commits, CI: the selected session's project. Where it doesn't fit, the name loses its
+                // middle, then the title its end — never down to a bare "…".
+                if Self.perProject.contains(panel), let session = store.selectedSession {
+                    // Not ViewThatFits: on macOS 15 it measures its options off the main thread, and InfoButton's
+                    // action is a main-actor closure — the tester's crash (2026-09-25). The name gives way instead.
+                    titled(project: store.project(for: session)?.name ?? "", tab: store.tabLabel(of: session))
+                } else {
+                    titled()
+                }
                 Spacer(minLength: 0)
                 Menu {
                     ForEach(ShellLayout.Zone.allCases, id: \.self) { zone in
@@ -469,12 +486,30 @@ private struct PanelBox: View {
             .help("Drag to another side of the window")
             Rectangle().fill(Tokens.line).frame(height: 1)
             ScrollView {
-                content.frame(maxWidth: .infinity, alignment: .leading).padding(10)
+                // minWidth 0: exactly the panel's width, so a long row (an author's name, a path) can't widen it.
+                // (containerRelativeFrame measured the window here, not the scroll view.)
+                content.frame(minWidth: 0, maxWidth: .infinity, alignment: .leading).padding(10)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Tokens.line))
+    }
+
+    private func titled(project: String? = nil, tab: String = "") -> some View {
+        HStack(spacing: 7) {
+            Text(Self.title(panel).uppercased()).font(Fonts.ui(11, weight: .bold)).tracking(1.2).lineLimit(1)
+                .layoutPriority(1)
+            InfoButton(title: Self.title(panel), text: Explain.panel(panel))
+            if let project {
+                // The project comes first (the icon already says which panel); a long name still ends in the middle.
+                Text(project.count > 18 ? "\(project.prefix(9))…\(project.suffix(8))" : project)
+                    .font(Fonts.ui(11, weight: .semibold)).foregroundStyle(Tokens.text)
+                    .fixedSize()
+                    .layoutPriority(2)
+                    .help("For the selected tab: \(tab)")
+            }
+        }
     }
 
     @ViewBuilder
@@ -494,6 +529,8 @@ private struct PanelBox: View {
         case .product: WhatChangedPanel()
         }
     }
+
+    private static let perProject: Set<ShellLayout.Panel> = [.explorer, .changes, .ci, .events, .product]
 
     static func title(_ panel: ShellLayout.Panel) -> String {
         switch panel {

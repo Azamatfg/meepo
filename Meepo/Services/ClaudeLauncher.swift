@@ -21,7 +21,9 @@ enum ClaudeLauncher {
 
     /// Guided mode (people new to Claude Code): Claude explains what it does, and asks before anything hard to
     /// take back — even in auto mode (`permissions.ask` holds there since 2.1.28x). Not `--safe-mode`, which
-    /// turns hooks off, Meepo's bridge included.
+    /// turns hooks off, Meepo's bridge included. Read once, when claude starts (`--settings` is pinned then),
+    /// so a running session changes mode only by restarting; /output-style would write the project's
+    /// .claude/settings.local.json instead of switching only meepo's session.
     static let guidedAsks = ["Bash(git push:*)", "Bash(git reset --hard:*)", "Bash(rm -rf:*)", "Bash(sudo:*)",
                              "Bash(npm publish:*)", "Edit(**/.env*)"]
 
@@ -33,8 +35,8 @@ enum ClaudeLauncher {
     /// Existing transcript: `--resume <uuid>`; the initial prompt is never re-sent.
     /// `remoteControl`: session name shown in the Claude app / claude.ai (`--remote-control <name>`),
     /// so the session can be followed and answered from the phone. Verified on 2.1.280.
-    /// `claude auth status` → signed in or not; nil when it can't tell. Blocking; call off the main thread.
-    static func isLoggedIn(login: LoginEnvironment) -> Bool? {
+    /// `claude auth status` → signed in or not, and how; nil when it can't tell. Blocking; call off the main thread.
+    static func authStatus(login: LoginEnvironment) -> AuthStatus? {
         let process = Process()
         process.executableURL = URL(filePath: login.claudePath)
         process.arguments = ["auth", "status"]
@@ -45,7 +47,25 @@ enum ClaudeLauncher {
         do { try process.run() } catch { return nil }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitForExit()
-        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["loggedIn"] as? Bool
+        return AuthStatus(json: data)
+    }
+
+    /// `method` is Claude Code's authMethod (2.1.283): "claude.ai", "oauth_token", "api_key", "api_key_helper",
+    /// "third_party" (Bedrock, Vertex…) or "none".
+    struct AuthStatus: Equatable, Sendable {
+        var loggedIn: Bool
+        var method: String?
+
+        init(loggedIn: Bool, method: String?) {
+            self.loggedIn = loggedIn
+            self.method = method
+        }
+
+        init?(json: Data) {
+            guard let obj = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
+                  let loggedIn = obj["loggedIn"] as? Bool else { return nil }
+            self.init(loggedIn: loggedIn, method: obj["authMethod"] as? String)
+        }
     }
 
     /// `claude --version`'s first line, e.g. "2.1.282 (Claude Code)". Blocking; call off the main thread.

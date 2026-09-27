@@ -4,7 +4,7 @@ import XCTest
 
 /// Claude Code 2.1.282's statusline input, trimmed to what Meepo reads.
 private let sample = Data(#"""
-{"session_id":"abc","model":{"id":"claude-opus-5-5","display_name":"Opus 5.5"},"effort":{"level":"xhigh"},
+{"session_id":"abc","model":{"id":"claude-opus-5-5","display_name":"Opus 5.5"},"effort":{"level":"xhigh"},"output_style":{"name":"Learning"},
  "context_window":{"total_input_tokens":420000,"context_window_size":1000000,"used_percentage":42,"remaining_percentage":58},
  "rate_limits":{"five_hour":{"used_percentage":37.6,"resets_at":1790330400},"seven_day":{"used_percentage":81,"resets_at":1790700000}}}
 """#.utf8)
@@ -19,6 +19,7 @@ final class StatusLineParseTests: XCTestCase {
         XCTAssertEqual(status.fiveHour?.percent, 37.6)
         XCTAssertEqual(status.fiveHour?.resetsAt, Date(timeIntervalSince1970: 1_790_330_400))
         XCTAssertEqual(status.sevenDay?.percent, 81)
+        XCTAssertEqual(status.outputStyle, "Learning", "the user's own style: Claude already explains")
     }
 
     func testAHookEventIsNotAStatusLine() {
@@ -50,6 +51,8 @@ final class StatusLineStoreTests: XCTestCase {
         store.applyStatusLine(try XCTUnwrap(StatusLine(json: sample)), sessionId: session.id!)
         XCTAssertEqual(store.contextFraction(for: session.id!), 0.42)
         XCTAssertEqual(store.modelLine(of: session), "Opus 5.5 · xhigh", "what it really runs")
+        store.guidedMode = true
+        XCTAssertEqual(store.modelLine(of: session), "Opus 5.5 · xhigh", "· guided only for a session claude started guided")
         XCTAssertEqual(store.usageLimits?.sevenDay?.percent, 81)
     }
 }

@@ -106,7 +106,7 @@ struct BridgeInstaller {
             hooks[event] = (hooks[event] as? [Any] ?? []) + [entry]
         }
         settings["hooks"] = hooks
-        return try write(settings)
+        return try write(settings, as: "Hook bridge")
     }
 
     @discardableResult
@@ -115,7 +115,7 @@ struct BridgeInstaller {
         guard let hooks = settings["hooks"] as? [String: Any] else { return nil }
         let cleaned = Self.removingBridge(from: hooks)
         if cleaned.isEmpty { settings["hooks"] = nil } else { settings["hooks"] = cleaned }
-        return try write(settings)
+        return try write(settings, as: "Hook bridge")
     }
 
     /// Quiets the user's own Notification hooks (global and per project) in Meepo sessions, or restores them.
@@ -179,11 +179,12 @@ struct BridgeInstaller {
     func editSettings(_ action: String, _ change: (inout [String: Any]) -> Void) throws {
         var settings = try readSettings()
         change(&settings)
-        let backup = try write(settings)
-        ChangeLog.record(action, file: settingsURL, backup: backup, backups: meepoHome.appending(path: "backups"))
+        try write(settings, as: action)
     }
 
-    private func write(_ settings: [String: Any]) throws -> URL? {
+    /// Backs the file up, writes it and logs `action` in Tools → Changes, so it can be undone.
+    @discardableResult
+    private func write(_ settings: [String: Any], as action: String) throws -> URL? {
         let target = settingsURL.resolvingSymlinksInPath()
         var backup: URL?
         if FileManager.default.fileExists(atPath: target.path) {
@@ -198,7 +199,7 @@ struct BridgeInstaller {
         let data = try JSONSerialization.data(withJSONObject: settings,
                                               options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         try data.write(to: target, options: .atomic)
-        ChangeLog.record("Hook bridge", file: target, backup: backup, backups: meepoHome.appending(path: "backups"))
+        ChangeLog.record(action, file: target, backup: backup, backups: meepoHome.appending(path: "backups"))
         return backup
     }
 }

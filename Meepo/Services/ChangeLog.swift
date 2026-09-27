@@ -8,7 +8,7 @@ enum ChangeLog {
         var date = Date.now
         let action: String
         let file: String
-        /// The file as it was before; nil = Meepo created it, so undoing deletes it.
+        /// The file as it was before; nil = Meepo created it, so undoing moves it to the Trash.
         let backup: String?
     }
 
@@ -44,10 +44,18 @@ enum ChangeLog {
         return copy
     }
 
-    /// Puts the file back as it was before `entry` (or removes a file Meepo created); the current state is backed up first.
+    /// Puts the file back as it was before `entry`; the current state is backed up first. A file or folder Meepo
+    /// created goes to the Trash instead (a copied folder can be big) — that is its backup. Blocking: a backup
+    /// copies whole folders, so call off the main thread.
     static func restore(_ entry: Entry, backups: URL) throws {
         let fm = FileManager.default
         let file = URL(filePath: entry.file)
+        if entry.backup == nil {
+            var trashed: NSURL?
+            if fm.fileExists(atPath: file.path) { try fm.trashItem(at: file, resultingItemURL: &trashed) }
+            record("Restore: \(entry.action)", file: file, backup: trashed as URL?, backups: backups)
+            return
+        }
         let current = try backup(file, folder: "restored", backups: backups)
         if fm.fileExists(atPath: file.path) { try fm.removeItem(at: file) }
         if let saved = entry.backup {

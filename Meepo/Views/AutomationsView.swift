@@ -188,17 +188,26 @@ struct AutomationsView: View {
         }
     }
 
+    @ViewBuilder
     private func mayStartToggle(_ item: Automations.Item) -> some View {
         let manualOnly = overrides[item.name] == "user-invocable-only"
-        return Toggle(isOn: Binding(
-            get: { !manualOnly },
-            set: { on in apply { try store.setSkillOverride(item.name, to: on ? "on" : "user-invocable-only") } }
-        )) {
-            Text(manualOnly ? "Only you" : "Yes").foregroundStyle(manualOnly ? Tokens.work : Tokens.textDim)
+        if item.isUserOnly {
+            // disable-model-invocation in the file (or a Claude Code screen): a switch in settings can't turn it on.
+            Text(item.owner == .builtIn ? "Only you" : "Only you (set in its file)").foregroundStyle(Tokens.work)
+                .fixedSize(horizontal: false, vertical: true)
+                .help("Only you start /\(item.name). Claude can't — so a workflow that uses it as a step stops there.")
+        } else {
+            Toggle(isOn: Binding(
+                get: { !manualOnly },
+                set: { on in apply { try store.setSkillOverride(item.name, to: on ? "on" : "user-invocable-only") } }
+            )) {
+                Text(manualOnly ? "Only you" : "Yes").foregroundStyle(manualOnly ? Tokens.work : Tokens.textDim)
+            }
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .help((manualOnly ? "Only you start it with /\(item.name)." : "Claude may run it by itself when it fits the task.")
+                  + " Off: a workflow that uses it as a step stops there.")
         }
-        .toggleStyle(.switch)
-        .controlSize(.mini)
-        .help(manualOnly ? "Only you start it with /\(item.name)" : "Claude may run it by itself when it fits the task")
     }
 
     private func fadingRow(_ item: Automations.Item) -> some View {

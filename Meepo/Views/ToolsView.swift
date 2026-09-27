@@ -1,12 +1,13 @@
 import SwiftUI
 
-/// TOOLS sheet (SPEC module 11): shared practices across projects, and Docker upkeep.
+/// TOOLS sheet (SPEC module 11): Docker upkeep, ports, and every change meepo made to your files.
+/// No shared-commands library: Claude Code already gives one command to every project through ~/.claude.
 struct ToolsView: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var tab = Tab.practices
+    @State private var tab = Tab.docker
     @State private var confirmation: PixelConfirmation?
 
-    enum Tab: String, CaseIterable { case practices = "PRACTICES", docker = "DOCKER", ports = "PORTS", changes = "CHANGES" }
+    enum Tab: String, CaseIterable { case docker = "DOCKER", ports = "PORTS", changes = "CHANGES" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -21,9 +22,8 @@ struct ToolsView: View {
             }
             .buttonStyle(PixelButtonStyle())
             switch tab {
-            case .practices: PracticesView(confirmation: $confirmation)
             case .docker: DockerView(confirmation: $confirmation)
-            case .ports: PortsView().background(Tokens.dirt).sunken()
+            case .ports: PortsView(confirmation: $confirmation)
             case .changes: ChangesView(confirmation: $confirmation)
             }
         }
@@ -36,242 +36,204 @@ struct ToolsView: View {
     }
 }
 
-private struct PracticesView: View {
-    @Environment(AppStore.self) private var store
-    @State private var items: [Library.Item] = []
-    @State private var showAll = false
-    @State private var expanded: String?
-    @State private var isPickingLibrary = false
-    @Binding var confirmation: PixelConfirmation?
-
-    var body: some View {
-        let library = store.libraryURL
-        let shown = showAll ? items : items.filter { item in item.copies.contains { $0.state != .same } }
-        let outdatedTotal = items.flatMap(\.copies).filter { $0.state == .outdated }.count
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Library: \(library.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))")
-                    .font(Fonts.mono(12)).foregroundStyle(Tokens.textDim).lineLimit(1).truncationMode(.middle)
-                Button("CHANGE") { isPickingLibrary = true }
-                Spacer()
-                Button(showAll ? "ONLY DIFFERENCES" : "SHOW ALL") { showAll.toggle() }
-                Button("UPDATE ALL (\(outdatedTotal))") {
-                    confirmation = PixelConfirmation(
-                        title: "OVERWRITE \(outdatedTotal) OUTDATED COPIES?",
-                        message: "Older isn't always outdated: a copy may be tuned for its project. Check DIFF first if unsure. Backups are kept.",
-                        action: "OVERWRITE"
-                    ) { act { for item in items { try Library.updateOutdated(item, backups: backups) } } }
-                }
-                .disabled(outdatedTotal == 0)
-                .help("Library → every outdated copy. Copies edited in a project are left alone.")
-            }
-            .buttonStyle(PixelButtonStyle())
-            ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    if shown.isEmpty {
-                        Text(showAll ? "No commands, hooks or agents found." : "Every copy matches the library.")
-                            .foregroundStyle(Tokens.textDim)
-                    }
-                    ForEach(shown) { item in
-                        PracticeRow(item: item, isExpanded: expanded == item.id, library: library, backups: backups,
-                                    confirmation: $confirmation, onToggle: { expanded = expanded == item.id ? nil : item.id }, act: act)
-                    }
-                }
-                .padding(6)
-            }
-            .background(Tokens.dirt)
-            .sunken()
-            Text("outdated = library is newer · edited = changed in the project · local = not in the library. Backups: ~/.meepo/backups/practices")
-                .font(.caption).foregroundStyle(Tokens.textDim)
-        }
-        .onAppear(perform: reload)
-        .onChange(of: store.libraryFolder) { reload() }
-        .fileImporter(isPresented: $isPickingLibrary, allowedContentTypes: [.folder]) { result in
-            if let url = try? result.get() { store.libraryFolder = url.path }
-        }
-    }
-
-    private var backups: URL { store.backupsDir }
-
-    private func reload() { items = Library.scan(library: store.libraryURL, projects: store.projects) }
-
-    private func act(_ change: () throws -> Void) {
-        do { try change() } catch { store.bridgeError = error.localizedDescription }
-        reload()
-        store.refreshProjects()
-    }
-}
-
-private struct PracticeRow: View {
-    let item: Library.Item
-    let isExpanded: Bool
-    let library: URL
-    let backups: URL
-    @Binding var confirmation: PixelConfirmation?
-    let onToggle: () -> Void
-    let act: (() throws -> Void) -> Void
-    @State private var diffCopy: Library.Copy?
-
-    var body: some View {
-        let counts = Dictionary(grouping: item.copies, by: \.state).mapValues(\.count)
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Text("\(item.kind)/\(item.name)").font(Fonts.mono(13)).foregroundStyle(Tokens.text)
-                if item.libraryURL == nil { Text("LOCAL").font(.caption2).foregroundStyle(Tokens.warn) }
-                Spacer()
-                badge(counts[.outdated], "outdated", Tokens.alert)
-                badge(counts[.newer], "edited", Tokens.warn)
-                badge(counts[.same], "same", Tokens.selectionSoft)
-                if let outdated = counts[.outdated], outdated > 0 {
-                    Button("UPDATE \(outdated)") {
-                        confirmation = PixelConfirmation(
-                            title: "OVERWRITE \(item.name.uppercased())?",
-                            message: "In: \(item.copies.filter { $0.state == .outdated }.map(\.project.name).joined(separator: ", ")). Backups are kept.",
-                            action: "OVERWRITE"
-                        ) { act { try Library.updateOutdated(item, backups: backups) } }
-                    }
-                    .buttonStyle(PixelButtonStyle())
-                }
-            }
-            .contentShape(Rectangle())
-            .onTapGesture(perform: onToggle)
-            if isExpanded {
-                ForEach(item.copies) { copy in
-                    HStack(spacing: 8) {
-                        Text(copy.project.name).foregroundStyle(Tokens.text).frame(width: 160, alignment: .leading)
-                        Text(label(copy.state)).font(.caption).foregroundStyle(color(copy.state))
-                        Spacer()
-                        if copy.state != .same {
-                            Button("DIFF") { diffCopy = copy }
-                        }
-                        if copy.state == .newer || copy.state == .projectOnly {
-                            Button("LIFT") { act { try Library.lift(copy, in: item, library: library, backups: backups) } }
-                                .help("Make this project's version the library version")
-                        }
-                        if copy.state == .newer || copy.state == .outdated {
-                            Button("OVERWRITE") { act { try Library.overwrite(copy, from: item, backups: backups) } }
-                                .help("Replace this project's copy with the library version (backed up)")
-                        }
-                    }
-                    .buttonStyle(PixelButtonStyle())
-                    .padding(.leading, 12)
-                }
-            }
-        }
-        .padding(6)
-        .background(isExpanded ? Tokens.grassDeep : .clear)
-        .sheet(item: $diffCopy) { copy in
-            let library = item.libraryURL
-            DiffViewer(title: "LIBRARY ↔ \(copy.project.name.uppercased())", sources: [
-                DiffSource(id: "\(item.kind)/\(item.name)", status: "M") {
-                    (library.flatMap { try? Data(contentsOf: $0) }, try? Data(contentsOf: copy.url))
-                },
-            ], selected: "\(item.kind)/\(item.name)")
-        }
-    }
-
-    @ViewBuilder
-    private func badge(_ count: Int?, _ title: String, _ color: Color) -> some View {
-        if let count, count > 0 { Text("\(count) \(title)").font(.caption).foregroundStyle(color) }
-    }
-
-    private func label(_ state: Library.State) -> String {
-        switch state {
-        case .same: "same"
-        case .outdated: "outdated"
-        case .newer: "edited in project"
-        case .projectOnly: "local only"
-        }
-    }
-
-    private func color(_ state: Library.State) -> Color {
-        switch state {
-        case .same: Tokens.selectionSoft
-        case .outdated: Tokens.alert
-        case .newer, .projectOnly: Tokens.warn
-        }
-    }
-}
-
+/// DOCKER: where Docker's space went, one Clear for what nothing uses, and each project's saved data — Delete only
+/// for a volume no container uses, always asked first.
 private struct DockerView: View {
     @Environment(AppStore.self) private var store
-    @State private var usage: [Docker.Usage] = []
-    @State private var stopped: [Docker.Container] = []
-    @State private var state = "Loading…"
     @Binding var confirmation: PixelConfirmation?
+    @State private var space: Docker.Space?
+    @State private var state = "Looking at Docker…"
+    @State private var note: String?
+    @State private var isBusy = false
+    @State private var isClearing = false
+    @State private var unfolded: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if usage.isEmpty {
-                Text(state).foregroundStyle(Tokens.textDim)
+            if let space {
+                Text(Explain.dockerSpace(Docker.size(space.total))).font(Fonts.ui(13)).foregroundStyle(Tokens.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let note { Text(note).font(Fonts.ui(13, weight: .semibold)).foregroundStyle(Tokens.text) }
+                safeToClear(space)
+                savedData(space)
             } else {
-                Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 4) {
-                    GridRow {
-                        ForEach(["", "size", "reclaimable"], id: \.self) { Text($0).font(.caption).foregroundStyle(Tokens.textDim) }
-                    }
-                    ForEach(usage, id: \.type) { row in
-                        GridRow {
-                            Text(row.type).foregroundStyle(Tokens.text)
-                            Text(row.size).font(Fonts.mono(12)).foregroundStyle(Tokens.text)
-                            Text(row.reclaimable).font(Fonts.mono(12)).foregroundStyle(Tokens.warn)
-                        }
-                    }
-                }
-                .padding(8).background(Tokens.dirt).sunken()
-
-                Text("STOPPED CONTAINERS BY PROJECT").font(Fonts.title(16)).foregroundStyle(Tokens.text)
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(groups, id: \.name) { group in
-                        Text("\(group.name): \(group.containers.count)")
-                            .font(Fonts.mono(12)).foregroundStyle(group.isMeepo ? Tokens.text : Tokens.textDim)
-                    }
-                    if stopped.isEmpty { Text("None").foregroundStyle(Tokens.textDim) }
-                }
-                .padding(8).frame(maxWidth: .infinity, alignment: .leading).background(Tokens.dirt).sunken()
-
-                HStack {
-                    ForEach(Docker.Cleanup.allCases) { cleanup in
-                        Button("CLEAN \(cleanup.rawValue.uppercased())") {
-                            confirmation = PixelConfirmation(
-                                title: "REMOVE \(cleanup.rawValue.uppercased())?",
-                                message: "docker \(cleanup.args.joined(separator: " ")). Running containers and tagged images are kept.",
-                                action: "REMOVE"
-                            ) { Task { await clean(cleanup) } }
-                        }
-                    }
-                }
-                .buttonStyle(PixelButtonStyle())
+                Text(state).foregroundStyle(Tokens.textDim)
+                Spacer()
             }
-            Spacer()
         }
         .task { await load() }
     }
 
-    /// Compose projects matched to Meepo projects by folder name; the rest listed as they are.
-    private var groups: [(name: String, containers: [Docker.Container], isMeepo: Bool)] {
-        let byCompose = Dictionary(grouping: stopped) { $0.composeProject ?? "(no compose project)" }
-        return byCompose.map { compose, containers in
-            let project = store.projects.first { Docker.composeName(of: $0) == compose }
-            return (project?.name ?? compose, containers, project != nil)
+    private func safeToClear(_ space: Docker.Space) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("SAFE TO CLEAR").font(Fonts.title(14)).foregroundStyle(Tokens.text)
+                Spacer()
+                Button(isClearing ? "Clearing…" : "Clear ≈\(Docker.size(space.safeBytes))…") { confirmClear(space) }
+                    .buttonStyle(PixelButtonStyle(isPrimary: true))
+                    .disabled(space.clearCommands.isEmpty || isBusy)
+                    .help(space.clearCommands.map { "docker " + command($0) }.joined(separator: "\n"))
+            }
+            if space.clearCommands.isEmpty {
+                Text("Nothing to clear: every image and volume is in use or holds a project's data.").font(.caption).foregroundStyle(Tokens.textDim)
+            }
+            if !space.unusedImages.isEmpty {
+                line("\(space.unusedImages.count) images no container uses", "≈\(Docker.size(space.imagesBytes))",
+                     "Docker downloads or builds one again when a project needs it.")
+            }
+            if !space.leftoverVolumes.isEmpty {
+                line("\(space.leftoverVolumes.count) unnamed volumes", Docker.size(space.leftoverBytes),
+                     "Left behind by containers that are gone; nothing uses them.")
+            }
+            if space.buildCacheBytes > 0 {
+                line("Build cache", Docker.size(space.buildCacheBytes), "Leftovers of building images; the next build takes a bit longer.")
+            }
         }
-        .sorted { ($0.isMeepo ? 0 : 1, $0.name) < ($1.isMeepo ? 0 : 1, $1.name) }
+        .padding(8).frame(maxWidth: .infinity, alignment: .leading).background(Tokens.dirt).sunken()
+    }
+
+    private func line(_ what: String, _ size: String, _ why: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(size).font(Fonts.mono(12)).foregroundStyle(Tokens.text).frame(width: 80, alignment: .leading)
+            Text(what).foregroundStyle(Tokens.text)
+            Text(why).font(.caption).foregroundStyle(Tokens.textDim).lineLimit(1).truncationMode(.tail)
+        }
+    }
+
+    private func savedData(_ space: Docker.Space) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("PROJECTS' SAVED DATA").font(Fonts.title(14)).foregroundStyle(Tokens.text)
+                Text(Docker.size(space.owners.reduce(0) { $0 + $1.bytes })).font(Fonts.mono(12)).foregroundStyle(Tokens.textDim)
+            }
+            Text("Databases and files your projects' containers keep between restarts (volumes). Not junk — meepo never clears them in bulk. Delete is there only for a volume no container uses, and it can't be undone.")
+                .font(.caption).foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    if space.owners.isEmpty { Text("No saved data.").foregroundStyle(Tokens.textDim) }
+                    ForEach(space.owners) { owner in
+                        let isOpen = unfolded.contains(owner.id)
+                        Button {
+                            if isOpen { unfolded.remove(owner.id) } else { unfolded.insert(owner.id) }
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text(isOpen ? "▾" : "▸").font(Fonts.mono(12)).foregroundStyle(Tokens.textDim)
+                                Text(owner.title).foregroundStyle(owner.isProject ? Tokens.text : Tokens.textDim).lineLimit(1)
+                                Spacer()
+                                Text(inUse(owner)).font(.caption).foregroundStyle(Tokens.textDim)
+                                Text(Docker.size(owner.bytes)).font(Fonts.mono(12)).foregroundStyle(Tokens.text)
+                                    .frame(width: 80, alignment: .trailing)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        if isOpen {
+                            ForEach(owner.volumes) { volume in volumeRow(volume, of: owner, space) }
+                        }
+                    }
+                }
+                .padding(8)
+            }
+            .background(Tokens.dirt)
+            .sunken()
+        }
+    }
+
+    private func inUse(_ owner: Docker.Owner) -> String {
+        let used = owner.volumes.filter { Docker.deleteArgs(for: $0) == nil }.count
+        let count = owner.volumes.count == 1 ? "1 volume" : "\(owner.volumes.count) volumes"
+        return used == 0 ? "\(count), none in use" : used == owner.volumes.count ? "\(count), in use" : "\(count), \(used) in use"
+    }
+
+    private func volumeRow(_ volume: Docker.Volume, of owner: Docker.Owner, _ space: Docker.Space) -> some View {
+        HStack(spacing: 8) {
+            Text(volume.isAnonymous ? "unnamed · \(volume.name.prefix(12))" : volume.name)
+                .font(Fonts.mono(11)).foregroundStyle(Tokens.text).lineLimit(1).truncationMode(.middle)
+            Spacer()
+            if let users = space.usedBy[volume.name] {
+                Text("used by \(users.joined(separator: ", "))").font(.caption).foregroundStyle(Tokens.textDim).lineLimit(1)
+            }
+            Text(Docker.size(volume.bytes)).font(Fonts.mono(11)).foregroundStyle(Tokens.textDim).frame(width: 70, alignment: .trailing)
+            if let args = Docker.deleteArgs(for: volume) {
+                Button("Delete…") { confirmDelete(volume, args: args, of: owner) }
+                    .buttonStyle(PixelButtonStyle(compact: true))
+                    .disabled(isBusy)
+                    .help("docker " + args.joined(separator: " "))
+            } else if space.usedBy[volume.name] == nil {
+                Text("in use").font(.caption).foregroundStyle(Tokens.textDim)
+            }
+        }
+        .padding(.leading, 20)
+        .help(volume.name)
+    }
+
+    /// "volume rm 2ed076b31423… (18 volumes)" — the hashes say nothing.
+    private func command(_ args: [String]) -> String {
+        args.count > 4 && args[0] == "volume" ? "volume rm \(args[2].prefix(12))… (\(args.count - 2) volumes)" : args.joined(separator: " ")
+    }
+
+    private func confirmClear(_ space: Docker.Space) {
+        var items: [String] = []
+        if !space.unusedImages.isEmpty {
+            let names = space.unusedImages.prefix(3).joined(separator: ", ") + (space.unusedImages.count > 3 ? ", …" : "")
+            items.append("• \(space.unusedImages.count) images no container uses, ≈\(Docker.size(space.imagesBytes)) (\(names)). Docker downloads or builds one again when a project needs it.")
+        }
+        if !space.leftoverVolumes.isEmpty {
+            items.append("• \(space.leftoverVolumes.count) unnamed volumes nothing uses, \(Docker.size(space.leftoverBytes)) — left behind by containers that are gone.")
+        }
+        if space.buildCacheBytes > 0 { items.append("• Build cache, \(Docker.size(space.buildCacheBytes)) — the next build takes a bit longer.") }
+        confirmation = PixelConfirmation(
+            title: "Clear ≈\(Docker.size(space.safeBytes))?",
+            message: (items + ["Projects' saved data and anything a container uses stay."]).joined(separator: "\n"),
+            action: "Clear"
+        ) { Task { await clear(space) } }
+    }
+
+    private func confirmDelete(_ volume: Docker.Volume, args: [String], of owner: Docker.Owner) {
+        confirmation = PixelConfirmation(
+            title: "Delete \(volume.isAnonymous ? "this unnamed volume" : volume.name)?",
+            message: "Saved data of \(owner.title), \(Docker.size(volume.bytes)) — a database or files its containers kept. No container uses it now. It can't be undone: the next start begins with this data empty.",
+            action: "Delete"
+        ) {
+            Task {
+                guard let docker = store.toolPath("docker"), let before = space?.total else { return }
+                isBusy = true
+                note = nil
+                let done = await Task.detached { Docker.run(docker, args) != nil }.value
+                await load()
+                isBusy = false
+                let name = volume.isAnonymous ? "the unnamed volume" : volume.name
+                note = done ? "Deleted \(name) — freed \(Docker.size(max(before - (space?.total ?? before), 0)))."
+                    : "Docker didn't delete \(name) — a container may be using it now."
+            }
+        }
     }
 
     private func load() async {
-        guard let docker = store.toolPath("docker") else { state = "Docker isn't installed."; return }
-        let (df, ps) = await Task.detached {
-            (Docker.run(docker, ["system", "df", "--format", "{{json .}}"]),
-             Docker.run(docker, ["ps", "-a", "--filter", "status=exited", "--format", "{{json .}}"]))
+        guard let docker = store.toolPath("docker") else { state = "Docker isn't installed — nothing to clean up here."; return }
+        let projects = store.projects
+        let result = await Task.detached { () -> Docker.Space? in
+            guard let summary = Docker.run(docker, ["system", "df", "--format", "{{json .}}"]),
+                  let verbose = Docker.run(docker, ["system", "df", "-v", "--format", "{{json .}}"]) else { return nil }
+            return Docker.space(summary: summary, verbose: verbose, projects: projects)
         }.value
-        guard let df else { state = "Docker isn't running."; return }
-        usage = Docker.parseUsage(df)
-        stopped = Docker.parseContainers(ps ?? "")
+        guard let result else { space = nil; state = "Docker isn't running. Start Docker Desktop to see where its space went."; return }
+        space = result
     }
 
-    private func clean(_ cleanup: Docker.Cleanup) async {
+    private func clear(_ cleared: Docker.Space) async {
         guard let docker = store.toolPath("docker") else { return }
-        _ = await Task.detached { Docker.run(docker, cleanup.args) }.value
+        isBusy = true
+        isClearing = true
+        note = nil
+        let failed = await Task.detached {
+            cleared.clearCommands.filter { Docker.run(docker, $0) == nil }.count
+        }.value
         await load()
+        isBusy = false
+        isClearing = false
+        let freed = Docker.size(max(cleared.total - (space?.total ?? cleared.total), 0))
+        note = failed == 0 ? "Freed \(freed)." : "Freed \(freed). Docker couldn't clear everything — something may have started using it."
     }
 }
 
@@ -302,7 +264,7 @@ private struct ChangesView: View {
                                 confirmation = PixelConfirmation(
                                     title: "RESTORE \(URL(filePath: entry.file).lastPathComponent.uppercased())?",
                                     message: entry.backup == nil
-                                        ? "meepo created this file; restoring deletes it. The current file is backed up first."
+                                        ? "meepo created this; restoring moves it to the Trash."
                                         : "Puts back the file as it was before “\(entry.action)”. The current file is backed up first.",
                                     action: "RESTORE"
                                 ) { restore(entry) }
@@ -325,8 +287,15 @@ private struct ChangesView: View {
     private func reload() { entries = ChangeLog.entries(backups: store.backupsDir) }
 
     private func restore(_ entry: ChangeLog.Entry) {
-        do { try ChangeLog.restore(entry, backups: store.backupsDir) } catch { store.bridgeError = error.localizedDescription }
-        reload()
-        store.refreshProjects()
+        let backups = store.backupsDir
+        Task {
+            // Off the main thread: a backup copies whole folders.
+            let failure = await Task.detached { () -> String? in
+                do { try ChangeLog.restore(entry, backups: backups); return nil } catch { return error.localizedDescription }
+            }.value
+            if let failure { store.bridgeError = failure }
+            reload()
+            store.refreshProjects()
+        }
     }
 }

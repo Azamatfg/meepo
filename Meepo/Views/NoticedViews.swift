@@ -9,11 +9,18 @@ struct NoticedRow: View {
     @State private var error: String?
 
     var body: some View {
+        let isRetired = store.isRetired(suggestion)
         HStack(alignment: .center, spacing: 18) {
-            Text("\(suggestion.count)×").font(Fonts.ui(isCard ? 40 : 26, weight: .bold)).foregroundStyle(Tokens.work)
-                .frame(minWidth: isCard ? 80 : 56, alignment: .leading)
+            // A 0.3 button may no longer be a habit in the history: no count to show then.
+            if suggestion.count > 0 {
+                Text("\(suggestion.count)×").font(Fonts.ui(isCard ? 40 : 26, weight: .bold)).foregroundStyle(Tokens.work)
+                    .frame(minWidth: isCard ? 80 : 56, alignment: .leading)
+            }
             VStack(alignment: .leading, spacing: 4) {
-                if isCard { Text("MEEPO NOTICED").font(Fonts.ui(11, weight: .bold)).tracking(1.2).foregroundStyle(Tokens.work) }
+                if isCard {
+                    Text(isRetired ? "FROM MEEPO 0.3" : "MEEPO NOTICED").font(Fonts.ui(11, weight: .bold)).tracking(1.2)
+                        .foregroundStyle(Tokens.work)
+                }
                 Text(title).font(Fonts.ui(isCard ? 18 : 15, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
                 Text(detail).font(.caption).foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
                 if let error { Text(error).font(.caption).foregroundStyle(Tokens.danger) }
@@ -21,10 +28,10 @@ struct NoticedRow: View {
             Spacer(minLength: 8)
             switch suggestion.kind {
             case let .chain(commands):
-                Button("Make a button") {
+                Button(isRetired ? "Make it again" : "Make a button") {
                     do { try store.makeButton(from: suggestion) } catch { self.error = error.localizedDescription }
                 }
-                .help("Saves /" + commands.joined(separator: "-") + " as a skill of yours and puts it next to the stages")
+                .help("Saves /" + Recipes.buttonName(for: commands) + " as a skill of yours and puts it next to the stages")
                     .buttonStyle(PixelButtonStyle(compact: !isCard, isPrimary: true))
             case .skill:
                 Button("Draft a skill…") { isDrafting = true }
@@ -32,7 +39,7 @@ struct NoticedRow: View {
             }
             Button("Not now") { store.dismissSuggestion(suggestion) }
                 .buttonStyle(PixelButtonStyle(compact: !isCard))
-                .help("Hidden until you've done it twice as often")
+                .help(isRetired ? "Not shown again — unless you keep running them in a row" : "Hidden until you've done it twice as often")
         }
         .padding(isCard ? 18 : 12)
         .background(isCard ? Tokens.raised : Tokens.surface, in: RoundedRectangle(cornerRadius: isCard ? 16 : 10))
@@ -41,16 +48,24 @@ struct NoticedRow: View {
     }
 
     private var title: String {
+        let isRetired = store.isRetired(suggestion)
         switch suggestion.kind {
-        case let .chain(commands): "You run " + commands.map { "/" + $0 }.joined(separator: " → ") + " one after another"
-        case let .skill(phrase): "You keep asking: “\(phrase)”"
+        case let .chain(commands) where isRetired:
+            return "Your " + commands.map { "/" + $0 }.joined(separator: " → ") + " button from meepo 0.3 is off"
+        case let .chain(commands): return "You run " + commands.map { "/" + $0 }.joined(separator: " → ") + " one after another"
+        case let .skill(phrase): return "You keep asking: “\(phrase)”"
         }
     }
 
     private var detail: String {
+        let isRetired = store.isRetired(suggestion)
         switch suggestion.kind {
-        case .chain: "In the last 8 weeks. A button runs them in order, as a skill of your own: each starts when the one before has finished, and Claude stops if one asks you something."
-        case .skill: "In the last 8 weeks. A skill of your own does it with one command — Claude drafts it, you read and save it."
+        case let .chain(commands) where isRetired:
+            return "0.4 switched it off, because meepo no longer types into your terminal on its own. Make it again as /"
+                + Recipes.buttonName(for: commands)
+                + ": a skill of your own that runs them in order — in meepo and in any terminal. Claude stops if one asks you something."
+        case .chain: return "In the last 8 weeks. A button runs them in order, as a skill of your own: each starts when the one before has finished, and Claude stops if one asks you something."
+        case .skill: return "In the last 8 weeks. A skill of your own does it with one command — Claude drafts it, you read and save it."
         }
     }
 }

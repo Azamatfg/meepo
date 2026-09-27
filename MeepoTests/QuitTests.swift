@@ -77,9 +77,9 @@ final class CrashReportTests: XCTestCase {
     func testOnlyMeepoReportsNewerThanTheLastSeen() throws {
         let dir = FileManager.default.temporaryDirectory.appending(path: "crash-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        func report(_ name: String, age: TimeInterval) throws -> URL {
+        func report(_ name: String, age: TimeInterval, text: String = "report") throws -> URL {
             let url = dir.appending(path: name)
-            try "report".write(to: url, atomically: true, encoding: .utf8)
+            try text.write(to: url, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.modificationDate: Date.now.addingTimeInterval(-age)], ofItemAtPath: url.path)
             return url
         }
@@ -87,6 +87,9 @@ final class CrashReportTests: XCTestCase {
         let fresh = try report("Meepo-2026-09-25-new.ips", age: 60)
         _ = try report("Safari-2026-09-25.ips", age: 10)
         _ = try report("Meepo-notes.txt", age: 10)
+        // A test run's host is Meepo too: its crash isn't the app the user runs.
+        _ = try report("Meepo-2026-09-27-test.ips", age: 5,
+                       text: #""procPath" : "/Users/x/Library/Developer/Xcode/DerivedData/Meepo-abc/Build/Products/Debug/Meepo.app""#)
         XCTAssertEqual(CrashReports.latest(since: .now.addingTimeInterval(-3600), in: dir)?.lastPathComponent, fresh.lastPathComponent)
         XCTAssertNil(CrashReports.latest(since: .now, in: dir), "dismissed ones don't come back")
     }

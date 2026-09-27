@@ -19,9 +19,48 @@ final class CommandCatalogTests: XCTestCase {
         let commands = CommandCatalog.commands(projectPath: project.path, home: home)
         let byName = Dictionary(uniqueKeysWithValues: commands.map { ($0.name, $0.description) })
         XCTAssertEqual(Set(byName.keys), Set(["plan", "retro", "git:ship", "qa"] + CommandCatalog.builtIns.map(\.name)))
-        XCTAssertEqual(byName["plan"]!, "Project plan") // project overrides global
+        XCTAssertEqual(byName["plan"]!, "global plan", "your command runs, not the project's — as Claude Code resolves /plan")
         XCTAssertEqual(byName["retro"]!, "Retro — session retrospective") // no frontmatter: first line, like Claude Code
         XCTAssertEqual(byName["qa"]!, "QA via browser")
+    }
+
+    /// Claude Code's own order, first found wins: your skills, the project's skills, your commands, the project's
+    /// commands, built-ins. Guards both ways: not "the project always wins", not "yours always wins".
+    func testWhichCopyRunsIsClaudeCodes() throws {
+        let base = FileManager.default.temporaryDirectory.appending(path: "cat-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let home = base.appending(path: "home"), project = base.appending(path: "project")
+        func write(_ path: String, in root: URL, _ description: String) throws {
+            let url = root.appending(path: ".claude/\(path)")
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try "---\ndescription: \(description)\n---\n".write(to: url, atomically: true, encoding: .utf8)
+        }
+        try write("commands/ship.md", in: home, "my ship")
+        try write("commands/ship.md", in: project, "project ship")
+        try write("commands/sync.md", in: home, "my sync")
+        try write("skills/sync/SKILL.md", in: project, "project sync skill")
+        try write("skills/qa/SKILL.md", in: home, "my qa skill")
+        try write("skills/qa/SKILL.md", in: project, "project qa skill")
+        try write("commands/simplify.md", in: project, "project simplify")
+
+        let byName = Dictionary(uniqueKeysWithValues: CommandCatalog.commands(projectPath: project.path, home: home).map { ($0.name, $0) })
+        XCTAssertEqual(byName["ship"]?.description, "my ship", "your command beats the project's command")
+        XCTAssertEqual(byName["sync"]?.description, "project sync skill", "the project's skill beats your command")
+        XCTAssertEqual(byName["qa"]?.description, "my qa skill", "your skill beats the project's skill")
+        XCTAssertEqual(byName["simplify"]?.description, "project simplify", "any file beats the built-in")
+        XCTAssertEqual(byName["sync"]?.isSkill, true)
+    }
+
+    func testOnlyYouCommandsAreKnown() throws {
+        let project = FileManager.default.temporaryDirectory.appending(path: "cat-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: project) }
+        let file = project.appending(path: ".claude/skills/deploy/SKILL.md")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "---\nname: deploy\ndisable-model-invocation: true\n---\nDeploy.".write(to: file, atomically: true, encoding: .utf8)
+        let byName = Dictionary(uniqueKeysWithValues: CommandCatalog.commands(projectPath: project.path, home: project).map { ($0.name, $0) })
+        XCTAssertEqual(byName["deploy"]?.isUserOnly, true)
+        XCTAssertEqual(byName["plan"]?.isUserOnly, true, "Claude Code's /plan is a screen, not something Claude can run")
+        XCTAssertEqual(byName["simplify"]?.isUserOnly, false)
     }
 
     func testRemoteControlFlagCarriesReadableName() {
@@ -68,13 +107,19 @@ final class StageFlowTests: XCTestCase {
                               sessionId: id ?? session.id!)
     }
 
-    func testContextWindowsFollowClaudeCode() {
+    func testContextWindowsFollowClaudeCode() throws {
         XCTAssertEqual(AppStore.nativeWindow("claude-opus-5-5"), 1_000_000)
         XCTAssertEqual(AppStore.nativeWindow("claude-sonnet-5-20260601"), 1_000_000)
         XCTAssertEqual(AppStore.nativeWindow("claude-sonnet-4-6"), 200_000)
         XCTAssertEqual(AppStore.nativeWindow("claude-sonnet-4-6[1m]"), 1_000_000)
-        store.contextWindows["claude-opus-5-5"] = 200_000
-        XCTAssertEqual(store.contextWindow(for: "claude-opus-5-5"), 200_000, "a size set by hand wins")
+        // A size set by hand in an older Settings no longer overrides the model's window, and the key goes away.
+        let defaults = UserDefaults(suiteName: "meepo-tests-\(UUID().uuidString)")!
+        defaults.set(try JSONEncoder().encode(["claude-opus-5-5": 200_000]), forKey: "contextWindows")
+        let tmp = FileManager.default.temporaryDirectory.appending(path: "cw-\(UUID().uuidString)")
+        let upgraded = AppStore(db: db, bridge: BridgeInstaller(settingsURL: tmp.appending(path: "s.json"), meepoHome: tmp),
+                                usageRoot: tmp, defaults: defaults)
+        XCTAssertEqual(upgraded.contextWindow(for: "claude-opus-5-5"), 1_000_000)
+        XCTAssertNil(defaults.object(forKey: "contextWindows"))
     }
 
     func testPlanToCodeAndRelayStayInTheWorktree() throws {
@@ -130,6 +175,15 @@ final class StageFlowTests: XCTestCase {
         send("UserPromptExpansion", prompt: "/qa", command: "qa")
         send("UserPromptSubmit", prompt: "also check the form")   // after qa a plain prompt doesn't jump
         XCTAssertEqual(session.stage, "qa")
+    }
+
+    /// A helper's report after the plan isn't the user saying "go": the stage moves on what the user typed.
+    func testClaudeCodesOwnTurnDoesntMoveTheStage() {
+        send("UserPromptExpansion", prompt: "/plan add login", command: "plan")
+        send("UserPromptSubmit", prompt: "<agent-message from=\"a1\">\nReport\n</agent-message>")
+        XCTAssertEqual(session.stage, "plan")
+        send("UserPromptSubmit", prompt: "ok, go")
+        XCTAssertEqual(session.stage, "code")
     }
 
     func testPlanHandsOffToFreshSessionOnCodeStageModel() throws {

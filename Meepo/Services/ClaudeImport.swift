@@ -108,9 +108,9 @@ enum ClaudeImport {
             .map { file, date in ClaudeSession(id: file.deletingPathExtension().lastPathComponent, title: title(of: file) ?? "Untitled", date: date) }
     }
 
-    /// Last AI or custom title near the end of the transcript, else the last prompt. Only the tail is read:
-    /// transcripts grow to tens of MB.
-    static func title(of file: URL) -> String? {
+    /// Last AI or custom title near the end of the transcript, else (`orLastPrompt`) the last prompt. Only the
+    /// tail is read: transcripts grow to tens of MB.
+    static func title(of file: URL, orLastPrompt: Bool = true) -> String? {
         guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
         defer { try? handle.close() }
         let size = (try? handle.seekToEnd()) ?? 0
@@ -120,7 +120,7 @@ enum ClaudeImport {
         for line in lines where line.contains("\"customTitle\"") || line.contains("\"aiTitle\"") || line.contains("\"lastPrompt\"") {
             guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { continue }
             if let title = (object["customTitle"] ?? object["aiTitle"]) as? String, !title.isEmpty { return title }
-            if prompt == nil, let last = object["lastPrompt"] as? String, !last.isEmpty { prompt = last }
+            if orLastPrompt, prompt == nil, let last = object["lastPrompt"] as? String, !last.isEmpty { prompt = last }
         }
         return prompt.map { String($0.prefix(80)) }
     }

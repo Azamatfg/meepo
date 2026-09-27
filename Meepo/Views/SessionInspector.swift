@@ -88,7 +88,7 @@ private struct RepoSourceControl: View {
                             Spacer()
                             Button("✕") { self.explanation = nil }.buttonStyle(.plain).foregroundStyle(Tokens.textDim)
                         }
-                        Text(explanation.text).font(.caption).foregroundStyle(Tokens.text).textSelection(.enabled)
+                        Text(MarkdownText.attributed(explanation.text)).font(.caption).foregroundStyle(Tokens.text).textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(8).background(Tokens.terminalBg, in: RoundedRectangle(cornerRadius: 8))
@@ -211,6 +211,7 @@ private struct RepoSourceControl: View {
         defer { isSyncing = false }
         if let error = await Task.detached(operation: run).value { store.bridgeError = error }
         await store.refreshSourceControl(path)
+        await store.refreshWork(containing: path) // a push is a new unit in What changed
     }
 
     private func explain(_ key: String, title: String, path: String, from: String, to: String?, whose: String, newFiles: [String]) {
@@ -273,7 +274,7 @@ struct CIPanel: View {
                     Text(runs.isEmpty ? "No CI" : "No runs on the main branch yet").font(.caption).foregroundStyle(Tokens.textDim)
                 }
                 Spacer(minLength: 0)
-                Button("All") { isCIShown = true }.buttonStyle(PixelButtonStyle(compact: true))
+                Button("All projects") { isCIShown = true }.buttonStyle(PixelButtonStyle(compact: true))
                     .help("Every project's CI, with autofix and other branches")
             }
             if let pipeline {
@@ -336,23 +337,6 @@ struct EventsPanel: View {
     }
 }
 
-/// What the compare view opens: a group's files, which one first, and the two sides (`new` nil = on disk).
-private struct Compare {
-    let title: String
-    let files: [GitPanel.FileChange]
-    let selected: String
-    let old: String?
-    let new: String?
-
-    func sources(in path: String) -> [DiffSource] {
-        files.map { change in
-            let (old, new) = (old, new)
-            return DiffSource(id: change.path, status: change.status, added: change.added, removed: change.removed,
-                              isUncommitted: change.isUncommitted) { GitPanel.versions(of: change, old: old, new: new, in: path) }
-        }
-    }
-}
-
 /// "INCOMING ↓1 from origin/main".
 private struct GroupHeader: View {
     let title: String
@@ -369,13 +353,13 @@ private struct GroupHeader: View {
     }
 }
 
-/// "Rustem · fix api endpoint · 2 hours ago".
-private struct CommitRow: View {
+/// "Rustem · fix api endpoint · 2 hours ago". A long author shortens instead of pushing the panel wider.
+struct CommitRow: View {
     let commit: GitPanel.CommitLine
 
     var body: some View {
         HStack(spacing: 4) {
-            Text(commit.author).font(.caption.weight(.semibold)).foregroundStyle(Tokens.screen).lineLimit(1).fixedSize()
+            Text(commit.author).font(.caption.weight(.semibold)).foregroundStyle(Tokens.screen).lineLimit(1)
             Text(commit.subject).font(.caption).foregroundStyle(Tokens.text).lineLimit(1)
             Spacer(minLength: 2)
             Text(commit.when).font(.caption2).foregroundStyle(Tokens.textDim).lineLimit(1).fixedSize()
@@ -395,39 +379,15 @@ private struct CommitCard: View {
     @State private var isLoaded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        Group {
             if let detail {
-                HStack(spacing: 6) {
-                    Text(detail.author).font(Fonts.ui(14, weight: .bold))
-                    Text(detail.date).font(.caption).foregroundStyle(Tokens.textDim).lineLimit(1)
-                }
-                Text(detail.message).font(Fonts.ui(13)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                let added = detail.files.compactMap(\.added).reduce(0, +), removed = detail.files.compactMap(\.removed).reduce(0, +)
-                Text("\(detail.files.count) file\(detail.files.count == 1 ? "" : "s") changed, ")
-                    + Text("\(added) insertions(+)").foregroundStyle(Tokens.added)
-                    + Text(", ") + Text("\(removed) deletions(−)").foregroundStyle(Tokens.danger)
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(detail.files) { file in FileRow(change: file) { onFile(detail, file) } }
-                    }
-                }
-                .frame(maxHeight: 180)
-                HStack(spacing: 10) {
-                    Text(String(detail.sha.prefix(12))).font(Fonts.mono(12)).foregroundStyle(Tokens.work).textSelection(.enabled)
-                    Button("Copy hash") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(detail.sha, forType: .string)
-                    }
-                    if let web { Link(web.host()?.contains("gitlab") == true ? "Open on GitLab" : "Open on GitHub", destination: web) }
-                    Spacer()
-                }
-                .buttonStyle(PixelButtonStyle(compact: true))
+                CommitCardContent(detail: detail, web: web) { onFile(detail, $0) }
             } else {
                 Text(isLoaded ? "Can't read this commit." : "Reading…").foregroundStyle(Tokens.textDim)
+                    .padding(14)
+                    .frame(width: 420, alignment: .leading)
             }
         }
-        .padding(14)
-        .frame(width: 420, alignment: .leading)
         .paperSheet()
         .task {
             let (sha, path) = (sha, path)
@@ -437,6 +397,54 @@ private struct CommitCard: View {
             }.value
             isLoaded = true
         }
+    }
+}
+
+/// The card once the commit is read. A popover proposes no size and the commit loads after it opens, so the
+/// card sizes itself to its content: without that the file list (a ScrollView with only a max height) got 0pt.
+/// A long message and a long list scroll inside, so a big commit still fits on screen.
+struct CommitCardContent: View {
+    let detail: GitPanel.CommitDetail
+    let web: URL?
+    let onFile: (GitPanel.FileChange) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text(detail.author).font(Fonts.ui(14, weight: .bold))
+                Text(detail.date).font(.caption).foregroundStyle(Tokens.textDim).lineLimit(1)
+            }
+            ScrollView {
+                Text(detail.message).font(Fonts.ui(13)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 140)
+            let added = detail.files.compactMap(\.added).reduce(0, +), removed = detail.files.compactMap(\.removed).reduce(0, +)
+            Text("\(detail.files.count) file\(detail.files.count == 1 ? "" : "s") changed, ")
+                + Text("\(added) insertions(+)").foregroundStyle(Tokens.added)
+                + Text(", ") + Text("\(removed) deletions(−)").foregroundStyle(Tokens.danger)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(detail.files) { file in FileRow(change: file) { onFile(file) } }
+                }
+            }
+            .frame(maxHeight: 160)
+            HStack(spacing: 10) {
+                Text(String(detail.sha.prefix(8))).font(Fonts.mono(12)).foregroundStyle(Tokens.work).textSelection(.enabled)
+                Button("Copy hash") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(detail.sha, forType: .string)
+                }
+                if let first = detail.files.first {
+                    Button("Compare") { onFile(first) }.help("The whole commit side by side, file by file")
+                }
+                if let web { Link(web.host()?.contains("gitlab") == true ? "Open on GitLab" : "Open on GitHub", destination: web) }
+                Spacer()
+            }
+            .buttonStyle(PixelButtonStyle(compact: true))
+        }
+        .padding(14)
+        .frame(width: 420, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 

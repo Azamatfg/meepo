@@ -38,6 +38,7 @@ final class AppStore {
         didSet {
             reloadEvents()
             isHomeShown = false
+            focusedUnit = nil
             if let id = selectedSessionId, paneAnchor.map({ paneWindow(from: $0, count: shell.split).contains(id) }) != true {
                 paneAnchor = id
             }
@@ -45,6 +46,8 @@ final class AppStore {
     }
     /// Non-nil while the "new session" sheet is shown; the project preselected in it.
     var newSessionProjectId: Int64?
+    /// The Settings sheet: ⌘, the ≡ menu and the rail's gear open it.
+    var isSettingsShown = false
     /// Feed of the selected session, newest first.
     private(set) var selectedEvents: [HookEvent] = []
     private(set) var isBridgeInstalled = false
@@ -62,7 +65,7 @@ final class AppStore {
         self.bridge = bridge
         self.usageRoot = usageRoot
         self.defaults = defaults
-        contextWindows = Self.load([String: Int].self, Self.contextWindowsKey, from: defaults) ?? [:]
+        defaults.removeObject(forKey: "contextWindows") // sizes once set by hand; Claude Code reports the window now
         stages = Self.load([Stage].self, Self.stagesKey, from: defaults) ?? Stage.defaults
         guidedMode = defaults.bool(forKey: Self.guidedKey)
         Self.retireChains(from: defaults)
@@ -82,8 +85,7 @@ final class AppStore {
         autoUpdate = defaults.object(forKey: Self.autoUpdateKey) as? Bool ?? true
         updateChannel = defaults.string(forKey: Self.channelKey).flatMap(Updater.Channel.init(rawValue:))
             ?? (Updater.currentVersion?.isPrerelease ?? true ? .beta : .stable)
-        libraryFolder = defaults.string(forKey: Self.libraryKey)
-            ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude").path
+        defaults.removeObject(forKey: "libraryFolder") // Tools → Practices is gone: ~/.claude already serves every project
         // A session that was mid-turn when Meepo went away (quit, restart, crash) lost that turn; say so.
         interruptedSessionIds = Set((try? db.read {
             try Int64.fetchAll($0, sql: "SELECT id FROM session WHERE status = ?", arguments: [SessionStatus.thinking])
@@ -98,8 +100,12 @@ final class AppStore {
         reload()
         reloadTasks()
         reloadReleaseNotes()
+        reloadTitles()
+        reloadLastLines()
+        for folder in workFolders { reloadRuns(folder) }
         selectedSessionId = orderedSessions.first?.id
         isBridgeInstalled = bridge.isInstalled()
+        refreshVoice()
         terminals.onExit = { [weak self] id in
             self?.runningSessionIds.remove(id)
             self?.exitedSessionIds.insert(id)
@@ -130,22 +136,46 @@ final class AppStore {
 
     // MARK: Session names
 
-    /// What to call a session: the user's name for it, else Claude Code's (after /rename), else its first
-    /// request — so two sessions of one project read differently everywhere.
+    /// What to call a session: the user's name for it, else Claude Code's title for the conversation (its
+    /// statusline's session_name: /rename, else the title Claude Code writes itself), else the title in its
+    /// transcript, else its first typed request — so two sessions of one project read differently everywhere.
     func displayName(of session: Session) -> String {
         if let name = session.name { return name }
         if let id = session.id, let named = liveStatus[id]?.sessionName, !named.isEmpty { return named }
-        if let id = session.id, let first = firstRequest(of: id) { return Notifier.plainText(first, limit: 40) }
+        if let id = session.id, let title = titles[id] { return Notifier.plainText(title, limit: 40) }
         return session.worktreeName.map { "worktree \($0)" } ?? session.branch ?? "session"
     }
 
-    private func firstRequest(of sessionId: Int64) -> String? {
+    /// Per session: Claude Code's title from its transcript, else the first request the user typed (Claude
+    /// Code's own turns — a helper's report — don't count). Kept here so no view reads the database.
+    private(set) var titles: [Int64: String] = [:]
+
+    private func reloadTitles() {
+        var result: [Int64: String] = [:]
         try? db.read { db in
-            try String.fetchOne(db, sql: """
-                SELECT summary FROM hookEvent WHERE sessionId = ? AND name = 'UserPromptSubmit' AND summary <> ''
-                ORDER BY createdAt, id LIMIT 1
-                """, arguments: [sessionId])
+            let rows = try Row.fetchCursor(db, sql: """
+                SELECT sessionId, summary FROM hookEvent WHERE name = 'UserPromptSubmit' AND summary <> '' ORDER BY createdAt, id
+                """)
+            while let row = try rows.next() {
+                let id: Int64 = row["sessionId"]
+                guard result[id] == nil, let typed = Runs.typed(row["summary"]), !typed.isEmpty else { continue }
+                result[id] = typed
+            }
         }
+        titles = result
+    }
+
+    /// Claude Code's own titles, from the end of each session's transcript (off the main thread): until a
+    /// session's first statusline, that's the name it has in Claude Code.
+    func refreshTitles() async {
+        let files = sessions.compactMap { session -> (Int64, URL)? in
+            guard let id = session.id, let folder = workdir(of: session) else { return nil }
+            return (id, claudeHome.appending(path: "projects/\(ClaudeImport.claudeFolderName(for: folder))/\(session.claudeSessionId).jsonl"))
+        }
+        let found = await Task.detached {
+            files.compactMap { id, file in ClaudeImport.title(of: file, orLastPrompt: false).map { (id, $0) } }
+        }.value
+        for (id, title) in found where titles[id] != title { titles[id] = title }
     }
 
     /// The session whose Rename box is open.
@@ -171,12 +201,121 @@ final class AppStore {
         didSet { defaults.set(guidedMode, forKey: Self.guidedKey) }
     }
 
+    /// Sessions whose claude started in Guided mode: claude reads the mode once, when it starts.
+    private(set) var guidedSessionIds: Set<Int64> = []
+    /// Per session, the last hook event that moved its turn (a Notification only repeats one), for `guidedRestart`.
+    private(set) var lastTurnEvents: [Int64: String] = [:]
+
+    struct TurnState {
+        let id: Int64
+        let status: SessionStatus
+        /// "Stop", "PermissionRequest", "PreToolUse"…; nil = nothing since claude started.
+        let lastEvent: String?
+        let runsGuided: Bool
+    }
+
+    /// The running sessions still in the other mode. `now`: between turns — ready, Claude's answer was the last
+    /// word (Stop, or StopFailure: an API error ended the turn), or claude only just (re)started and has sat
+    /// waiting since (SessionStart, then an idle-prompt Notification) — so a restart continues the same conversation
+    /// and cuts nothing off. `later`: mid-turn, or waiting on a permission or on a question Claude asked
+    /// (AskUserQuestion, which also reads "waiting for you"). Idle counts only when hooks told us so (`hooks`: the
+    /// bridge is installed): without them every session stays idle, even mid-turn.
+    static func guidedRestart(_ sessions: [TurnState], guided: Bool, hooks: Bool) -> (now: [Int64], later: [Int64]) {
+        let other = sessions.filter { $0.runsGuided != guided }
+        let isFree = { (s: TurnState) in
+            switch s.status {
+            case .idle: hooks && ["SessionStart", "SessionEnd", "Stop", "StopFailure"].contains(s.lastEvent ?? "")
+            case .waitingInput: s.lastEvent == "Stop" || s.lastEvent == "SessionStart"
+            case .error: s.lastEvent == "StopFailure"
+            default: false
+            }
+        }
+        return (other.filter(isFree).map(\.id), other.filter { !isFree($0) }.map(\.id))
+    }
+
+    private var turnStates: [TurnState] {
+        sessions.compactMap { session in
+            guard let id = session.id, runningSessionIds.contains(id), !exitedSessionIds.contains(id) else { return nil }
+            return TurnState(id: id, status: session.status, lastEvent: lastTurnEvents[id], runsGuided: guidedSessionIds.contains(id))
+        }
+    }
+
+    /// ≡ → Guided mode: switches it and says what that changes. claude reads the mode only when it starts
+    /// (`--settings` is pinned then), so sessions between turns are offered a restart; the others keep their mode
+    /// until meepo next opens, which restarts every session (claude --resume).
+    func setGuidedMode(_ on: Bool) {
+        guidedMode = on
+        let states = turnStates
+        let (now, later) = Self.guidedRestart(states, guided: on, hooks: isBridgeInstalled)
+        let explaining = states.filter { state in
+            !state.runsGuided && ["Explanatory", "Learning"].contains(liveStatus[state.id]?.outputStyle ?? "")
+        }.count
+        func sessions(_ count: Int) -> String { count == 1 ? "1 session" : "\(count) sessions" }
+        // Which ones, as their tabs read: a bare count leaves the user guessing.
+        func names(_ ids: [Int64]) -> String {
+            ids.compactMap { id in self.sessions.first { $0.id == id }.map(tabLabel) }.joined(separator: ", ")
+        }
+        var message = on
+            ? "Claude explains what it does and why as it works, and asks you first before it pushes code, deletes a folder, uses sudo, publishes a package or edits .env secrets — even in auto mode. New sessions start guided."
+            : "New sessions start without it: no teaching notes, and no extra questions before a push, deleting a folder, sudo, publishing a package or a .env edit. Your own permission rules still apply."
+        if on, explaining > 0 {
+            message += " In \(explaining == 1 ? "1 running session" : "\(explaining) running sessions") Claude already explains — your own output style; guided adds asking first."
+        }
+        if !now.isEmpty {
+            message += "\n\n\(sessions(now.count)) between turns can switch now (\(names(now))): a restart continues the same conversation, and its next reply reads the conversation again once, so that reply costs more."
+        }
+        if !later.isEmpty {
+            message += "\n\n\(sessions(later.count)) \(later.count == 1 ? "is" : "are") busy — working, or waiting on your answer — and keep\(later.count == 1 ? "s" : "") the old mode for now: \(names(later))."
+        }
+        if !now.isEmpty || !later.isEmpty {
+            message += "\n\nLater: new sessions follow the change right away, running ones the next time meepo opens — it restarts every session then."
+        }
+        confirmation = PixelConfirmation(
+            title: on ? "Guided mode is on" : "Guided mode is off", message: message,
+            action: now.isEmpty ? "OK" : "Restart \(sessions(now.count))", cancel: now.isEmpty ? nil : "Later", isDestructive: false
+        ) { [weak self] in self?.restartIntoGuidedMode(now) }
+    }
+
+    /// Restarts the sessions the notice named, when the user says so — only those still between turns (they may
+    /// have moved on since), and never one that became free while it was open: that one wasn't offered.
+    private func restartIntoGuidedMode(_ offered: [Int64]) {
+        for id in Self.guidedRestart(turnStates, guided: guidedMode, hooks: isBridgeInstalled).now where offered.contains(id) {
+            if isDemo { // nothing runs in Demo: only the mode changes
+                if guidedMode { guidedSessionIds.insert(id) } else { guidedSessionIds.remove(id) }
+            } else {
+                restartSession(id)
+            }
+        }
+    }
+
     /// `claude auth status` after the login shell is known; nil = couldn't tell.
     private(set) var isClaudeLoggedIn: Bool?
+    /// How claude is signed in ("claude.ai", "api_key"…); voice needs a Claude.ai sign-in.
+    private(set) var claudeAuthMethod: String?
 
     func checkClaudeLogin() async {
-        guard let login = loginEnvironment else { isClaudeLoggedIn = nil; return }
-        isClaudeLoggedIn = await Task.detached { ClaudeLauncher.isLoggedIn(login: login) }.value
+        guard let login = loginEnvironment else { isClaudeLoggedIn = nil; claudeAuthMethod = nil; return }
+        let status = await Task.detached { ClaudeLauncher.authStatus(login: login) }.value
+        isClaudeLoggedIn = status?.loggedIn
+        claudeAuthMethod = status?.method
+    }
+
+    /// The end of Welcome. The first time, it sets meepo up for the way in chosen — the layout, and Guided mode;
+    /// opened again from ≡ it changes neither (a layout set up once stays). The project picked in it gets a new
+    /// session, opened.
+    func finishOnboarding(newcomer: Bool, guided: Bool, projectId: Int64?, isFirstRun: Bool) throws {
+        if isFirstRun {
+            guidedMode = guided
+            applyPreset(newcomer ? .focus : .full)
+        }
+        if let projectId { try createSession(projectId: projectId, model: nil, prompt: nil) }
+    }
+
+    /// The project for a folder the user picked: added when it's new, the one already there when not.
+    func project(forFolder url: URL) throws -> Project? {
+        let root = (try? GitService.repositoryRoot(of: url.path)) ?? url.standardizedFileURL.path
+        if !projects.contains(where: { $0.path == root }) { try addProject(at: url) }
+        return projects.first { $0.path == root }
     }
 
     /// A new, empty project: the folder, `git init` (so changes are tracked and can be compared), added to Meepo.
@@ -186,7 +325,8 @@ final class AppStore {
         guard !clean.isEmpty, !clean.contains("/") else { throw ClaudeHeadless.Failure(errorDescription: "Give the project a name") }
         let folder = parent.appending(path: clean)
         guard !FileManager.default.fileExists(atPath: folder.path) else {
-            throw ClaudeHeadless.Failure(errorDescription: "\(folder.path) already exists — add it with + instead")
+            let shown = folder.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+            throw ClaudeHeadless.Failure(errorDescription: "\(shown) already exists — pick another name, or choose it with “A folder I have…”")
         }
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         if let error = GitService.runReportingError(["init", "-q"], in: folder.path) { throw ClaudeHeadless.Failure(errorDescription: error) }
@@ -247,44 +387,125 @@ final class AppStore {
         }
     }
 
-    // MARK: What changed — runs and what they mean for the product's users
+    // MARK: What changed — units of work from git, and what they mean for the product's users
 
-    /// Explanations being written right now, by run id.
-    private(set) var explainingRuns: Set<String> = []
+    /// Per folder a session works in: pushes, what isn't sent yet, and the requests made there. Views read this
+    /// (and `lastLine`, `titles`) — never git or the database.
+    private(set) var work: [String: Work.Folder] = [:]
+    /// Explanations being written right now, by unit key.
+    private(set) var explainingUnits: Set<String> = []
 
-    /// The session's runs over the events Meepo keeps (7 days), newest first.
-    func runs(of sessionId: Int64) -> [Run] {
-        let events = (try? db.read { try HookEvent.filter(Column("sessionId") == sessionId).fetchAll($0) }) ?? []
-        return Runs.from(events).reversed()
+    /// Which unit What changed opens on: Today's click on a push. Picking another session forgets it.
+    struct FocusedUnit: Equatable {
+        let folder: String
+        let unit: String
+    }
+    var focusedUnit: FocusedUnit?
+    /// What changed as a sheet: Today's click when the panel isn't in the layout.
+    var isWhatChangedShown = false
+
+    private var workFolders: Set<String> { Set(sessions.compactMap(workdir(of:))) }
+
+    /// Every session's folder: git off the main thread, then the requests. At launch, when meepo comes to the
+    /// front, after auto-sync.
+    func refreshWork() async {
+        for folder in workFolders { await refreshWork(folder) }
     }
 
-    func summary(of run: Run) -> ProductSummary? {
-        let json = try? db.read { db in
-            try String.fetchOne(db, sql: "SELECT json FROM runSummary WHERE sessionId = ? AND startedAt = ?",
-                                arguments: [run.sessionId, run.startedAt])
+    /// Per folder, the latest `refreshWork` started: an older read that finishes later is dropped.
+    private var workReads: [String: Int] = [:]
+
+    /// One folder: its repos' pushes and what isn't sent (git, off the main thread), then its requests.
+    func refreshWork(_ folder: String) async {
+        let since = Date.now.addingTimeInterval(-Self.eventRetention)
+        let read = (workReads[folder] ?? 0) + 1
+        workReads[folder] = read
+        let repos = await Task.detached {
+            Work.read(Repos.find(in: folder).map { (name: $0.name, path: $0.path) }, since: since)
+        }.value
+        guard workReads[folder] == read else { return }
+        var folderWork = work[folder] ?? Work.Folder()
+        (folderWork.repos, folderWork.isGitRead) = (repos, true)
+        if work[folder] != folderWork { work[folder] = folderWork }
+        reloadRuns(folder)
+    }
+
+    /// After Push or Pull in meepo: the folders that repo belongs to.
+    func refreshWork(containing repoPath: String) async {
+        for folder in work.keys where folder == repoPath || repoPath.hasPrefix(folder + "/")
+            || work[folder]?.repos.contains(where: { $0.path == repoPath }) == true {
+            await refreshWork(folder)
         }
-        return json.flatMap { try? JSONDecoder().decode(ProductSummary.self, from: Data($0.utf8)) }
     }
 
-    /// Asks a fork of the session's own conversation what the run changed for users — on click only, then kept.
-    func explain(_ run: Run) async throws -> ProductSummary {
+    /// The folder's requests (every session working there) and their explanations, from the database.
+    func reloadRuns(_ folder: String) {
+        let ids = sessions.filter { workdir(of: $0) == folder }.compactMap(\.id)
+        guard !ids.isEmpty else { return }
+        let marks = ids.map { _ in "?" }.joined(separator: ",")
+        let (events, summaries) = (try? db.read { db -> ([HookEvent], [String: ProductSummary]) in
+            // Only what a run is made of: requests, answers, its end, and file edits (not every read and command).
+            let events = try HookEvent.fetchAll(db, sql: """
+                SELECT * FROM hookEvent WHERE sessionId IN (\(marks))
+                AND (name IN ('UserPromptSubmit', 'UserPromptExpansion', 'Stop', 'StopFailure', 'SessionEnd')
+                OR (name = 'PostToolUse' AND (summary LIKE 'Edit:%' OR summary LIKE 'Write:%' OR summary LIKE 'MultiEdit:%'
+                OR summary LIKE 'NotebookEdit:%'))) ORDER BY createdAt, id
+                """, arguments: StatementArguments(ids))
+            var summaries: [String: ProductSummary] = [:]
+            for row in try Row.fetchAll(db, sql: "SELECT unit, json FROM workSummary WHERE folder = ?", arguments: [folder]) {
+                let json: String = row["json"]
+                summaries[row["unit"]] = try? JSONDecoder().decode(ProductSummary.self, from: Data(json.utf8))
+            }
+            return (events, summaries)
+        }) ?? ([], [:])
+        var folderWork = work[folder] ?? Work.Folder()
+        folderWork.runs = Runs.from(events)
+        folderWork.summaries = summaries
+        if work[folder] != folderWork { work[folder] = folderWork }
+    }
+
+    /// What a unit changed for the product's users, from its commits, the user's requests, Claude's answers and
+    /// (for what isn't sent yet) the diff — one short `claude -p` on click, then kept.
+    func explain(_ unit: Work.Unit, in folder: String, repo: Work.Repo?) async throws {
         guard let login = loginEnvironment else { throw ClaudeHeadless.Failure(errorDescription: "claude isn't found in the login shell") }
-        guard let session = sessions.first(where: { $0.id == run.sessionId }), let folder = workdir(of: session) else {
-            throw ClaudeHeadless.Failure(errorDescription: "The session is gone")
-        }
-        explainingRuns.insert(run.id)
-        defer { explainingRuns.remove(run.id) }
-        let data = try await ClaudeHeadless.askFork(of: session.claudeSessionId, in: folder,
-                                                    prompt: Runs.prompt(for: run, language: GitPanel.userLanguage),
-                                                    schema: Runs.schema, claude: login.claudePath, environment: login.environment)
-        let summary = try JSONDecoder().decode(ProductSummary.self, from: data)
+        explainingUnits.insert(unit.key)
+        defer { explainingUnits.remove(unit.key) }
+        let material = await Task.detached { Work.material(of: unit, in: repo) }.value
+        let prompt = Work.prompt(runs: unit.runs, commits: material.commits, diff: material.diff, language: GitPanel.userLanguage)
+        let data = try await ClaudeHeadless.askJSON(prompt, schema: Work.schema, claude: login.claudePath, environment: login.environment)
+        _ = try JSONDecoder().decode(ProductSummary.self, from: data)
         let json = String(decoding: data, as: UTF8.self)
         try await db.write { db in
-            try db.execute(sql: """
-                INSERT OR REPLACE INTO runSummary (sessionId, startedAt, json, createdAt) VALUES (?, ?, ?, ?)
-                """, arguments: [run.sessionId, run.startedAt, json, Date.now])
+            try db.execute(sql: "INSERT OR REPLACE INTO workSummary (folder, unit, json, createdAt) VALUES (?, ?, ?, ?)",
+                           arguments: [folder, unit.key, json, Date.now])
         }
-        return summary
+        reloadRuns(folder)
+    }
+
+    /// A Bash step that may have committed or pushed: git is read again.
+    nonisolated static func touchesGit(_ payload: HookPayload) -> Bool {
+        guard payload.toolName == "Bash", let command = payload.toolTarget else { return false }
+        return ["git push", "git commit", "gh pr"].contains { command.contains($0) }
+    }
+
+    /// Per session: its latest step in plain words, for Home. Never "Session started" or "Session ended".
+    private(set) var lastLine: [Int64: EventStory.Line] = [:]
+    /// Not a step: the session starting or ending, and the Notification that echoes a permission request or a
+    /// question ~6 s later ("Waiting for you") — it would hide what the session waits on.
+    private static let notALastLine: Set = ["SessionStart", "SessionEnd", "Notification"]
+
+    private func reloadLastLines() {
+        var result: [Int64: EventStory.Line] = [:]
+        try? db.read { db in
+            for id in sessions.compactMap(\.id) {
+                let recent = try HookEvent.fetchAll(db, sql: """
+                    SELECT * FROM hookEvent WHERE sessionId = ? AND name NOT IN ('SessionStart', 'SessionEnd', 'Notification')
+                    ORDER BY createdAt DESC, id DESC LIMIT 20
+                    """, arguments: [id])
+                result[id] = recent.lazy.compactMap(EventStory.line(for:)).first
+            }
+        }
+        lastLine = result
     }
 
     /// Something listening in the session's own port range (PORT…PORT+9): its preview, if it has one running.
@@ -304,6 +525,8 @@ final class AppStore {
     struct SuggestionState: Codable, Equatable {
         var dismissedAt: Int?     // the count when "Not now" was clicked; it comes back once that doubles
         var appliedAt: Date?
+        /// A chain that was a button in meepo 0.3, switched off in 0.4 (meepo no longer types into terminals).
+        var retired: Bool?
     }
 
     private static let suggestionsKey = "suggestionStates"
@@ -312,13 +535,21 @@ final class AppStore {
     /// Everything noticed in history, newest reading; `visibleSuggestions` filters what the user already answered.
     private(set) var suggestions: [Noticing.Suggestion] = []
 
+    /// Old 0.3 buttons first — shown even when history no longer counts them as a habit — then what was noticed.
     var visibleSuggestions: [Noticing.Suggestion] {
-        suggestions.filter { suggestion in
+        let retired = suggestionStates.filter { $0.key.hasPrefix("chain:") && $0.value.retired == true }.keys.sorted()
+            .map { key in
+                suggestions.first { $0.id == key }
+                    ?? Noticing.Suggestion(kind: .chain(key.dropFirst(6).components(separatedBy: ">")), count: 0)
+            }
+        return (retired + suggestions.filter { suggestionStates[$0.id]?.retired != true }).filter { suggestion in
             let state = suggestionStates[suggestion.id]
             guard state?.appliedAt == nil else { return false }
             return state?.dismissedAt.map { suggestion.count >= 2 * $0 } ?? true
         }
     }
+
+    func isRetired(_ suggestion: Noticing.Suggestion) -> Bool { suggestionStates[suggestion.id]?.retired == true }
 
     /// Reads history.jsonl off the main thread and finds chains and repeated requests.
     func refreshSuggestions() async {
@@ -332,21 +563,32 @@ final class AppStore {
     }
 
     func dismissSuggestion(_ suggestion: Noticing.Suggestion) {
-        suggestionStates[suggestion.id, default: SuggestionState()].dismissedAt = suggestion.count
+        // An old 0.3 button is told about once; it comes back only as a habit (a retired one may count 0).
+        suggestionStates[suggestion.id, default: SuggestionState()].dismissedAt = max(suggestion.count, Noticing.threshold)
+        suggestionStates[suggestion.id]?.retired = nil
         saveSuggestionStates()
     }
 
     func markApplied(_ suggestion: Noticing.Suggestion) {
         suggestionStates[suggestion.id, default: SuggestionState()].appliedAt = .now
+        suggestionStates[suggestion.id]?.retired = nil // made again: from now on it's a button like any other
         saveSuggestionStates()
     }
 
-    /// Before 0.4 meepo typed a chain's commands itself (a "Chain paused" banner and all). Those chains are
-    /// gone; each one's suggestion comes back, so "Make a button" can turn it into a skill.
+    /// Before 0.4 meepo typed a chain's commands itself (a "Chain paused" banner and all). 0.4 switched those
+    /// buttons off; each comes back as "your button from 0.3 — make it again" until it's a skill of the user's.
+    /// Chains that only left a run count behind ("chainRuns") were buttons too.
     private static func retireChains(from defaults: UserDefaults) {
-        guard let data = defaults.data(forKey: "chains"), let chains = try? JSONDecoder().decode([[String]].self, from: data) else { return }
+        let chains = defaults.data(forKey: "chains").flatMap { try? JSONDecoder().decode([[String]].self, from: $0) } ?? []
+        let ran = (defaults.dictionary(forKey: "chainRuns") ?? [:]).keys.map { $0.components(separatedBy: ">") }
+        guard defaults.object(forKey: "chains") != nil || defaults.object(forKey: "chainRuns") != nil else { return }
         var states = load([String: SuggestionState].self, suggestionsKey, from: defaults) ?? [:]
-        for chain in chains { states["chain:" + chain.joined(separator: ">")]?.appliedAt = nil }
+        let buttons = Set(defaults.stringArray(forKey: skillButtonsKey) ?? [])
+        for chain in chains + ran where chain.count > 1 && !buttons.contains(Recipes.buttonName(for: chain)) {
+            let key = "chain:" + chain.joined(separator: ">")
+            states[key, default: SuggestionState()].retired = true
+            states[key]?.appliedAt = nil
+        }
         defaults.set(try? JSONEncoder().encode(states), forKey: suggestionsKey)
         defaults.removeObject(forKey: "chains")
         defaults.removeObject(forKey: "chainRuns")
@@ -384,9 +626,10 @@ final class AppStore {
     }
 
     /// A new personal skill, logged in Tools → Changes. `text` gets the final name (latin letters, digits, hyphens).
+    /// Never a name Claude Code or any of the user's projects already answers to: yours would replace it.
     private func writeSkill(named name: String, text: (String) -> String) throws -> URL {
         let slug = ClaudeLauncher.worktreeSlug(name)
-        guard !slug.isEmpty else { throw ClaudeHeadless.Failure(errorDescription: "The name needs latin letters or digits") }
+        if let problem = Recipes.nameProblem(slug, taken: commandNames) { throw ClaudeHeadless.Failure(errorDescription: problem) }
         let file = skillFile(slug)
         guard !FileManager.default.fileExists(atPath: file.path) else {
             throw ClaudeHeadless.Failure(errorDescription: "You already have a skill called \(slug)")
@@ -401,6 +644,16 @@ final class AppStore {
     var claudeHome: URL { bridge.settingsURL.deletingLastPathComponent() }
     private func skillFile(_ name: String) -> URL { claudeHome.appending(path: "skills/\(name)/SKILL.md") }
 
+    /// Every /name the user has, their own or a project's.
+    var commandNames: Set<String> { Set(commandsByProject.values.flatMap { $0.map(\.name) }) }
+
+    /// "New command…": a personal skill Claude may start too — or it couldn't be a workflow step. Returns its name.
+    @discardableResult
+    func makeCommand(named name: String, instructions: String) throws -> String {
+        let file = try writeSkill(named: name) { Recipes.command(name: $0, instructions: instructions) }
+        return file.deletingLastPathComponent().lastPathComponent
+    }
+
     // MARK: Workflows — the constructor writes Claude Code files (Recipes), meepo only starts them
 
     private static let skillButtonsKey = "skillButtons"
@@ -408,16 +661,25 @@ final class AppStore {
     var pasting: Task<Void, Never>?
     /// Personal skills shown as buttons next to the stages, in the order they were made.
     private(set) var skillButtons: [String] = []
+    /// Each button's steps, read with the project commands — so body never reads a file.
+    private var buttonSteps: [String: [Recipes.Step]] = [:]
     /// Claude Code's saved workflows each project can run (~/.claude/workflows and the project's own).
     private(set) var workflowsByProject: [Int64: [Recipes.SavedWorkflow]] = [:]
 
-    /// Writes the steps as a personal skill and pins it as a button. Returns the skill's name.
+    /// Writes the steps as a personal skill and pins it as a button. Returns the skill's name. A skill of that
+    /// name with the same steps (a button removed earlier) is pinned again; one with other steps is never touched.
     @discardableResult
     func makeButton(named name: String, steps: [Recipes.Step]) throws -> String {
-        let file = try writeSkill(named: name) { Recipes.skill(name: $0, steps: steps) }
-        let slug = file.deletingLastPathComponent().lastPathComponent
+        let slug = ClaudeLauncher.worktreeSlug(name)
+        let existing = slug.isEmpty ? nil : try? String(contentsOf: skillFile(slug), encoding: .utf8)
+        if existing.map({ Recipes.steps(inSkill: $0) != steps }) ?? true {
+            _ = try writeSkill(named: slug) { Recipes.skill(name: $0, steps: steps) }
+        }
         if !skillButtons.contains(slug) { skillButtons.append(slug) }
         defaults.set(skillButtons, forKey: Self.skillButtonsKey)
+        buttonSteps[slug] = steps
+        // Commands in a row that meepo noticed (or a 0.3 button): the button is the answer, whatever its name.
+        if let chain = Recipes.chain(of: steps) { markApplied(Noticing.Suggestion(kind: .chain(chain), count: 0)) }
         return slug
     }
 
@@ -425,28 +687,24 @@ final class AppStore {
     func removeButton(_ name: String) {
         skillButtons.removeAll { $0 == name }
         defaults.set(skillButtons, forKey: Self.skillButtonsKey)
-        // A button made from something noticed ("chain:simplify>ship"): it becomes a suggestion again.
-        for key in suggestionStates.keys where key.hasPrefix("chain:")
-            && Recipes.buttonName(for: key.dropFirst(6).components(separatedBy: ">")) == name {
-            suggestionStates[key]?.appliedAt = nil
+        // A button that runs commands in a row ("chain:simplify>ship"): it becomes a suggestion again.
+        let steps = (try? String(contentsOf: skillFile(name), encoding: .utf8)).map(Recipes.steps(inSkill:)) ?? []
+        if let chain = Recipes.chain(of: steps) {
+            suggestionStates["chain:" + chain.joined(separator: ">")]?.appliedAt = nil
+            saveSuggestionStates()
         }
-        saveSuggestionStates()
     }
 
-    /// Buttons this project can run — the skill still exists.
+    /// Buttons this project can run: the skill still exists, and so does every command it runs
+    /// (a /simplify → /sync button has nothing to do where there's no /sync).
     func skillButtons(for projectId: Int64) -> [String] {
         let names = Set((commandsByProject[projectId] ?? []).map(\.name))
-        return skillButtons.filter(names.contains)
+        return skillButtons.filter { names.contains($0) && Recipes.canRun(buttonSteps[$0] ?? [], with: names) }
     }
 
     /// "Make a button" on a noticed chain: a skill named after its commands.
     func makeButton(from suggestion: Noticing.Suggestion) throws {
         guard case let .chain(commands) = suggestion.kind else { return }
-        try makeButton(chain: commands)
-        markApplied(suggestion)
-    }
-
-    private func makeButton(chain commands: [String]) throws {
         try makeButton(named: Recipes.buttonName(for: commands), steps: commands.map(Recipes.Step.command))
     }
 
@@ -501,18 +759,22 @@ final class AppStore {
     /// Built off the main thread: reads history.jsonl and asks git which project files are the team's.
     func automations() async -> [Automations.Item] {
         let projects = projects.map { (name: $0.name, path: $0.path) }
-        let home = claudeHome
+        let home = claudeHome, userHome = claudeHome.deletingLastPathComponent()
         return await Task.detached {
             let history = (try? String(contentsOf: Automations.historyFile, encoding: .utf8)) ?? ""
             let usage = Automations.usage(historyLines: history.split(separator: "\n"))
             var items: [String: Automations.Item] = [:]
             var seenFiles: Set<String> = []
             func add(_ command: SlashCommand, project: (name: String, path: String)?) {
+                let isFirst = items[command.name] == nil
                 var item = items[command.name] ?? Automations.Item(
                     name: command.name, description: command.description, personalFiles: [], teamFiles: [],
                     owner: .builtIn, projects: [],
                     usage: usage[command.name] ?? Automations.Usage(weekly: Array(repeating: 0, count: Automations.weeks), lastUsed: nil))
                 if let project, !item.projects.contains(project.name) { item.projects.append(project.name) }
+                // Only you when every copy /name runs is: a project's own plan.md is one Claude may start, even
+                // where other projects get Claude Code's /plan screen.
+                item.isUserOnly = (isFirst || item.isUserOnly) && command.isUserOnly
                 if let file = command.file, seenFiles.insert(file.path).inserted {
                     let isTeam = project.map { file.path.hasPrefix($0.path + "/") && GitService.isTracked(file.path, in: $0.path) } ?? false
                     if isTeam { item.teamFiles.append(file) } else { item.personalFiles.append(file) }
@@ -524,10 +786,10 @@ final class AppStore {
                 items[command.name] = item
             }
             if projects.isEmpty {
-                for command in CommandCatalog.commands(projectPath: home.path) { add(command, project: nil) }
+                for command in CommandCatalog.commands(projectPath: home.path, home: userHome) { add(command, project: nil) }
             }
             for project in projects {
-                for command in CommandCatalog.commands(projectPath: project.path) {
+                for command in CommandCatalog.commands(projectPath: project.path, home: userHome) {
                     let inProject = command.file.map { $0.path.hasPrefix(project.path + "/") } ?? false
                     add(command, project: inProject ? project : nil)
                 }
@@ -665,6 +927,7 @@ final class AppStore {
         // it must not turn a question (waiting for input) into a permission request.
         let isEcho = payload.event == "Notification" && (old == .waitingInput || old == .waitingPermission)
         if let status = payload.status, !isEcho { session.status = status }
+        if payload.status != nil, payload.event != "Notification" { lastTurnEvents[sessionId] = payload.event }
         session.lastActiveAt = .now
         var event = HookEvent(sessionId: sessionId, name: payload.event, summary: payload.summary,
                               isFailure: payload.isFailure, createdAt: .now)
@@ -679,12 +942,28 @@ final class AppStore {
         }
         reload()
         if sessionId == selectedSessionId { reloadEvents() }
+        noteForHome(event, payload: payload, session: session)
         if payload.event == "Stop", payload.backgroundTasks == 0, relayingSessionIds.contains(sessionId) {
             finishRelay(sessionId, summary: payload.lastAssistantMessage)
             return nil
         }
         let attention = Attention.from(old, to: session.status)
         return payload.isQuestion && attention != nil ? .question : attention
+    }
+
+    /// Keeps Home and What changed current: the latest step, the name, the requests on a prompt or an answer,
+    /// and git after an answer or a step that may have committed or pushed.
+    private func noteForHome(_ event: HookEvent, payload: HookPayload, session: Session) {
+        let id = session.id!
+        if !Self.notALastLine.contains(event.name), let line = EventStory.line(for: event) { lastLine[id] = line }
+        if payload.event == "UserPromptSubmit", titles[id] == nil, let typed = Runs.typed(payload.prompt ?? ""), !typed.isEmpty {
+            titles[id] = typed
+        }
+        guard let folder = workdir(of: session) else { return }
+        if ["UserPromptSubmit", "UserPromptExpansion", "Stop", "StopFailure", "SessionEnd"].contains(payload.event) { reloadRuns(folder) }
+        if payload.event == "Stop" || (payload.event == "PostToolUse" && Self.touchesGit(payload)) {
+            Task { await refreshWork(folder) }
+        }
     }
 
     private func reloadEvents() {
@@ -750,22 +1029,17 @@ final class AppStore {
     }
 
     static let defaultContextWindow = 200_000
-    private static let contextWindowsKey = "contextWindows"
 
     private(set) var sessionUsage: [Int64: SessionUsage] = [:]
     private var isScanning = false
-
-    /// Context window per model set by hand in Settings; other models get `nativeWindow`.
-    var contextWindows: [String: Int] {
-        didSet { defaults.set(try? JSONEncoder().encode(contextWindows), forKey: Self.contextWindowsKey) }
-    }
 
     private static func load<T: Decodable>(_ type: T.Type, _ key: String, from defaults: UserDefaults) -> T? {
         defaults.data(forKey: key).flatMap { try? JSONDecoder().decode(type, from: $0) }
     }
 
+    /// Only until Claude Code's first statusline, which says the window itself: the model's window, else 200K.
     func contextWindow(for model: String?) -> Int {
-        model.flatMap { contextWindows[$0] } ?? model.map(Self.nativeWindow) ?? Self.defaultContextWindow
+        model.map(Self.nativeWindow) ?? Self.defaultContextWindow
     }
 
     /// Models whose window is 1M without asking — Claude Code's own model table (2.1.282).
@@ -787,12 +1061,14 @@ final class AppStore {
     /// The plan's usage limits — account-wide, so the newest update from any session.
     private(set) var usageLimits: (fiveHour: StatusLine.Limit?, sevenDay: StatusLine.Limit?)?
 
-    /// "Opus 5.5 · xhigh": what the session really runs, once Claude Code has said; else what Meepo started it with.
+    /// "Opus 5.5 · xhigh", "· guided" when it runs in Guided mode: what the session really runs, once Claude Code
+    /// has said; else what Meepo started it with.
     func modelLine(of session: Session) -> String {
         let live = session.id.flatMap { liveStatus[$0] }
         let model = live?.modelName ?? session.model ?? "default model"
         let effort = live?.effort ?? session.effort
-        return [model, effort].compactMap { $0 }.joined(separator: " · ")
+        let guided = session.id.map(guidedSessionIds.contains) == true ? "guided" : nil
+        return [model, effort, guided].compactMap { $0 }.joined(separator: " · ")
     }
 
     func applyStatusLine(_ status: StatusLine, sessionId: Int64) {
@@ -803,11 +1079,24 @@ final class AppStore {
         }
     }
 
-    /// 0…1 (can exceed 1 if the window setting is too small); nil before the first response.
+    /// 0…1 (can exceed 1 if meepo's guess of the window is too small); nil before the first response.
     func contextFraction(for sessionId: Int64) -> Double? {
         if let percent = liveStatus[sessionId]?.contextPercent { return percent / 100 } // Claude Code's own count
         guard let usage = sessionUsage[sessionId], usage.contextTokens > 0 else { return nil }
         return Double(usage.contextTokens) / Double(contextWindow(for: usage.model))
+    }
+
+    /// The context bar's tooltip: whose number it is — Claude Code's own, or meepo's estimate before its first statusline.
+    func contextHelp(for sessionId: Int64) -> String {
+        if let status = liveStatus[sessionId], let percent = status.contextPercent {
+            var text = "Context \(Int(percent.rounded()))% full"
+            if let size = status.contextWindow {
+                text += " (of " + (size % 1_000_000 == 0 ? "\(size / 1_000_000)M" : TokenFormat.short(size)) + " tokens)"
+            }
+            return text + " — Claude Code's own count"
+        }
+        guard let fraction = contextFraction(for: sessionId) else { return "Context: no reply yet" }
+        return "Context ≈\(Int((fraction * 100).rounded()))% — meepo's estimate until Claude Code reports"
     }
 
     /// Reads new JSONL lines in the background, then refreshes per-session numbers.
@@ -953,6 +1242,7 @@ final class AppStore {
     }
 
     /// Everything Claude Code spent since `start`, all sessions on this Mac; projects outside Meepo go to "Other".
+    /// Leaves out "<synthetic>", which is no model (see `recentModels`).
     func usageStats(since start: Date) -> UsageStats {
         let sums = "SUM(inputTokens) AS i, SUM(outputTokens) AS o, SUM(cacheCreationTokens) AS w, SUM(cacheReadTokens) AS r"
         func totals(_ row: Row) -> UsageTotals {
@@ -964,11 +1254,11 @@ final class AppStore {
         }
         var stats = UsageStats()
         try? db.read { db in
-            let byModel = try Row.fetchAll(db, sql: "SELECT model, \(sums) FROM usageRecord WHERE createdAt >= ? GROUP BY model",
+            let byModel = try Row.fetchAll(db, sql: "SELECT model, \(sums) FROM usageRecord WHERE createdAt >= ? AND model NOT LIKE '<%' GROUP BY model",
                                            arguments: [start])
             stats.byModel = byModel.map { (name: $0["model"] as String, totals: totals($0)) }
             var byProject: [String: UsageTotals] = [:]
-            for row in try Row.fetchAll(db, sql: "SELECT cwd, \(sums) FROM usageRecord WHERE createdAt >= ? GROUP BY cwd",
+            for row in try Row.fetchAll(db, sql: "SELECT cwd, \(sums) FROM usageRecord WHERE createdAt >= ? AND model NOT LIKE '<%' GROUP BY cwd",
                                         arguments: [start]) {
                 let cwd: String = row["cwd"]
                 let name = projects.first { cwd == $0.path || cwd.hasPrefix($0.path + "/") }?.name ?? "Other"
@@ -982,7 +1272,13 @@ final class AppStore {
         return stats
     }
 
-    /// Models seen in the last 30 days, for the context window settings.
+    /// The oldest response meepo has counted: where "All time" starts. meepo keeps its counts, but Claude Code
+    /// deletes a transcript after 30 days (cleanupPeriodDays), so whatever came before meepo's first scan is gone.
+    func usageHistoryStart() -> Date? {
+        try? db.read { try Date.fetchOne($0, sql: "SELECT MIN(createdAt) FROM usageRecord WHERE model NOT LIKE '<%'") }
+    }
+
+    /// Models seen in the last 30 days, for the stages' model menus.
     /// "<synthetic>" is Claude Code's marker for messages that never hit the API, not a model.
     func recentModels() -> [String] {
         (try? db.read { db in
@@ -1123,23 +1419,8 @@ final class AppStore {
         }
     }
 
-    /// Hook events of every session since `date`, oldest first — the Home timeline.
-    func events(since date: Date) -> [HookEvent] {
-        (try? db.read {
-            try HookEvent.filter(Column("createdAt") >= date).order(Column("createdAt"), Column("id")).fetchAll($0)
-        }) ?? []
-    }
-
     private static let remoteControlKey = "remoteControl"
     private static let shotHotKeyKey = "screenshotHotKey"
-    private static let libraryKey = "libraryFolder"
-
-    /// Where shared practices live (SPEC module 11); default: the user's global ~/.claude.
-    var libraryFolder: String {
-        didSet { defaults.set(libraryFolder, forKey: Self.libraryKey) }
-    }
-
-    var libraryURL: URL { Library.resolve(URL(filePath: libraryFolder)) }
 
     /// Global screenshot hotkey (a `GlobalHotKey.combos` title); "" = off.
     var screenshotHotKey: String {
@@ -1150,6 +1431,52 @@ final class AppStore {
     /// it needs a claude.ai login and shares the session with the user's Claude account.
     var remoteControlForNewSessions: Bool {
         didSet { defaults.set(remoteControlForNewSessions, forKey: Self.remoteControlKey) }
+    }
+
+    // MARK: Voice (Claude Code's /voice)
+
+    private static let voiceHintKey = "voiceHintShown"
+    /// Claude Code's voice dictation, as ~/.claude/settings.json has it — re-read every 10 s, so /voice typed in
+    /// a session shows on the button too.
+    private(set) var isVoiceOn = false
+    /// Demo mode: nothing of the user's is written; voice and Guided mode change only in memory.
+    private var isDemo = false
+
+    func refreshVoice() {
+        guard !isDemo else { return }
+        let on = Voice.isOn((try? bridge.readSettings()) ?? [:])
+        if on != isVoiceOn { isVoiceOn = on }
+    }
+
+    /// VOICE: Claude Code's voice dictation on or off for every session, written the way /voice writes it —
+    /// nothing is typed into a terminal. Turning it on asks macOS for the microphone first, on this click.
+    /// True when the button should show how to use it: the first time voice is turned on here.
+    func toggleVoice() async -> Bool {
+        refreshVoice() // /voice typed in a session since the last 10 s read
+        let on = !isVoiceOn
+        if on, !isDemo {
+            if Voice.microphone == .notAsked, !(await Voice.askForMicrophone()) { return false }
+            guard Voice.microphone == .allowed else {
+                confirmation = PixelConfirmation(
+                    title: "MICROPHONE IS OFF FOR MEEPO",
+                    message: "Claude Code runs inside meepo, so macOS asks meepo for the microphone — and it's off. Turn meepo on in System Settings → Privacy & Security → Microphone, then click VOICE again.",
+                    action: "OPEN SYSTEM SETTINGS", isDestructive: false
+                ) { Voice.openMicrophoneSettings() }
+                return false
+            }
+        }
+        if !isDemo {
+            do {
+                try bridge.editSettings(on ? "Voice on (/voice)" : "Voice off (/voice off)") { Voice.set(on, in: &$0) }
+            } catch {
+                bridgeError = error.localizedDescription
+                return false
+            }
+        }
+        isVoiceOn = on
+        guard on, !defaults.bool(forKey: Self.voiceHintKey) else { return false }
+        defaults.set(true, forKey: Self.voiceHintKey)
+        return true
     }
 
     /// Context fill at which a session is marked "time to sync" and offers a relay.
@@ -1187,7 +1514,8 @@ final class AppStore {
         if payload.event == "UserPromptExpansion", let command = payload.commandName {
             return stages.first { $0.command == command || CommandCatalog.standIns[$0.command ?? ""] == command }?.name
         }
-        guard payload.event == "UserPromptSubmit", !(payload.prompt ?? "").hasPrefix("/"),
+        // What the user typed: a helper's report or a finished background task isn't a step forward.
+        guard payload.event == "UserPromptSubmit", let typed = Runs.typed(payload.prompt ?? ""), !typed.hasPrefix("/"),
               let index = stages.firstIndex(where: { $0.name == current }),
               index + 1 < stages.count, stages[index + 1].command == nil else { return nil }
         return stages[index + 1].name
@@ -1279,6 +1607,17 @@ final class AppStore {
         }
     }
 
+    /// Other projects whose own, different /command a personal copy of `source`'s would replace: Claude Code reads
+    /// ~/.claude/commands before a project's .claude/commands (a project's skill still wins over both).
+    func projectsReplaced(byCopyOf command: String, from source: Project, excluding projectId: Int64) -> [Project] {
+        let copy = URL(filePath: source.path).appending(path: ".claude/commands/\(command.replacingOccurrences(of: ":", with: "/")).md")
+        return projects.filter { project in
+            guard project.id != projectId, let own = (commandsByProject[project.id ?? -1] ?? []).first(where: { $0.name == command }),
+                  let file = own.file, !own.isSkill, file.path.hasPrefix(project.path + "/") else { return false }
+            return !FileManager.default.contentsEqual(atPath: file.path, andPath: copy.path)
+        }
+    }
+
     /// Backups and the change log (SPEC §8); a temp folder in tests.
     var backupsDir: URL { bridge.meepoHome.appending(path: "backups") }
 
@@ -1360,6 +1699,8 @@ final class AppStore {
                                              upstream: upstream, pulled: pulled)
             for session in folderSessions { if let id = session.id { teammateNotes[id] = note } }
         }
+        // A fetch or pull moves the upstream: what's sent and what isn't is read again.
+        for path in byFolder.keys where !path.isEmpty { await refreshWork(path) }
     }
 
     /// The bridge's reply to a hook: the teammates note, handed over once, on the session's next prompt.
@@ -1506,6 +1847,12 @@ final class AppStore {
             onCINotice?("\(step.name) started", "\(project.name) · \(pipeline.branch) @ \(pipeline.sha.prefix(7))")
         }
         await refreshCI()
+    }
+
+    /// The default branch's pipeline of a repo: its project's, or one inside a project folder / "Also work in".
+    func pipeline(forRepo path: String) -> Pipeline? {
+        if let project = projects.first(where: { $0.path == path }), let id = project.id { return pipelines[id] }
+        return repoCI[path]?.pipeline
     }
 
     /// Worst CI state on the session's branch: failed, running, passed; nil when CI knows nothing about it.
@@ -1660,7 +2007,8 @@ final class AppStore {
     }
 
     /// Evening summary per project with any activity today.
-    func daySummary(now: Date = .now) -> [ProjectDay] {
+    /// `commits`: each project's commits of the day by path, read off the main thread by the caller; nil = read here.
+    func daySummary(now: Date = .now, commits: [String: [String]]? = nil) -> [ProjectDay] {
         let start = Calendar.current.startOfDay(for: now)
         let tokens = Dictionary(usageStats(since: start).byProject.map { ($0.name, $0.totals.total) }, uniquingKeysWith: +)
         let syncCommand = stages.first { $0.name == "sync" }?.command ?? "sync"
@@ -1694,7 +2042,7 @@ final class AppStore {
             let projectTasks = tasks.filter { $0.projectId == projectId }
             let day = ProjectDay(
                 project: project,
-                commits: GitService.commits(since: start, in: project.path),
+                commits: commits?[project.path] ?? GitService.commits(since: start, in: project.path),
                 stages: stages,
                 tokens: tokens[project.name] ?? 0,
                 todos: todos,
@@ -1772,15 +2120,19 @@ final class AppStore {
         var workflows: [Int64: [Recipes.SavedWorkflow]] = [:]
         let ownWorkflows = Recipes.savedWorkflows(in: [claudeHome.appending(path: "workflows")])
         var dirty: Set<Int64> = []
+        let home = claudeHome.deletingLastPathComponent() // where meepo writes the user's skills, so it reads them there too
         for project in projects {
             guard let id = project.id else { continue }
-            commands[id] = CommandCatalog.commands(projectPath: project.path)
+            commands[id] = CommandCatalog.commands(projectPath: project.path, home: home)
             workflows[id] = ownWorkflows + Recipes.savedWorkflows(in: [URL(filePath: project.path).appending(path: ".claude/workflows")])
             if GitService.hasUncommittedChanges(in: project.path) { dirty.insert(id) }
         }
         commandsByProject = commands
         workflowsByProject = workflows
         dirtyProjectIds = dirty
+        buttonSteps = Dictionary(uniqueKeysWithValues: skillButtons.map { name in
+            (name, (try? String(contentsOf: skillFile(name), encoding: .utf8)).map(Recipes.steps(inSkill:)) ?? [])
+        })
     }
 
     // MARK: Projects
@@ -1846,6 +2198,7 @@ final class AppStore {
         if let prompt, !prompt.isEmpty { initialPrompts[session.id!] = prompt }
         reload()
         selectedSessionId = session.id
+        if let folder = workdir(of: session), work[folder] == nil { Task { await refreshWork(folder) } }
     }
 
     /// `meepo <folder>` (via meepo://open?path=…): the folder's project — added if new — with a session open in it.
@@ -1924,6 +2277,8 @@ final class AppStore {
         terminals.close(id)
         runningSessionIds.remove(id)
         exitedSessionIds.remove(id)
+        guidedSessionIds.remove(id)
+        lastTurnEvents[id] = nil
         initialPrompts[id] = nil
         _ = try? db.write { try Session.deleteOne($0, id: id) }
         if selectedSessionId == id, let index = ordered.firstIndex(where: { $0.id == id }) {
@@ -1954,6 +2309,7 @@ final class AppStore {
                         remoteControlName: remoteControlForNewSessions ? [project.name, session.branch].compactMap { $0 }.joined(separator: " · ") : nil,
                         guided: guidedMode)
         runningSessionIds.insert(sessionId)
+        if guidedMode { guidedSessionIds.insert(sessionId) } else { guidedSessionIds.remove(sessionId) }
     }
 
     func restartSession(_ id: Int64) {
@@ -1998,26 +2354,61 @@ extension AppStore {
     /// suggestions. Nothing of the user's is read or written.
     func loadDemo() async {
         let root = FileManager.default.temporaryDirectory.appending(path: "Meepo Demo")
-        try? FileManager.default.removeItem(at: root)
-        let identity = ["-c", "user.name=Meepo", "-c", "user.email=demo@meepo.app"]
-        for project in Demo.projects {
-            let folder = root.appending(path: project.name)
-            for (file, text) in project.files {
-                let url = folder.appending(path: file)
+        // ~30 git runs and the files: off the main thread. The first push's commit per project, for its summary.
+        let pushes = await Task.detached { () -> [String: String] in
+            try? FileManager.default.removeItem(at: root)
+            /// git as if it ran `minutesAgo`: commits and pushes (the upstream's reflog) get that time. None of the
+            /// user's git config: signing would ask for a key, their hooks would run on made-up commits.
+            func git(_ args: [String], in folder: URL, minutesAgo: Double = 0) {
+                let process = Process()
+                process.executableURL = URL(filePath: "/usr/bin/git")
+                process.arguments = ["-c", "user.name=Meepo", "-c", "user.email=demo@meepo.app", "-c", "commit.gpgsign=false",
+                                     "-c", "core.hooksPath=/dev/null", "-C", folder.path] + args
+                let stamp = "@\(Int(Date.now.timeIntervalSince1970 - minutesAgo * 60)) +0000"
+                process.environment = ProcessInfo.processInfo.environment.merging([
+                    "GIT_AUTHOR_DATE": stamp, "GIT_COMMITTER_DATE": stamp, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
+                ]) { $1 }
+                process.standardOutput = FileHandle.nullDevice
+                process.standardError = FileHandle.nullDevice
+                try? process.run()
+                process.waitForExit()
+            }
+            func write(_ text: String, to url: URL) {
                 try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try? text.write(to: url, atomically: true, encoding: .utf8)
             }
-            _ = GitService.runReportingError(["init", "-q", "-b", "main"], in: folder.path)
-            _ = GitService.runReportingError(["add", "."], in: folder.path)
-            _ = GitService.runReportingError(identity + ["commit", "-q", "-m", "Start"], in: folder.path)
-            _ = GitService.runReportingError(["remote", "add", "origin", "git@github.com:acme/\(project.name).git"], in: folder.path)
-            let changed = folder.appending(path: project.change.file)
-            try? FileManager.default.createDirectory(at: changed.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? project.change.text.write(to: changed, atomically: true, encoding: .utf8)
-            try? addProject(at: folder)
-        }
+            var pushes: [String: String] = [:]
+            for project in Demo.projects {
+                let folder = root.appending(path: project.name)
+                for (file, text) in project.files { write(text, to: folder.appending(path: file)) }
+                // "Sent to GitHub": origin reads as GitHub, pushes land in a folder next to it.
+                let remotes = root.appending(path: "remotes")
+                git(["init", "-q", "--bare", "-b", "main", remotes.appending(path: "\(project.name).git").path], in: root)
+                git(["init", "-q", "-b", "main"], in: folder)
+                git(["remote", "add", "origin", "git@github.com:acme/\(project.name).git"], in: folder)
+                git(["config", "url.\(remotes.path)/.pushInsteadOf", "git@github.com:acme/"], in: folder)
+                git(["add", "."], in: folder, minutesAgo: 60 * 24 * 10)
+                git(["commit", "-q", "-m", "Start"], in: folder, minutesAgo: 60 * 24 * 10)
+                git(["push", "-q", "-u", "origin", "main"], in: folder, minutesAgo: 60 * 24 * 10)
+                for commit in project.history {
+                    write(commit.text, to: folder.appending(path: commit.file))
+                    git(["add", "."], in: folder, minutesAgo: commit.minutesAgo)
+                    git(["commit", "-q", "-m", commit.message], in: folder, minutesAgo: commit.minutesAgo)
+                    if let pushed = commit.pushed {
+                        git(["push", "-q"], in: folder, minutesAgo: pushed)
+                        if pushes[project.name] == nil { pushes[project.name] = GitService.headCommit(in: folder.path) }
+                    }
+                }
+                if let change = project.change { write(change.text, to: folder.appending(path: change.file)) }
+            }
+            return pushes
+        }.value
+        for project in Demo.projects { try? addProject(at: root.appending(path: project.name)) }
         isBridgeInstalled = true
         isLoginResolved = true
+        isDemo = true
+        isVoiceOn = false
+        claudeAuthMethod = "claude.ai"
         for spec in Demo.sessions {
             guard let project = projects.first(where: { $0.name == spec.project }), let projectId = project.id else { continue }
             try? createSession(projectId: projectId, model: nil, prompt: nil, name: spec.name)
@@ -2055,23 +2446,43 @@ extension AppStore {
             sessionUsage[id] = SessionUsage(tokensToday: spec.tokens, contextTokens: Int(spec.context * 10_000), model: spec.model)
             if let status = StatusLine(json: Demo.statusLine(for: spec)) { applyStatusLine(status, sessionId: id) }
         }
-        // A finished run with its summary, for What changed.
-        if let first = sessions.first, let id = first.id {
-            let started = Date.now.addingTimeInterval(-5400)
-            _ = try? await db.write { db in
-                var submit = HookEvent(sessionId: id, name: "UserPromptSubmit", summary: "add refunds for Kaspi payments to the checkout",
-                                       isFailure: false, createdAt: started)
-                try submit.insert(db)
-                var edit = HookEvent(sessionId: id, name: "PostToolUse", summary: "Write: src/payments/refund.ts", isFailure: false,
-                                     createdAt: started.addingTimeInterval(300))
-                try edit.insert(db)
-                var stop = HookEvent(sessionId: id, name: "Stop", summary: "Refunds work end to end.", isFailure: false,
-                                     createdAt: started.addingTimeInterval(900))
-                try stop.insert(db)
-                try db.execute(sql: "INSERT INTO runSummary (sessionId, startedAt, json, createdAt) VALUES (?, ?, ?, ?)",
-                               arguments: [id, started, Demo.summary, Date.now])
+        // Earlier requests behind the pushes, and Explain for users on storefront's Kaspi push, for What changed and Today.
+        let ids = sessions.compactMap(\.id)
+        var events: [HookEvent] = []
+        for run in Demo.earlier where ids.indices.contains(run.session) {
+            let (id, start) = (ids[run.session], Date.now.addingTimeInterval(-run.minutesAgo * 60))
+            events.append(HookEvent(sessionId: id, name: "UserPromptSubmit", summary: run.request, isFailure: false, createdAt: start))
+            if let file = run.file, let project = projects.first(where: { $0.id == sessions[run.session].projectId }) {
+                events.append(HookEvent(sessionId: id, name: "PostToolUse", summary: "Write: \(project.path)/\(file)",
+                                        isFailure: false, createdAt: start + run.minutes * 20))
+            }
+            if let helper = run.helper {
+                let note = "<task-notification>\n<summary>Agent \"\(helper)\" finished</summary>\n</task-notification>"
+                events.append(HookEvent(sessionId: id, name: "UserPromptSubmit", summary: note, isFailure: false,
+                                        createdAt: start + run.minutes * 40))
+            }
+            events.append(HookEvent(sessionId: id, name: "Stop", summary: run.reply, isFailure: false, createdAt: start + run.minutes * 60))
+        }
+        let explained = projects.first { $0.name == "storefront" }.flatMap { project in pushes["storefront"].map { (project.path, "sent:" + $0) } }
+        _ = try? await db.write { [events] db in
+            for var event in events { try event.insert(db) }
+            if let (folder, unit) = explained {
+                try db.execute(sql: "INSERT INTO workSummary (folder, unit, json, createdAt) VALUES (?, ?, ?, ?)",
+                               arguments: [folder, unit, Demo.summary, Date.now])
             }
         }
+        // storefront's Kaspi work waits for a deploy: the card, Today and What changed say so.
+        if let storefront = projects.first(where: { $0.name == "storefront" }), let id = storefront.id,
+           let head = GitService.headCommit(in: storefront.path) {
+            pipelines[id] = Pipeline(branch: "main", sha: head, steps: [
+                Pipeline.Step(name: "CI", state: .passed, started: .now - 7000, finished: .now - 6800),
+                Pipeline.Step(name: "Build & Push", state: .passed, started: .now - 6790, finished: .now - 6600),
+                Pipeline.Step(name: "Deploy", state: .manual, trigger: "deploy.yml"),
+            ], title: "fix(orders): totals include delivery")
+        }
+        reloadTitles()
+        reloadLastLines()
+        await refreshWork()
         suggestions = [Noticing.Suggestion(kind: .chain(["simplify", "ship", "sync"]), count: 25),
                        Noticing.Suggestion(kind: .skill(phrase: "check the staging deploy and tell me what broke"), count: 7)]
         defaults.set("2.1.281", forKey: "claudeCodeVersionSeen")

@@ -97,11 +97,13 @@ struct SelectionRing: View {
 struct ContextBar: View {
     /// nil = no response yet.
     let fraction: Double?
+    /// Whose number it is (`AppStore.contextHelp`).
+    let help: String
 
     var body: some View {
         Canvas(renderer: Self.renderer(fraction: fraction))
             .frame(height: 4)
-            .help(fraction.map { "Context \(Int(($0 * 100).rounded()))%" } ?? "Context: no reply yet")
+            .help(help)
     }
 
     /// Built outside the main actor: on macOS 15 SwiftUI calls Canvas renderers from its DisplayLink thread

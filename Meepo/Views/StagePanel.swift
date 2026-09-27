@@ -16,6 +16,8 @@ struct StagePanel: View {
     @State private var scheduleWhen = ""
     @State private var buttonError: String?
     @State private var isStagesEdited = false
+    /// How to use voice, shown once: the first time it's turned on.
+    @State private var isVoiceHintShown = false
 
     var body: some View {
         // Scrolls sideways when the window is narrow. Not ViewThatFits: on macOS 15 it measures its options on
@@ -115,6 +117,27 @@ struct StagePanel: View {
             Button("PHONE") { store.type("/remote-control\r", into: session.id!) }
                 .buttonStyle(PixelButtonStyle())
                 .help("Turn on Claude Code Remote Control: follow and answer this session from the Claude app or claude.ai")
+            // Needs a Claude.ai sign-in; with an API key or a cloud provider Claude Code has no voice.
+            if Voice.isAvailable(authMethod: store.claudeAuthMethod) {
+                Button(store.isVoiceOn ? "VOICE ON" : "VOICE") {
+                    Task { if await store.toggleVoice() { isVoiceHintShown = true } }
+                }
+                .buttonStyle(PixelButtonStyle())
+                .overlay { if store.isVoiceOn { Capsule().strokeBorder(Tokens.work, lineWidth: 1.5).allowsHitTesting(false) } }
+                .help(store.isVoiceOn
+                      ? "Voice is on in every Claude Code session: hold Space, speak, let go. Click to turn it off (like /voice off)."
+                      : "Talk instead of typing: turns on Claude Code's voice dictation (/voice) in every session. The first time, macOS asks whether meepo may use the microphone.")
+                .popover(isPresented: $isVoiceHintShown, arrowEdge: .top) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Voice is on").font(Fonts.ui(14, weight: .bold))
+                        Text("Hold Space in any session, speak, let go — Claude Code writes what you said into the prompt. It's Claude Code's /voice: it works in every session, in meepo and outside it; the language is in /config.")
+                            .font(Fonts.ui(13)).foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(14)
+                    .frame(width: 320, alignment: .leading)
+                    .paperSheet()
+                }
+            }
             if let port = session.portBase {
                 NumberPlate(text: "PORT \(port)").help("PORT / MEEPO_PORT_BASE for this session: \(port)–\(port + Ports.blockSize - 1)")
             }
@@ -298,6 +321,9 @@ private struct MissingCommand: View {
     let stage: Stage
     let session: Session
     let onDone: () -> Void
+    /// Per source project, the projects whose own /command its copy would replace — read once, off the body
+    /// (it compares files); a source not read yet offers no ALL PROJECTS.
+    @State private var replacedBySource: [Int64: [String]] = [:]
 
     var body: some View {
         let command = stage.command ?? stage.name
@@ -312,21 +338,36 @@ private struct MissingCommand: View {
                     .font(.caption).foregroundStyle(Tokens.textDim)
             }
             ForEach(sources) { source in
+                // Claude Code runs your ~/.claude copy before a project's own: ALL PROJECTS would quietly replace theirs.
+                let replaced = replacedBySource[source.id ?? -1]
                 HStack {
                     Text("From \(source.name):").font(.caption).foregroundStyle(Tokens.text)
                     Spacer()
                     Button("THIS PROJECT") { store.copyCommand(command, from: source, toProject: project); onDone() }
                         .help("Copy to \(project?.name ?? "")/.claude/commands")
-                    Button("ALL PROJECTS") { store.copyCommand(command, from: source, toProject: nil); onDone() }
-                        .help("Copy to ~/.claude/commands — available in every project, VS Code too")
+                    if replaced?.isEmpty == true {
+                        Button("ALL PROJECTS") { store.copyCommand(command, from: source, toProject: nil); onDone() }
+                            .help("Copy to ~/.claude/commands — available in every project, VS Code too")
+                    }
                 }
                 .buttonStyle(PixelButtonStyle())
+                if let replaced, !replaced.isEmpty {
+                    let (owners, theirs) = replaced.count == 1 ? ("\(replaced[0]) has its", "it") : ("\(replaced.joined(separator: ", ")) have their", "theirs")
+                    Text("Not for all projects: \(owners) own /\(command). A copy for all projects would run instead of \(theirs) — Claude Code picks your ~/.claude copy first.")
+                        .font(.caption).foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .padding(10)
         .frame(width: 440, alignment: .leading)
         .background(Tokens.grass)
         .preferredColorScheme(.light)
+        .task {
+            let command = stage.command ?? stage.name
+            for source in store.commandSources(command, excluding: session.projectId) {
+                replacedBySource[source.id ?? -1] = store.projectsReplaced(byCopyOf: command, from: source, excluding: session.projectId).map(\.name)
+            }
+        }
     }
 }
 

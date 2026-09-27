@@ -52,17 +52,20 @@ final class EventStoryTests: XCTestCase {
         XCTAssertTrue(asked.needsYou)
     }
 
-    func testARequestStoppedWithEscEndsWhereTheNextBegins() {
+    /// The next request ends the one before it: that one has no reply of its own (Esc, or a message sent while
+    /// Claude worked — the hook can't tell which), and it doesn't keep counting.
+    func testARequestTheNextOneCutOffEndsWhereTheNextBegins() {
         let runs = Runs.from([
             event(1, "UserPromptSubmit", "import the schedule", at: 0),
             event(2, "UserPromptSubmit", "no, stop — do it differently", at: 120),
             event(3, "Stop", "Done.", at: 300),
         ])
-        XCTAssertEqual(runs.map(\.outcome), [.stopped, .done])
+        XCTAssertEqual(runs.map(\.outcome), [.noReply, .done])
         XCTAssertEqual(runs[0].worked(now: Date(timeIntervalSince1970: 9_999_999)), 120, "it doesn't keep counting")
     }
 
-    func testTheDayInOneSentence() {
+    /// Today's header counts pushes and requests, not prompts: "Today: 1 sent · 3 requests · Claude worked 10m 0s".
+    @MainActor func testTheDayInOneLine() {
         let start = Date(timeIntervalSince1970: 2_000_000)
         let runs = [
             Run(sessionId: 1, startedAt: start, endedAt: start + 480, request: "a", files: ["x"], reply: "Done."),
@@ -70,7 +73,11 @@ final class EventStoryTests: XCTestCase {
             Run(sessionId: 2, startedAt: start + 700, endedAt: nil, request: "c", files: [], reply: nil),
         ]
         XCTAssertEqual(runs.map(\.outcome), [.done, .askedYou, .working])
-        XCTAssertEqual(TodayList.totals(runs, now: start + 760),
-                       "Claude worked 10m 0s today on 3 requests; 1 ended with a question for you.")
+        let send = Work.Send(at: start + 650, from: "a", to: "b", after: nil, commits: [], files: 1)
+        let rows = [TodayList.Row(unit: Work.Unit(kind: .sent(send), runs: Array(runs.prefix(2)), id: send.id, key: send.id, date: send.at),
+                                  repo: nil, folder: "/f"),
+                    TodayList.Row(unit: Work.Unit(kind: .now, runs: [runs[2]], id: "now", key: "now", date: start + 700), repo: nil, folder: "/f")]
+        XCTAssertEqual(TodayList.header(rows, since: start, now: start + 760), "Today: 1 sent · 3 requests · Claude worked 10m 0s")
+        XCTAssertEqual(TodayList.header([], since: start, now: start), "Nothing sent or asked yet today.")
     }
 }

@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 @testable import Meepo
 
@@ -72,5 +73,62 @@ final class GitPanelRemoteTests: XCTestCase {
         XCTAssertEqual(GitPanel.snapshot(in: repo.path).behind, 1)
         XCTAssertNil(GitPanel.pull(in: repo.path))
         XCTAssertEqual(GitPanel.snapshot(in: repo.path).behind, 0)
+    }
+}
+
+/// Non-ASCII names come out of git as they are, not as "\320\272…" (core.quotePath=false, as Claude Code runs git).
+final class NonASCIIPathTests: XCTestCase {
+    func testCyrillicFilesReadCompareAndColor() throws {
+        let repo = try makeTempRepo()
+        let folder = repo.appending(path: "папка")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try "один\n".write(to: folder.appending(path: "контент.txt"), atomically: true, encoding: .utf8)
+        try git(["add", "."], in: repo)
+        try git(["-c", "user.name=T", "-c", "user.email=t@t", "commit", "-qm", "init"], in: repo)
+        try "один\nдва\n".write(to: folder.appending(path: "контент.txt"), atomically: true, encoding: .utf8)
+        try "новый\n".write(to: repo.appending(path: "отчёт.md"), atomically: true, encoding: .utf8)
+
+        let changes = GitPanel.sourceControl(in: repo.path).changes
+        XCTAssertEqual(changes.map(\.path).sorted(), ["отчёт.md", "папка/контент.txt"])
+        let edited = try XCTUnwrap(changes.first { $0.path == "папка/контент.txt" })
+        XCTAssertEqual(edited.added, 1, "+/− are found by the same name")
+        let versions = GitPanel.versions(of: edited, old: "HEAD", new: nil, in: repo.path)
+        XCTAssertEqual(versions.old, Data("один\n".utf8), "Compare gets the committed side")
+        XCTAssertEqual(versions.new, Data("один\nдва\n".utf8))
+        let entry = try XCTUnwrap(FileTree.list("папка", in: repo.path).first)
+        XCTAssertEqual(FileTree.status(of: entry, changes: changes), "M", "Explorer colors it")
+    }
+}
+
+/// Measured the way a popover measures (proposing nothing): a (420, ∞) proposal would hide the empty file list.
+@MainActor
+final class CommitLayoutTests: XCTestCase {
+    private func height(body lines: Int, files: Int, web: URL? = nil) -> CGFloat {
+        let body = (0..<lines).map { "Line \($0) of the body" }.joined(separator: "\n")
+        let detail = GitPanel.CommitDetail(
+            sha: String(repeating: "8cc4cd24", count: 5), author: "Tester", date: "Sat, 27 Sep 2026 11:53:00 +0500",
+            message: "feat: import the schedule from Excel" + (body.isEmpty ? "" : "\n\n" + body), parent: GitPanel.emptyTree,
+            files: (0..<files).map { GitPanel.FileChange(status: "M", path: "src/module\($0)/file\($0).swift", added: 3, removed: 1) })
+        return NSHostingController(rootView: CommitCardContent(detail: detail, web: web) { _ in }).sizeThatFits(in: .zero).height
+    }
+
+    func testFilesAndBodyShowAndAHugeCommitStillFits() {
+        let bare = height(body: 0, files: 0)
+        XCTAssertGreaterThanOrEqual(height(body: 0, files: 15) - bare, 130, "15 files are listed")
+        XCTAssertGreaterThanOrEqual(height(body: 10, files: 0) - bare, 100, "a 10-line body shows")
+        XCTAssertLessThanOrEqual(height(body: 200, files: 400), 480, "the message and the list scroll inside the card")
+    }
+
+    /// Hash, Copy hash, Compare and the web link share one line; with a 12-character hash it wrapped (8pt taller).
+    func testFooterStaysOneLine() {
+        let plain = height(body: 0, files: 1)
+        XCTAssertEqual(height(body: 0, files: 1, web: URL(string: "https://github.com/o/r/commit/8cc4cd24")), plain)
+        XCTAssertEqual(height(body: 0, files: 1, web: URL(string: "https://gitlab.com/o/r/-/commit/8cc4cd24")), plain)
+    }
+
+    func testLongAuthorDoesNotWidenTheColumn() {
+        let row = CommitRow(commit: GitPanel.CommitLine(sha: "8cc4cd2", author: "Santiago Fernández de Valderrama Aparicio",
+                                                        subject: "fix: loans import", when: "2 hours ago"))
+        XCTAssertLessThanOrEqual(NSHostingController(rootView: row).sizeThatFits(in: CGSize(width: 232, height: 100)).width, 232)
     }
 }

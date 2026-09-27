@@ -11,6 +11,8 @@ struct MeepoApp: App {
     private let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
     init() {
+        // A child that exits before reading its stdin (claude -p) must fail the write, not kill meepo.
+        signal(SIGPIPE, SIG_IGN)
         Fonts.register()
         do {
             // Demo mode: made-up projects, nothing of the user's read or written (see Demo).
@@ -18,9 +20,12 @@ struct MeepoApp: App {
             let db = isolated ? try DatabaseQueue() : try AppDatabase.openShared()
             if isolated { try AppDatabase.migrator.migrate(db) }
             var defaults = UserDefaults.standard
-            if Demo.isOn, let demo = UserDefaults(suiteName: "com.azamatfg.meepo.demo") {
-                demo.removePersistentDomain(forName: "com.azamatfg.meepo.demo")
-                defaults = demo
+            // Settings of their own, fresh each launch: AppStore.init upgrades old keys (0.3's buttons, …), and a
+            // test run must not do that to the user's.
+            let suite = Demo.isOn ? "com.azamatfg.meepo.demo" : "com.azamatfg.meepo.tests"
+            if isolated, let own = UserDefaults(suiteName: suite) {
+                own.removePersistentDomain(forName: suite)
+                defaults = own
             }
             let store = AppStore(db: db, defaults: defaults)
             _store = State(initialValue: store)
@@ -47,6 +52,10 @@ struct MeepoApp: App {
                     await services.requestNotificationPermission(store: store)
                     services.bindScreenshotHotKey(store.screenshotHotKey, store: store)
                     await store.restoreSessions()
+                    Task { // off the launch path: transcripts and git for every folder take a moment
+                        await store.refreshTitles()
+                        await store.refreshWork()
+                    }
                     await store.refreshSuggestions()
                     quitHandler.store = store
                     store.terminate = { NSApp.terminate(nil) }
@@ -61,6 +70,7 @@ struct MeepoApp: App {
                         Task {
                             for await _ in activations {
                                 await store.autoSync()
+                                await store.refreshWork() // every folder, not only the running sessions' ones
                                 await store.checkForUpdatesIfStale()
                             }
                         }
@@ -78,6 +88,7 @@ struct MeepoApp: App {
                     // JSONL is appended continuously; Stop events also trigger a refresh.
                     while !Task.isCancelled {
                         await store.refreshUsage()
+                        store.refreshVoice() // /voice typed in a session changes ~/.claude/settings.json
                         store.publishWidgetSnapshot()
                         try? await Task.sleep(for: .seconds(10))
                     }
@@ -98,17 +109,13 @@ struct MeepoApp: App {
                     .keyboardShortcut("n")
                     .disabled(store.projects.isEmpty)
             }
+            CommandGroup(replacing: .appSettings) { SettingsCommand(store: store) }
             CommandMenu("Sessions") {
                 ForEach(1...9, id: \.self) { number in
                     Button("Session \(number)") { store.selectSession(number: number) }
                         .keyboardShortcut(KeyEquivalent(Character("\(number)")))
                 }
             }
-        }
-
-        Settings {
-            SettingsView()
-                .environment(store)
         }
 
         MenuBarExtra {
@@ -123,6 +130,22 @@ struct MeepoApp: App {
             }
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+/// ⌘,: Settings is a sheet in the window, not a window of its own. Opens the window if it was closed;
+/// over another sheet it only beeps (a second sheet can't stack on the first).
+private struct SettingsCommand: View {
+    @Environment(\.openWindow) private var openWindow
+    let store: AppStore
+
+    var body: some View {
+        Button("Settings…") {
+            openWindow(id: "main") // brings it back when closed, to the front otherwise
+            guard !store.isSettingsShown else { return }
+            if NSApp.windows.contains(where: { $0.attachedSheet != nil }) { NSSound.beep() } else { store.isSettingsShown = true }
+        }
+        .keyboardShortcut(",")
     }
 }
 

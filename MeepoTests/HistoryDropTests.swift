@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 @testable import Meepo
 
@@ -73,6 +74,122 @@ final class DropTests: XCTestCase {
         XCTAssertEqual(copies.map(\.lastPathComponent), ["logo 2.png"])
         XCTAssertEqual(try String(contentsOf: target.appending(path: "logo.png"), encoding: .utf8), "old", "the file there stays")
         XCTAssertEqual(try Drops.copy([source.appending(path: "logo.png")], into: target).map(\.lastPathComponent), ["logo 3.png"])
+    }
+
+    /// Copying a folder into itself used to nest it ~190 levels deep.
+    func testAFolderNeverGoesIntoItself() throws {
+        let tmp = FileManager.default.temporaryDirectory.appending(path: "drops-\(UUID().uuidString)")
+        let docs = tmp.appending(path: "docs"), inner = docs.appending(path: "inner"), sibling = tmp.appending(path: "docs-old")
+        try FileManager.default.createDirectory(at: inner, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try "x".write(to: tmp.appending(path: "a.md"), atomically: true, encoding: .utf8)
+
+        XCTAssertThrowsError(try Drops.copy([tmp.appending(path: "a.md"), docs], into: inner))
+        XCTAssertThrowsError(try Drops.copy([docs], into: docs))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: inner.path), [], "nothing is copied, not even a.md")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: docs.path), ["inner"])
+
+        XCTAssertEqual(try Drops.copy([docs], into: tmp).map(\.lastPathComponent), ["docs 2"], "next to itself is fine")
+        XCTAssertEqual(try Drops.copy([docs], into: sibling).map(\.lastPathComponent), ["docs"], "a name that only starts the same")
+    }
+
+    /// The 3rd of 5 fails: the first two were copied and each was reported as it landed (Tools → Changes logs
+    /// them); the error says how far it got.
+    func testACopyThatFailsHalfwayKeepsWhatItCopied() throws {
+        let tmp = FileManager.default.temporaryDirectory.appending(path: "drops-\(UUID().uuidString)")
+        let source = tmp.appending(path: "src"), target = tmp.appending(path: "project")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        for name in ["a.md", "b.md", "d.md", "e.md"] { try "x".write(to: source.appending(path: name), atomically: true, encoding: .utf8) }
+        let urls = ["a.md", "b.md", "gone.md", "d.md", "e.md"].map { source.appending(path: $0) }
+
+        var reported: [String] = []
+        XCTAssertThrowsError(try Drops.copy(urls, into: target) { reported.append($0.lastPathComponent) }) { error in
+            XCTAssertTrue(error.localizedDescription.hasPrefix("Copied 2 of 5 into project — couldn't copy gone.md: "), error.localizedDescription)
+        }
+        XCTAssertEqual(reported, ["a.md", "b.md"])
+    }
+
+    /// "docs" and "Docs" are one folder on a case-insensitive disk: still not into itself.
+    func testIntoItselfIgnoresCase() throws {
+        let tmp = FileManager.default.temporaryDirectory.appending(path: "drops-\(UUID().uuidString)")
+        let inner = tmp.appending(path: "Docs/inner")
+        try FileManager.default.createDirectory(at: inner, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        XCTAssertThrowsError(try Drops.copy([tmp.appending(path: "docs")], into: tmp.appending(path: "DOCS/Inner")))
+        XCTAssertEqual(Drops.pasteTarget(selected: FileTree.Entry(path: "Docs", isDirectory: true), pasting: [tmp.appending(path: "docs")],
+                                         root: tmp.path), "", "pasted onto itself: next to it")
+    }
+
+    func testWhereCommandVPastes() {
+        let root = "/Users/me/app", pdf = [URL(filePath: "/Users/me/Downloads/report.pdf")]
+        let docs = FileTree.Entry(path: "docs", isDirectory: true)
+        XCTAssertEqual(Drops.pasteTarget(selected: docs, pasting: pdf, root: root), "docs", "a folder: into it")
+        XCTAssertEqual(Drops.pasteTarget(selected: FileTree.Entry(path: "docs/api/readme.md", isDirectory: false), pasting: pdf, root: root),
+                       "docs/api", "a file: into its folder")
+        XCTAssertEqual(Drops.pasteTarget(selected: FileTree.Entry(path: "a.md", isDirectory: false), pasting: pdf, root: root), "")
+        XCTAssertEqual(Drops.pasteTarget(selected: nil, pasting: pdf, root: root), "", "nothing selected: the root")
+        let api = FileTree.Entry(path: "docs/api", isDirectory: true)
+        XCTAssertEqual(Drops.pasteTarget(selected: api, pasting: [URL(filePath: "/Users/me/app/docs/api")], root: root), "docs",
+                       "a folder pasted onto itself lands next to it, as \"api 2\"")
+    }
+}
+
+/// Esc in Explorer hands the keyboard back to Claude's terminal, in a real window.
+@MainActor
+final class ExplorerKeyboardTests: XCTestCase {
+    final class Probe {
+        var focus: (() -> Void)?
+        var giveBack: (() -> Void)?
+    }
+
+    private struct Terminal: NSViewRepresentable {
+        let view: NSTextView
+        func makeNSView(context: Context) -> NSView {
+            let container = NSView()
+            view.frame = NSRect(x: 0, y: 0, width: 100, height: 40)
+            container.addSubview(view)
+            return container
+        }
+        func updateNSView(_ nsView: NSView, context: Context) {}
+    }
+
+    private struct Panel: View {
+        let probe: Probe
+        let terminal: NSTextView
+        @FocusState private var hasKeyboard: Bool
+
+        var body: some View {
+            VStack {
+                Text("explorer").frame(width: 100, height: 40).focusable().focused($hasKeyboard)
+                Terminal(view: terminal).frame(width: 100, height: 40)
+            }
+            .onAppear {
+                probe.focus = { hasKeyboard = true }
+                probe.giveBack = { ExplorerSection.giveKeyboardBack(to: terminal, focus: $hasKeyboard) }
+            }
+        }
+    }
+
+    private func settle() { RunLoop.main.run(until: Date().addingTimeInterval(0.3)) }
+
+    /// Turning the focus off before making the terminal first responder left the keyboard with the window.
+    func testEscGivesTheTerminalTheKeyboard() {
+        let probe = Probe(), terminal = NSTextView()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = NSHostingView(rootView: Panel(probe: probe, terminal: terminal))
+        window.orderFront(nil)
+        settle()
+        probe.focus?()
+        settle()
+        XCTAssertFalse(window.firstResponder === terminal, "a click in Explorer takes the keyboard")
+        probe.giveBack?()
+        settle()
+        XCTAssertTrue(window.firstResponder === terminal, "typing goes to Claude again")
     }
 }
 

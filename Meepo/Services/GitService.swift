@@ -85,7 +85,7 @@ enum GitService {
     static func data(_ args: [String], in path: String) -> Data? {
         let process = Process()
         process.executableURL = URL(filePath: "/usr/bin/git")
-        process.arguments = ["-C", path] + args
+        process.arguments = arguments(args, in: path)
         let out = Pipe()
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice
@@ -99,7 +99,7 @@ enum GitService {
     static func outputAllowingFailure(_ args: [String], in path: String) -> String? {
         let process = Process()
         process.executableURL = URL(filePath: "/usr/bin/git")
-        process.arguments = ["-C", path] + args
+        process.arguments = arguments(args, in: path)
         let out = Pipe()
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice
@@ -113,7 +113,7 @@ enum GitService {
     static func runReportingError(_ args: [String], in path: String) -> String? {
         let process = Process()
         process.executableURL = URL(filePath: "/usr/bin/git")
-        process.arguments = ["-C", path] + args
+        process.arguments = arguments(args, in: path)
         process.environment = ProcessInfo.processInfo.environment.merging(["GIT_TERMINAL_PROMPT": "0"]) { $1 }
         let err = Pipe()
         process.standardOutput = FileHandle.nullDevice
@@ -138,7 +138,7 @@ enum GitService {
     private static func succeeds(_ args: [String], in path: String) -> Bool {
         let process = Process()
         process.executableURL = URL(filePath: "/usr/bin/git")
-        process.arguments = ["-C", path] + args
+        process.arguments = arguments(args, in: path)
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         do { try process.run() } catch { return false }
@@ -146,11 +146,17 @@ enum GitService {
         return process.terminationStatus == 0
     }
 
+    /// Every git call: `core.quotePath=false` keeps non-ASCII paths readable ("отчёт.md", not "\320\276…"),
+    /// as Claude Code runs git — so such files compare, count and color like any other.
+    private static func arguments(_ args: [String], in path: String) -> [String] {
+        ["-c", "core.quotePath=false", "-C", path] + args
+    }
+
     /// Runs git and returns trimmed stdout, or nil on failure or empty output.
     private static func run(_ args: [String], in path: String) -> String? {
         let process = Process()
         process.executableURL = URL(filePath: "/usr/bin/git")
-        process.arguments = ["-C", path] + args
+        process.arguments = arguments(args, in: path)
         let out = Pipe()
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice

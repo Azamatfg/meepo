@@ -51,6 +51,19 @@ final class AppDatabaseTests: XCTestCase {
         XCTAssertThrowsError(try db.write { db in _ = try insertProject(db, path: "/tmp/x") })
     }
 
+    /// One explanation per unit of a folder: Explain again replaces it.
+    func testOneWorkSummaryPerUnit() throws {
+        let db = try makeDB()
+        let insert = "INSERT OR REPLACE INTO workSummary (folder, unit, json, createdAt) VALUES (?, ?, ?, ?)"
+        try db.write { db in
+            try db.execute(sql: insert, arguments: ["/p", "sent:abc", "{}", Date.now])
+            try db.execute(sql: insert, arguments: ["/p", "sent:abc", "{\"new\":1}", Date.now])
+            try db.execute(sql: insert, arguments: ["/other", "sent:abc", "{}", Date.now])
+        }
+        XCTAssertEqual(try db.read { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM workSummary") }, 2)
+        XCTAssertEqual(try db.read { try String.fetchOne($0, sql: "SELECT json FROM workSummary WHERE folder = '/p'") }, "{\"new\":1}")
+    }
+
     func testClaudeSessionIdIsUnique() throws {
         let db = try makeDB()
         let uuid = UUID().uuidString

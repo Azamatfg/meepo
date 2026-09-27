@@ -37,5 +37,7 @@
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>MeepoReleaseTag</key>
 	<string>$(MEEPO_RELEASE_TAG)</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Lets you dictate to Claude Code (/voice) in meepo's terminals. Any program running in meepo's terminals uses this permission.</string>
 </dict>
 </plist>

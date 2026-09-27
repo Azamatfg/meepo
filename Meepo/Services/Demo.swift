@@ -21,16 +21,48 @@ enum Demo {
         let tokens: Int
     }
 
-    /// (project, files with contents, one uncommitted change)
-    static let projects: [(name: String, files: [String: String], change: (file: String, text: String))] = [
+    /// A commit after "Start": `pushed` = minutes ago it went out together with the unsent ones before it.
+    struct CommitSpec {
+        let message: String
+        let file: String
+        let text: String
+        let minutesAgo: Double
+        var pushed: Double?
+    }
+
+    /// (project, files with contents, commits after "Start", one change left uncommitted)
+    static let projects: [(name: String, files: [String: String], history: [CommitSpec], change: (file: String, text: String)?)] = [
         ("storefront", ["README.md": "# Storefront\n", "src/checkout/payment.ts": "export const pay = () => {}\n",
                         "src/payments/kaspi.ts": "export const kaspi = {}\n", "src/admin/report.ts": "export const report = []\n"],
+         [CommitSpec(message: "feat(checkout): pay with Kaspi at checkout", file: "src/checkout/payment.ts",
+                     text: "export const pay = (method: 'card' | 'kaspi') => {}\n", minutesAgo: 200),
+          CommitSpec(message: "chore: update the payments SDK", file: "package.json", text: "{ \"payments\": \"4.2.0\" }\n",
+                     minutesAgo: 196, pushed: 185),
+          CommitSpec(message: "fix(orders): totals include delivery", file: "src/orders/total.ts",
+                     text: "export const total = (items: number, delivery: number) => items + delivery\n", minutesAgo: 124, pushed: 118)],
          ("src/payments/refund.ts", "export async function refund(orderId: string) {\n  // new\n}\n")),
         ("fleet-api", ["README.md": "# Fleet API\n", "monitoring/poller.py": "def poll():\n    pass\n",
                        "tests/monitoring/test_poller.py": "def test_poll():\n    assert True\n"],
+         [CommitSpec(message: "feat(monitoring): alert when a payment provider is down", file: "monitoring/alerts.py",
+                     text: "def alert(provider):\n    pass\n", minutesAgo: 306, pushed: 300)],
          ("monitoring/poller.py", "def poll(retries=3):\n    pass\n")),
         ("mobile", ["README.md": "# Mobile\n", "app/onboarding/Welcome.tsx": "export default () => null\n"],
-         ("app/onboarding/Welcome.tsx", "export default () => 'Welcome'\n")),
+         [CommitSpec(message: "feat(onboarding): friendlier welcome screen", file: "app/onboarding/Welcome.tsx",
+                     text: "export default () => 'Your rides, one tap away'\n", minutesAgo: 8)],
+         nil),
+    ]
+
+    /// Earlier requests of a session (index into `sessions`), for What changed and Today: asked `minutesAgo`,
+    /// answered `minutes` later; a helper's report on the way shows as Claude Code's own line.
+    static let earlier: [(session: Int, request: String, reply: String, minutesAgo: Double, minutes: Double, file: String?, helper: String?)] = [
+        (0, "let shoppers pay with Kaspi at checkout",
+         "Kaspi is now a payment option at checkout, and paid orders show the method in the admin. Tests pass.\n\nCommit and push?",
+         215, 12, "src/checkout/payment.ts", "Payment tests"),
+        (0, "yes, commit and push", "Pushed 2 commits to main. CI passed; Deploy waits for your click.", 190, 6, nil, nil),
+        (0, "the order total misses delivery — fix it",
+         "Fixed and pushed: order totals now include delivery, on the order page and in the receipt.", 135, 18, "src/orders/total.ts", nil),
+        (1, "alert us when a payment provider is down", "Done and pushed: a Slack alert fires after 3 failed checks in a row.",
+         330, 30, "monitoring/alerts.py", nil),
     ]
 
     private static let esc = "\u{1B}["
@@ -87,7 +119,8 @@ enum Demo {
                     model: "Opus 5.5", effort: "xhigh", context: 8, tokens: 54_000),
     ]
 
-    static let summary = #"{"headline":"Shoppers can get their Kaspi payment back","changes":[{"kind":"new","what":"A Refund button on paid orders","where":"Orders → Order details"},{"kind":"changed","what":"Refunds show in the daily report","where":"Admin → Finance → Daily report"}],"check":["Refunds over 50 000 ₸ need a manager's approval — is that the rule you want?"],"how_to_try":"Open a paid test order and press Refund; it appears in today's report."}"#
+    /// Explain for users on storefront's Kaspi push.
+    static let summary = #"{"headline":"Shoppers can pay with Kaspi at checkout","changes":[{"kind":"new","what":"Kaspi is a payment option next to the card","where":"Checkout → Payment"},{"kind":"changed","what":"A paid order shows how it was paid","where":"Admin → Orders → Order details"},{"kind":"changed","what":"Kaspi payments get their own line in the daily report","where":"Admin → Finance → Daily report"}],"check":["Kaspi's test mode is still on — switch it off before the release?","What happens when a shopper closes Kaspi before paying?"],"how_to_try":"Put something in the cart, pick Kaspi at checkout and pay with the test account."}"#
 
     static func statusLine(for spec: SessionSpec) -> Data {
         Data(#"""

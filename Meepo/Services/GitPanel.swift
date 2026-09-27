@@ -24,9 +24,10 @@ enum GitPanel {
         var changes: [FileChange] = []
     }
 
-    /// Blocking; call off the main thread.
+    /// Blocking; call off the main thread. No optional locks: a background status must not take index.lock
+    /// while Claude commits.
     static func snapshot(in path: String) -> Snapshot {
-        var snapshot = parseStatus(GitService.output(["status", "--porcelain=v1", "-b", "-uall"], in: path) ?? "")
+        var snapshot = parseStatus(GitService.output(["--no-optional-locks", "status", "--porcelain=v1", "-b", "-uall"], in: path) ?? "")
         let counts = parseNumstat(GitService.output(["diff", "--numstat", "HEAD"], in: path) ?? "")
         for index in snapshot.changes.indices {
             if let (added, removed) = counts[snapshot.changes[index].path] {
@@ -110,7 +111,7 @@ enum GitPanel {
         guard GitService.output(["rev-parse", "--is-inside-work-tree"], in: path) == "true" else {
             return SourceControl(isRepository: false)
         }
-        let status = parseStatus(GitService.output(["status", "--porcelain=v1", "-b", "-uall"], in: path) ?? "")
+        let status = parseStatus(GitService.output(["--no-optional-locks", "status", "--porcelain=v1", "-b", "-uall"], in: path) ?? "")
         var result = SourceControl(branch: status.branch, upstream: status.upstream)
         let counts = parseNumstat(GitService.output(["diff", "--numstat", "HEAD"], in: path) ?? "")
         result.changes = status.changes.map { change in

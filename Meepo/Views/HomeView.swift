@@ -39,13 +39,8 @@ struct HomeView: View {
                 } else if mode != "deck" {
                     TodayList(sessions: sessions)
                 } else {
-                    // One read for every card: the last day's events, grouped by session.
-                    let events = Dictionary(grouping: store.events(since: .now.addingTimeInterval(-24 * 3600)), by: \.sessionId)
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 14)], spacing: 14) {
-                        ForEach(sessions) { session in
-                            let own = events[session.id!] ?? []
-                            SessionCard(session: session, run: Runs.from(own).last, now: own.last.flatMap(EventStory.line(for:)))
-                        }
+                        ForEach(sessions) { SessionCard(session: $0) }
                     }
                 }
             }
@@ -55,17 +50,22 @@ struct HomeView: View {
     }
 }
 
-/// A session as a card: state, what was asked last, what Claude is doing now in plain words, what it changed.
+/// A session as a card, answering three questions: does it need me (a permission, a question), how did its last
+/// request end (the gist of the answer), and what isn't sent yet. Its name is the conversation's title.
 private struct SessionCard: View {
     @Environment(AppStore.self) private var store
     let session: Session
-    /// The latest request of the last day, and the latest step in plain words.
-    let run: Run?
-    let now: EventStory.Line?
 
     var body: some View {
         let look = store.look(of: session)
         let isWaiting = look.ring == .waiting
+        let folder = store.workdir(of: session).flatMap { store.work[$0] }
+        // The last week's latest request of this session (the events meepo keeps).
+        let run = folder?.runs.last { $0.sessionId == session.id }
+        let last = store.lastLine[session.id!]
+        // A session that isn't running (or was cut off mid-turn) needs nothing now, whatever status it last had.
+        let isLive = look.ring != nil && !store.interruptedSessionIds.contains(session.id!)
+        let line = Work.cardLine(status: isLive ? session.status : .idle, run: run, last: last)
         Button { store.selectedSessionId = session.id } label: {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 8) {
@@ -79,18 +79,20 @@ private struct SessionCard: View {
                         .lineLimit(1)
                 }
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(run.map { "“\(Notifier.plainText($0.request, limit: 140))”" } ?? "Nothing asked yet")
-                        .font(Fonts.ui(14, weight: .semibold)).lineLimit(2)
-                        .foregroundStyle(run == nil ? Tokens.textDim : Tokens.text)
-                    if let now {
+                    (Text(line.label.map { $0 + ": " } ?? "").foregroundColor(line.needsYou ? Tokens.need : Tokens.work)
+                        + Text(Notifier.plainText(line.text, limit: 200)))
+                        .font(Fonts.ui(14, weight: .semibold)).lineLimit(3)
+                        .foregroundStyle(run == nil && line.label == nil ? Tokens.textDim : Tokens.text)
+                    // Once the answer came, the main line already says how it ended ("Claude replied" adds nothing).
+                    if let last, line.label != "Now", !line.needsYou, run?.isDone != true {
                         HStack(spacing: 6) {
-                            Image(systemName: now.icon).font(.system(size: 11))
-                            Text((look.ring == .working ? "Now: " : "Last: ") + now.title).lineLimit(1)
+                            Image(systemName: last.icon).font(.system(size: 11))
+                            Text("Last: " + last.title).lineLimit(1)
                         }
-                        .font(.caption).foregroundStyle(isWaiting ? Tokens.need : look.ring == .working ? Tokens.work : Tokens.textDim)
+                        .font(.caption).foregroundStyle(Tokens.textDim)
                     }
                     if let run {
-                        Text(["started " + run.startedAt.formatted(date: .omitted, time: .shortened),
+                        Text(["asked " + Work.when(run.startedAt),
                               "worked " + PipelineView.duration(run.worked()),
                               run.files.isEmpty ? nil : "\(run.files.count) file\(run.files.count == 1 ? "" : "s") changed"]
                             .compactMap { $0 }.joined(separator: " · "))
@@ -100,6 +102,7 @@ private struct SessionCard: View {
                 .frame(maxWidth: .infinity, minHeight: 70, alignment: .topLeading)
                 .padding(10)
                 .background(Tokens.terminalBg, in: RoundedRectangle(cornerRadius: 10))
+                sendLine(folder?.repos ?? [])
             }
             .padding(16)
             .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 16))
@@ -110,7 +113,38 @@ private struct SessionCard: View {
         .contextMenu { SessionMenu(session: session) }
     }
 
+    /// What isn't sent as chips — or the last push — or "Everything is sent"; CI waiting on the user either way.
+    @ViewBuilder
+    private func sendLine(_ repos: [Work.Repo]) -> some View {
+        let pending = Work.pending(repos)
+        let ci = Work.ciChips(store.pipelines[session.projectId])
+        let sent = repos.flatMap(\.sends).max { $0.at < $1.at }
+        if !repos.isEmpty || !ci.isEmpty {
+            HStack(spacing: 6) {
+                if !pending.isEmpty {
+                    ForEach(pending, id: \.self) { chip($0) }
+                } else if let sent {
+                    Text("↑ Sent \(Work.when(sent.at)) — \(sent.title)").lineLimit(1).foregroundStyle(Tokens.textDim)
+                } else if repos.contains(where: \.hasRemote) {
+                    Text("✓ Everything is sent").foregroundStyle(Tokens.textDim)
+                } else if !repos.isEmpty {
+                    // Nowhere to send to: "sent" would promise a copy that doesn't exist.
+                    Text("✓ All committed — no remote to send to").lineLimit(1).foregroundStyle(Tokens.textDim)
+                        .help("This repo has no remote (like GitHub), so it lives only on this Mac")
+                }
+                ForEach(ci, id: \.self) { chip($0) }
+                Spacer(minLength: 0)
+            }
+            .font(.caption)
+        }
+    }
 
+    private func chip(_ text: String) -> some View {
+        Text(text).font(.caption.weight(.semibold)).lineLimit(1)
+            .foregroundStyle(Tokens.need)
+            .padding(.horizontal, 7).padding(.vertical, 2)
+            .background(Tokens.needTint, in: Capsule())
+    }
 }
 
 /// "Claude Code 2.1.281 → 2.1.282": what changed, the lines that touch this setup first. From the changelog

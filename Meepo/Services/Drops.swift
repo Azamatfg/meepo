@@ -37,11 +37,34 @@ enum Drops {
         }
     }
 
+    enum CopyError: LocalizedError {
+        case intoItself
+        /// Some were copied before one failed: "Copied 2 of 5 into docs — couldn't copy a.pdf: …".
+        case partly(copied: Int, of: Int, into: String, failed: String, reason: String)
+
+        var errorDescription: String? {
+            switch self {
+            case .intoItself: "Can't copy a folder into itself"
+            case let .partly(copied, total, folder, failed, reason): "Copied \(copied) of \(total) into \(folder) — couldn't copy \(failed): \(reason)"
+            }
+        }
+    }
+
+    /// The path as the file system knows it: symlinks resolved, and the case on disk ("Docs" for "docs").
+    static func canonicalPath(_ url: URL) -> String {
+        (try? url.resourceValues(forKeys: [.canonicalPathKey]).canonicalPath) ?? url.resolvingSymlinksInPath().path
+    }
+
     /// Copies files into `folder` like Finder: a name that's taken becomes "name 2.ext", "name 3.ext"…
-    /// Blocking; call off the main thread. Returns the copies.
-    static func copy(_ urls: [URL], into folder: URL) throws -> [URL] {
+    /// A folder never goes into itself or its own subfolder (the copy would nest again and again), and then
+    /// nothing is copied. `copied` hears of each copy as soon as it's made, so one that fails later can't hide
+    /// it. Blocking; call off the main thread. Returns the copies.
+    static func copy(_ urls: [URL], into folder: URL, copied: (URL) -> Void = { _ in }) throws -> [URL] {
         let fm = FileManager.default
-        return try urls.map { url in
+        let destination = canonicalPath(folder) + "/"
+        if urls.contains(where: { destination.hasPrefix(canonicalPath($0) + "/") }) { throw CopyError.intoItself }
+        var copies: [URL] = []
+        for url in urls {
             let stem = url.deletingPathExtension().lastPathComponent, ext = url.pathExtension
             var target = folder.appending(path: url.lastPathComponent)
             var number = 2
@@ -49,9 +72,27 @@ enum Drops {
                 target = folder.appending(path: stem + " \(number)" + (ext.isEmpty ? "" : "." + ext))
                 number += 1
             }
-            try fm.copyItem(at: url, to: target)
-            return target
+            do {
+                try fm.copyItem(at: url, to: target)
+            } catch where !copies.isEmpty {
+                throw CopyError.partly(copied: copies.count, of: urls.count, into: folder.lastPathComponent,
+                                       failed: url.lastPathComponent, reason: error.localizedDescription)
+            }
+            copies.append(target)
+            copied(target)
         }
+        return copies
+    }
+
+    /// Where ⌘V in Explorer puts Finder's files (relative to `root`, "" = the root): into the selected folder,
+    /// next to the selected file, into the root when nothing is selected. A folder pasted onto itself lands
+    /// next to it as "name 2", like Finder.
+    static func pasteTarget(selected: FileTree.Entry?, pasting urls: [URL], root: String) -> String {
+        guard let selected else { return "" }
+        let parent = (selected.path as NSString).deletingLastPathComponent
+        guard selected.isDirectory else { return parent }
+        let folder = canonicalPath(URL(filePath: root).appending(path: selected.path))
+        return urls.contains { canonicalPath($0) == folder } ? parent : selected.path
     }
 }
 

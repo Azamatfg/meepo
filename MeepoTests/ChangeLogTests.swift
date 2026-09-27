@@ -27,13 +27,23 @@ final class ChangeLogTests: XCTestCase {
         XCTAssertEqual(try read(file), "meepo's")
     }
 
-    func testAFileMeepoCreatedIsRemovedOnRestore() throws {
-        let file = tmp.appending(path: "commands/ship.md")
-        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try "copied".write(to: file, atomically: true, encoding: .utf8)
-        ChangeLog.record("Copy /ship", file: file, backup: nil, backups: backups)
+    /// What meepo created (a folder dropped into Explorer can be big) goes to the Trash — no backup copy of it —
+    /// and undoing that brings it back from there.
+    func testWhatMeepoCreatedGoesToTheTrashOnRestore() throws {
+        let folder = tmp.appending(path: "assets")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try "copied".write(to: folder.appending(path: "logo.svg"), atomically: true, encoding: .utf8)
+        ChangeLog.record("Copy assets into app", file: folder, backup: nil, backups: backups)
         try ChangeLog.restore(try XCTUnwrap(ChangeLog.entries(backups: backups).first), backups: backups)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: backups.appending(path: "restored").path), "no copy of it in backups")
+
+        let undo = try XCTUnwrap(ChangeLog.entries(backups: backups).first)
+        let trashed = try XCTUnwrap(undo.backup)
+        defer { try? FileManager.default.removeItem(atPath: trashed) } // out of the Trash again
+        XCTAssertTrue(trashed.contains("/.Trash/"), trashed)
+        try ChangeLog.restore(undo, backups: backups)
+        XCTAssertEqual(try read(folder.appending(path: "logo.svg")), "copied")
     }
 
     /// Each place that touches user files leaves a log line: bridge, notification guard, git exclude.

@@ -126,6 +126,44 @@ final class UsageScannerTests: XCTestCase {
         XCTAssertEqual(TokenFormat.short(345_000), "345K")
         XCTAssertEqual(TokenFormat.short(1_234_567), "1.23M")
         XCTAssertEqual(TokenFormat.short(54_000_000), "54.0M")
+        // B from where M would round to 1000.0M, as Claude Code's /stats does.
+        XCTAssertEqual(TokenFormat.short(999_940_000), "999.9M")
+        XCTAssertEqual(TokenFormat.short(999_960_000), "1.00B")
+        XCTAssertEqual(TokenFormat.short(9_231_667_822), "9.23B")
+    }
+}
+
+@MainActor
+final class UsageStatsTests: XCTestCase {
+    func testAllTimeReachesBackWhereWeekStopsAndSyntheticIsNoModel() throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let tmp = FileManager.default.temporaryDirectory.appending(path: "us-\(UUID().uuidString)")
+        let store = AppStore(db: db, bridge: BridgeInstaller(settingsURL: tmp.appending(path: "s.json"), meepoHome: tmp),
+                             usageRoot: tmp, defaults: UserDefaults(suiteName: "meepo-tests-\(UUID().uuidString)")!)
+        try store.addProject(at: makeTempRepo())
+        let project = store.projects[0].path
+        let old = Date.now.addingTimeInterval(-40 * 24 * 3600)
+        func record(_ id: String, model: String, at date: Date, tokens: Int, cwd: String = "/p/app") -> UsageRecord {
+            UsageRecord(messageId: id, claudeSessionId: "s", cwd: cwd, model: model, createdAt: date, isSidechain: false,
+                        inputTokens: 0, outputTokens: tokens, cacheCreationTokens: 0, cacheReadTokens: 0)
+        }
+        try db.write { db in
+            try record("old", model: "claude-opus-5", at: old, tokens: 7_000).insert(db)
+            try record("new", model: "claude-opus-5-5", at: .now, tokens: 500).insert(db)
+            // Claude Code writes these for messages that never reached the API (0 tokens). The oldest line, and the
+            // project's only one: neither "since" nor a 0-token project row may come from it.
+            try record("syn", model: "<synthetic>", at: old.addingTimeInterval(-10 * 24 * 3600), tokens: 0,
+                       cwd: project).insert(db)
+        }
+
+        let week = store.usageStats(since: StatsView.Period.week.start())
+        let all = store.usageStats(since: StatsView.Period.all.start())
+        XCTAssertEqual(week.total.total, 500)
+        XCTAssertEqual(all.total.total, 7_500)
+        XCTAssertEqual(all.byModel.map(\.name), ["claude-opus-5", "claude-opus-5-5"])
+        XCTAssertEqual(all.byProject.map(\.name), ["Other"])
+        XCTAssertEqual(try XCTUnwrap(store.usageHistoryStart()).timeIntervalSince1970, old.timeIntervalSince1970, accuracy: 0.01)
     }
 }
 
@@ -158,6 +196,10 @@ final class SessionUsageTests: XCTestCase {
         let usage = try XCTUnwrap(store.sessionUsage[session.id!])
         XCTAssertEqual(usage.contextTokens, 100_000)                 // latest main response, not the subagent's 190K
         XCTAssertEqual(store.contextFraction(for: session.id!), 0.1) // of Opus 5.5's 1M window
+        XCTAssertEqual(store.contextHelp(for: session.id!), "Context ≈10% — meepo's estimate until Claude Code reports")
+        let status = try XCTUnwrap(StatusLine(json: Data(#"{"session_id":"x","context_window":{"used_percentage":42,"context_window_size":1000000}}"#.utf8)))
+        store.applyStatusLine(status, sessionId: session.id!)
+        XCTAssertEqual(store.contextHelp(for: session.id!), "Context 42% full (of 1M tokens) — Claude Code's own count")
         XCTAssertEqual(usage.tokensToday, 10_402 + 100_000 + 190_402)
         let stats = store.usageStats(since: Calendar.current.startOfDay(for: .now))
         XCTAssertEqual(stats.byProject.map(\.name), [store.projects[0].name])

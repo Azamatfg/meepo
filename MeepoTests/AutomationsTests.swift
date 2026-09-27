@@ -66,6 +66,10 @@ final class AutomationsStoreTests: XCTestCase {
         let other = try makeTempRepo()                     // the same personal command in a second project
         try FileManager.default.createDirectory(at: other.appending(path: ".claude/commands"), withIntermediateDirectories: true)
         try "theirs".write(to: other.appending(path: ".claude/commands/mynotes.md"), atomically: true, encoding: .utf8)
+        // Its own /plan, one Claude may start; the first project gets Claude Code's /plan screen, which only you start.
+        try "Plan it our way".write(to: other.appending(path: ".claude/commands/plan.md"), atomically: true, encoding: .utf8)
+        try "---\ndisable-model-invocation: true\n---\nDeploy.".write(to: other.appending(path: ".claude/commands/deploy.md"),
+                                                                     atomically: true, encoding: .utf8)
         try store.addProject(at: other)
 
         let items = await store.automations()
@@ -75,6 +79,10 @@ final class AutomationsStoreTests: XCTestCase {
         XCTAssertEqual(items.first { $0.name == "teamship" }?.owner, .team)
         XCTAssertEqual(items.first { $0.name == "mynotes" }?.owner, .personal, "in the project but not in git: the user's own")
         XCTAssertEqual(items.first { $0.name == "verify" }?.owner, .builtIn)
+        XCTAssertEqual(items.first { $0.name == "plan" }?.isUserOnly, false,
+                       "a project's plan.md has a switch: \"Only you (set in its file)\" would be wrong for it")
+        XCTAssertEqual(items.first { $0.name == "deploy" }?.isUserOnly, true)
+        XCTAssertEqual(items.first { $0.name == "verify" }?.isUserOnly, false)
 
         try store.setSkillOverride("teamship", to: "user-invocable-only")
         XCTAssertEqual(store.skillOverrides()["teamship"], "user-invocable-only")

@@ -55,30 +55,98 @@ final class NoticingTests: XCTestCase {
 @MainActor
 final class SuggestionStoreTests: XCTestCase {
     private var store: AppStore!
+    private var home: URL!
 
     override func setUp() async throws {
         let db = try DatabaseQueue()
         try AppDatabase.migrator.migrate(db)
-        let tmp = FileManager.default.temporaryDirectory.appending(path: "chain-\(UUID().uuidString)")
-        store = AppStore(db: db, bridge: BridgeInstaller(settingsURL: tmp.appending(path: "s.json"), meepoHome: tmp),
-                         usageRoot: tmp, defaults: UserDefaults(suiteName: "meepo-tests-\(UUID().uuidString)")!)
+        home = FileManager.default.temporaryDirectory.appending(path: "chain-\(UUID().uuidString)")
+        store = AppStore(db: db, bridge: BridgeInstaller(settingsURL: home.appending(path: ".claude/settings.json"), meepoHome: home.appending(path: ".meepo")),
+                         usageRoot: home, defaults: UserDefaults(suiteName: "meepo-tests-\(UUID().uuidString)")!)
         try store.addProject(at: try makeTempRepo())
     }
 
-    func testOldChainsComeBackAsSuggestions() throws {
+    private func storeWith(_ defaults: UserDefaults) throws -> AppStore {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let tmp = FileManager.default.temporaryDirectory.appending(path: "retire-\(UUID().uuidString)")
+        return AppStore(db: db, bridge: BridgeInstaller(settingsURL: tmp.appending(path: ".claude/settings.json"), meepoHome: tmp),
+                        usageRoot: tmp, defaults: defaults)
+    }
+
+    func testOldChainsComeBackAsRetiredButtons() throws {
         let defaults = UserDefaults(suiteName: "meepo-tests-\(UUID().uuidString)")!
         defaults.set(try JSONEncoder().encode([["simplify", "sync"]]), forKey: "chains")
         defaults.set(["simplify>sync": 2], forKey: "chainRuns")
         let applied = ["chain:simplify>sync": AppStore.SuggestionState(dismissedAt: nil, appliedAt: .now)]
         defaults.set(try JSONEncoder().encode(applied), forKey: "suggestionStates")
-        let db = try DatabaseQueue()
-        try AppDatabase.migrator.migrate(db)
-        let tmp = FileManager.default.temporaryDirectory.appending(path: "retire-\(UUID().uuidString)")
-        let store = AppStore(db: db, bridge: BridgeInstaller(settingsURL: tmp.appending(path: "s.json"), meepoHome: tmp),
-                             usageRoot: tmp, defaults: defaults)
+        let store = try storeWith(defaults)
         XCTAssertNil(store.suggestionStates["chain:simplify>sync"]?.appliedAt, "offered again, now as a skill button")
+        XCTAssertEqual(store.suggestionStates["chain:simplify>sync"]?.retired, true)
         XCTAssertNil(defaults.object(forKey: "chains"))
         XCTAssertNil(defaults.object(forKey: "chainRuns"))
+    }
+
+    /// The tester's defaults: "chains" already gone, a run count of the 0.3 button left behind. That button was
+    /// offered as if it were new ("You run /simplify → /sync"); it's the old button, switched off.
+    func testLeftoverRunCountIsARetiredButton() throws {
+        let defaults = UserDefaults(suiteName: "meepo-tests-\(UUID().uuidString)")!
+        defaults.set(["simplify>sync": 1, "qa>ship": 3], forKey: "chainRuns")
+        defaults.set(["qa-ship"], forKey: "skillButtons") // made again in 0.4 already
+        let store = try storeWith(defaults)
+        let old = Noticing.Suggestion(kind: .chain(["simplify", "sync"]), count: 0)
+        XCTAssertTrue(store.isRetired(old))
+        XCTAssertEqual(store.visibleSuggestions.map(\.id), ["chain:simplify>sync"],
+                       "told even when history no longer counts it; the one already made again isn't")
+        XCTAssertNil(defaults.object(forKey: "chainRuns"))
+
+        store.dismissSuggestion(old)
+        XCTAssertTrue(store.visibleSuggestions.isEmpty, "Not now: not told again")
+        XCTAssertFalse(store.isRetired(old))
+    }
+
+    func testMakeItAgainIsAnOrdinaryButtonAfterwards() throws {
+        let defaults = UserDefaults(suiteName: "meepo-tests-\(UUID().uuidString)")!
+        defaults.set(["simplify>sync": 1], forKey: "chainRuns")
+        let store = try storeWith(defaults)
+        let old = try XCTUnwrap(store.visibleSuggestions.first)
+        try store.makeButton(from: old)
+        XCTAssertEqual(store.skillButtons, ["simplify-sync"])
+        XCTAssertTrue(store.visibleSuggestions.isEmpty)
+        store.removeButton("simplify-sync")
+        XCTAssertFalse(store.isRetired(old), "removed later, it comes back as a habit, not as the 0.3 button")
+    }
+
+    /// Remove → Make a button: the skill is there with the same steps, so it's pinned again — it used to fail
+    /// with "You already have a skill called …".
+    func testRemovedButtonIsPinnedAgainWithoutWriting() throws {
+        let suggestion = Noticing.Suggestion(kind: .chain(["qa", "ship"]), count: 6)
+        try store.makeButton(from: suggestion)
+        let file = home.appending(path: ".claude/skills/qa-ship/SKILL.md")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        store.removeButton("qa-ship")
+        XCTAssertNoThrow(try store.makeButton(from: suggestion))
+        XCTAssertEqual(store.skillButtons, ["qa-ship"])
+        XCTAssertNotNil(store.suggestionStates[suggestion.id]?.appliedAt)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), text)
+        XCTAssertEqual(ChangeLog.entries(backups: store.backupsDir).count, 1, "nothing written the second time")
+    }
+
+    func testSameNameOtherStepsLeavesTheSkillAlone() throws {
+        try store.makeButton(named: "qa-ship", steps: [.command("qa"), .command("ship")])
+        let file = home.appending(path: ".claude/skills/qa-ship/SKILL.md")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        store.removeButton("qa-ship")
+        XCTAssertThrowsError(try store.makeButton(named: "qa-ship", steps: [.command("verify")]))
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), text)
+        XCTAssertTrue(store.skillButtons.isEmpty)
+    }
+
+    func testAButtonOfCommandsAnswersItsChain() throws {
+        try store.makeButton(named: "tidy", steps: [.command("simplify"), .command("sync")])
+        XCTAssertNotNil(store.suggestionStates["chain:simplify>sync"]?.appliedAt, "whatever the button is called")
+        try store.makeButton(named: "tidy-and-test", steps: [.command("simplify"), .command("ship"), .prompt("run the tests")])
+        XCTAssertNil(store.suggestionStates["chain:simplify>ship"], "words among the steps: not the chain meepo noticed")
     }
 
     func testNotNowComesBackWhenTheHabitDoubles() throws {

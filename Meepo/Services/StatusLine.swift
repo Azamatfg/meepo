@@ -18,6 +18,8 @@ struct StatusLine: Equatable {
     var contextWindow: Int?
     var fiveHour: Limit?
     var sevenDay: Limit?
+    /// The output style the session runs ("default", "Explanatory", "Learning", or the user's own).
+    var outputStyle: String?
 
     /// nil for anything that isn't a statusline update — hook events carry `hook_event_name`.
     init?(json: Data) {
@@ -35,6 +37,7 @@ struct StatusLine: Equatable {
         let limits = obj["rate_limits"] as? [String: Any]
         fiveHour = Self.limit(limits?["five_hour"])
         sevenDay = Self.limit(limits?["seven_day"])
+        outputStyle = (obj["output_style"] as? [String: Any])?["name"] as? String
     }
 
     private static func limit(_ value: Any?) -> Limit? {

@@ -79,6 +79,62 @@ final class RecipesTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(String.self, from: Data(value.utf8)), "Runs Fix lint: run npm test # all of it")
     }
 
+    /// "New command…": Claude may start it (no disable-model-invocation), or a workflow using it as a step would
+    /// stop at "cannot be used with Skill tool due to disable-model-invocation".
+    func testNewCommandIsOneClaudeCanStart() {
+        let text = Recipes.command(name: "check-staging", instructions: "  Open staging and check the login.\nTell me what broke.\n")
+        XCTAssertNil(Automations.frontmatterValue("disable-model-invocation", in: text))
+        XCTAssertEqual(Automations.frontmatterValue("name", in: text), "check-staging")
+        XCTAssertEqual(CommandCatalog.description(in: text), "Open staging and check the login.")
+        XCTAssertTrue(text.hasSuffix("Open staging and check the login.\nTell me what broke.\n"))
+    }
+
+    func testNameProblems() {
+        XCTAssertNotNil(Recipes.nameProblem("", taken: []))
+        XCTAssertNotNil(Recipes.nameProblem("clear", taken: []), "Claude Code's own")
+        XCTAssertNotNil(Recipes.nameProblem("plan", taken: []))
+        XCTAssertNotNil(Recipes.nameProblem("sync", taken: ["sync"]), "a project's /sync would be replaced by yours")
+        XCTAssertNil(Recipes.nameProblem("check-staging", taken: ["sync"]))
+    }
+
+    /// Steps are what Claude can start: not Claude Code's /plan (a screen), not "only you" commands, not meepo's
+    /// buttons — but a project's own plan.md is a command like any other.
+    func testStepChoicesAreWhatClaudeCanRun() throws {
+        let project = FileManager.default.temporaryDirectory.appending(path: "steps-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: project) }
+        let builtInOnly = CommandCatalog.commands(projectPath: project.path, home: project)
+        XCTAssertFalse(Recipes.stepChoices(builtInOnly, buttons: [], overrides: [:]).map(\.name).contains("plan"))
+        XCTAssertTrue(Recipes.stepChoices(builtInOnly, buttons: [], overrides: [:]).map(\.name).contains("simplify"))
+
+        func write(_ path: String, _ text: String) throws {
+            let url = project.appending(path: ".claude/\(path)")
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try text.write(to: url, atomically: true, encoding: .utf8)
+        }
+        try write("commands/plan.md", "Plan it our way")
+        try write("skills/deploy/SKILL.md", "---\nname: deploy\ndisable-model-invocation: true\n---\nDeploy.")
+        try write("skills/tidy-ship/SKILL.md", Recipes.skill(name: "tidy-ship", steps: [.command("simplify")]))
+        try write("commands/review-copy.md", "Review the copy")
+        try write("commands/old-deploy.md", "Deploy the old way")
+        try write("commands/qa.md", "Check it in the browser")
+        let names = Recipes.stepChoices(CommandCatalog.commands(projectPath: project.path, home: project), buttons: ["tidy-ship"],
+                                        overrides: ["review-copy": "user-invocable-only", "old-deploy": "off", "qa": "name-only"]).map(\.name)
+        XCTAssertTrue(names.contains("plan"), "the project's own /plan is a command Claude can run")
+        XCTAssertFalse(names.contains("deploy"), "only you, set in its file")
+        XCTAssertFalse(names.contains("tidy-ship"), "meepo's button")
+        XCTAssertFalse(names.contains("review-copy"), "only you, set in your settings")
+        XCTAssertFalse(names.contains("old-deploy"), "switched off in your settings: neither you nor Claude runs it")
+        XCTAssertTrue(names.contains("qa"), "name-only: listed without its description, Claude still runs it")
+    }
+
+    func testChainAndCanRun() {
+        XCTAssertEqual(Recipes.chain(of: [.command("simplify"), .command("sync")]), ["simplify", "sync"])
+        XCTAssertNil(Recipes.chain(of: [.command("simplify"), .command("sync"), .prompt("run the tests")]))
+        XCTAssertNil(Recipes.chain(of: [.command("simplify")]))
+        XCTAssertTrue(Recipes.canRun([.command("simplify"), .prompt("x")], with: ["simplify"]))
+        XCTAssertFalse(Recipes.canRun([.command("simplify"), .command("sync")], with: ["simplify"]))
+    }
+
     func testSavedWorkflowsReadMeta() throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "wf-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -146,6 +202,61 @@ final class WorkflowStoreTests: XCTestCase {
         let suggestion = Noticing.Suggestion(kind: .chain(["simplify", "ship"]), count: 5)
         try store.makeButton(from: suggestion)
         XCTAssertEqual(store.skillButtons, ["simplify-ship"])
+    }
+
+    func testNewCommandIsAPersonalSkillAndAStep() throws {
+        let name = try store.makeCommand(named: "Check Staging", instructions: "Open staging, check the login, tell me what broke.")
+        XCTAssertEqual(name, "check-staging")
+        let file = home.appending(path: ".claude/skills/check-staging/SKILL.md")
+        XCTAssertNil(Automations.frontmatterValue("disable-model-invocation", in: try String(contentsOf: file, encoding: .utf8)))
+        XCTAssertEqual(ChangeLog.entries(backups: store.backupsDir).map(\.action), ["New skill /check-staging"], "undo in Tools → Changes")
+        let commands = try XCTUnwrap(store.commandsByProject[store.projects[0].id!])
+        XCTAssertTrue(Recipes.stepChoices(commands, buttons: store.skillButtons, overrides: [:]).contains { $0.name == "check-staging" },
+                      "a step right away")
+    }
+
+    func testTakenOrClaudeCodesNameIsRefused() throws {
+        XCTAssertThrowsError(try store.makeCommand(named: "clear", instructions: "x"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: home.appending(path: ".claude/skills/clear").path))
+        let own = URL(filePath: store.projects[0].path).appending(path: ".claude/commands/deploy.md")
+        try FileManager.default.createDirectory(at: own.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "Deploy the app".write(to: own, atomically: true, encoding: .utf8)
+        store.refreshProjects()
+        XCTAssertThrowsError(try store.makeCommand(named: "deploy", instructions: "x"), "yours would replace the project's /deploy")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: home.appending(path: ".claude/skills/deploy").path))
+    }
+
+    /// A /simplify → /sync button has nothing to do in a project without /sync: it isn't shown there.
+    func testButtonHiddenWhereAStepIsMissing() throws {
+        let project = store.projects[0]
+        try store.makeButton(named: "simplify-sync", steps: [.command("simplify"), .command("sync")])
+        XCTAssertEqual(store.skillButtons(for: project.id!), [])
+        let sync = URL(filePath: project.path).appending(path: ".claude/commands/sync.md")
+        try FileManager.default.createDirectory(at: sync.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "Sync".write(to: sync, atomically: true, encoding: .utf8)
+        store.refreshProjects()
+        XCTAssertEqual(store.skillButtons(for: project.id!), ["simplify-sync"])
+    }
+
+    /// NO /ship → ALL PROJECTS would put a copy in ~/.claude/commands, which Claude Code runs before a project's own.
+    func testPersonalCopyWouldReplaceAnotherProjectsOwnCommand() throws {
+        let (a, b) = (try makeTempRepo(), try makeTempRepo())
+        try store.addProject(at: a)
+        try store.addProject(at: b)
+        func ship(_ repo: URL, _ text: String) throws {
+            let file = repo.appending(path: ".claude/commands/ship.md")
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try text.write(to: file, atomically: true, encoding: .utf8)
+        }
+        try ship(a, "ship with npm")
+        store.refreshProjects()
+        let target = store.projects.first { $0.path != a.path && $0.path != b.path }!
+        let source = store.projects.first { $0.path == a.path }!
+        XCTAssertEqual(store.projectsReplaced(byCopyOf: "ship", from: source, excluding: target.id!), [],
+                       "the source's own copy is the same file: nothing changes for it")
+        try ship(b, "ship with gradle")
+        store.refreshProjects()
+        XCTAssertEqual(store.projectsReplaced(byCopyOf: "ship", from: source, excluding: target.id!).map(\.path), [b.path])
     }
 
     func testProjectCheckStaysPersonal() throws {

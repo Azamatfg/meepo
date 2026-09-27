@@ -32,20 +32,26 @@ enum Explain {
     static func panel(_ panel: ShellLayout.Panel) -> String {
         switch panel {
         case .sessions: "Every Claude session, grouped by project. The dot is its state: blue working, orange waiting for you, grey ready. Click one to open its terminal; + starts a new one in that project."
-        case .explorer: "The files of the selected session's project. Files Claude changed are colored like in VS Code. Click a file to read it; drop files from Finder to copy them in (onto a folder: into it)."
+        case .explorer: "The files of the selected session's project. Files Claude changed are colored like in VS Code. Click a file to read it; drop files from Finder to copy them in (onto a folder: into it). Or copy them in Finder (⌘C), click a folder here and press ⌘V — or right-click it → Paste. A click here takes the keyboard from Claude; Esc or a click in the terminal gives it back. Nothing is overwritten: a taken name becomes \"name 2\"."
         case .changes: "What changed in git: CHANGES are edits not committed yet, INCOMING are your teammates' new commits, OUTGOING are commits not pushed yet, HISTORY the branch's last commits — click one for its hash, message and files. Compare shows the difference; Explain says it in plain words."
-        case .ci: "Your project's builds, tests and deploys (GitHub Actions or GitLab CI). A step waiting for a click — like deploy — gets a Run button."
+        case .ci: "The selected tab's project: its builds, tests and deploys (GitHub Actions or GitLab CI). A step waiting for a click — like deploy — gets a Run button. All projects shows every project's CI."
         case .events: "What Claude did in this session, step by step, in plain words: what you asked, the commands it ran, the files it read or edited. Click a step for the details; a file opens in the editor."
         case .waiting: "Sessions that stopped and wait for you — a question, a permission, or a finished task. Ctrl+Tab jumps to the next one."
-        case .product: "Each request you gave Claude is a run. Explain for users turns a finished run into plain words: what your users will notice, what to check before shipping, how to try it."
+        case .product: "What you sent, push by push: each with its commits and the requests that led to it — and on top, what isn't sent yet (not committed, not pushed) and the next step. Explain for users says it in your product's words: what changes for your users, section by section, what to check before you ship, how to try it. It's written on your click from the commits, your requests and Claude's answers — a small request, not a re-read of the whole conversation."
         }
     }
 
-    static let home = "Home shows all sessions at once. Deck: a card per session — what you asked last, what Claude is doing now, how long it's worked. Today: every request of the day by session, how long each took and whether it's done or asked you something. Click any of them to open the session."
+    static let home = "Home shows all sessions at once. Deck: a card per session — does it need you (a permission, a question), how its last request ended, and what isn't sent yet. Today: what you sent today, project by project, and what's left; ▸ shows the requests behind a push and what Claude answered. Click any of them to open the session."
 
     static let stages = "Your workflow, left to right: PLAN thinks it through, CODE builds, QA checks, SECU looks for security holes, SIMP tidies the code, SHIP commits and pushes, SYNC saves what was learned. Click a stage to run it; the outlined one is next. Grey means this project has no command for it."
 
-    static let workflows = "A workflow is your own automation, written as a plain Claude Code file. A button runs steps in order (a skill of yours: /name works in any terminal); right-click it to repeat it every few minutes (/loop) or schedule it in the cloud (/schedule). A check runs after every answer Claude gives (a Stop hook) — if it fails, Claude fixes it. Workflows with several agents at once are Claude Code's own: save one from Claude Code and meepo shows it under WORKFLOWS."
+    static let workflows = "A workflow is your own automation, written as a plain Claude Code file. A button runs steps in order (a skill of yours: /name works in any terminal); right-click it to repeat it every few minutes (/loop) or schedule it in the cloud (/schedule). A step is a command or plain words for Claude. Need a command you don't have? Add a command → New command… makes one of yours — or ask Claude in a session: “make me a /name command that …”. A check runs after every answer Claude gives (a Stop hook) — if it fails, Claude fixes it. Workflows with several agents at once are Claude Code's own: save one from Claude Code and meepo shows it under WORKFLOWS."
+
+    static func dockerSpace(_ total: String) -> String {
+        "Docker keeps what it downloaded or built for your projects (images — the programs their containers run) and each project's saved data (volumes — its database, uploads) — about \(total) on this Mac. Images nothing uses are safe to clear; saved data is yours to keep or delete."
+    }
+
+    static let ports = "A port is a numbered door a program opens on this Mac: a dev server on 3000 is what localhost:3000 shows in the browser. One left running keeps its port busy, and the next can't start there (\"address already in use\") — Stop frees it. Grouped by project: programs started in its folder, its Docker containers, and each session's own ports — Open shows one in the browser."
 
     static let presets = "Focus: one terminal and what changed. Deck: up to four sessions at once. Full: files, git and two terminals, like VS Code. Change any of them — move, hide or add panels — and it stays that way; a • marks a changed one, right-click it to reset."
 }
@@ -63,7 +69,9 @@ struct GuideSheet: View {
         ("What changed", Explain.panel(.product)),
         ("Git and CI", Explain.panel(.changes) + " Teammates' commits come in by themselves when your work is committed. " + Explain.panel(.ci)),
         ("Automations", "≡ → Automations: your skills and commands and how often you use them. meepo notices what you repeat — commands in a row, requests you keep typing — and offers a button or a skill for it. New workflow… builds your own: " + Explain.workflows),
-        ("Guided mode", "≡ → Guided mode: Claude explains what it does, and asks before anything risky (push, deleting folders, secrets). For people new to Claude Code."),
+        ("Guided mode", "≡ → Guided mode: Claude explains what it does and why, and asks before anything risky (a push, deleting folders, sudo, publishing, editing .env secrets) — even in auto mode. For people new to Claude Code. claude reads it when it starts, so switching it offers to restart the sessions that are between turns; the conversation goes on where it was. A session running guided says · guided next to its model."),
+        ("Voice", "VOICE under a terminal turns on Claude Code's voice dictation (/voice) for every session: hold Space, speak, let go, and what you said appears in the prompt. The first click asks macOS whether meepo may use the microphone. It needs a Claude.ai sign-in, so the button is hidden with an API key."),
+        ("Tools", "≡ → Tools. Docker: where its disk space went, one Clear for what nothing uses, and each project's saved data — Delete only where no container uses it. Ports: what listens on this Mac, by project; Open a session's own port, Stop a program of yours. Changes: every file meepo changed, with Restore. Nothing happens without your OK."),
         ("Updates", "meepo updates itself: when a new version is downloaded, the status bar says so — Restart, or it installs when you quit."),
     ]
 

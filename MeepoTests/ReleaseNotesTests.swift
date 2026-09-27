@@ -36,10 +36,47 @@ final class ReleaseNotesTests: XCTestCase {
         XCTAssertTrue(bare.contains("No samples yet"))
     }
 
+    /// NOTES shows the note formatted and COPY carries the bold, so both kinds of prompt ask for that markup.
+    func testPromptAsksForMarkupMeepoReads() {
+        for style in ["Пост 1\n---\nПост 2", ""] {
+            let prompt = ReleaseNotes.prompt(project: "taxinet", commits: "- a", shipReport: nil, style: style)
+            XCTAssertTrue(prompt.contains("**bold**") && prompt.contains("no # headings"), style)
+        }
+    }
+
     /// Hooks off, no tools, nothing saved; and never `--bare`, which skips the keychain login (checked live, 2.1.281).
     func testHeadlessRunCannotReachTheBridgeOrTools() {
         XCTAssertEqual(ClaudeHeadless.arguments, ["-p", "--tools", "", "--no-session-persistence", "--setting-sources", ""])
         XCTAssertFalse(ClaudeHeadless.arguments.contains("--bare"))
+    }
+
+    /// Explain for users is one short call of its own, not a fork of the session's conversation.
+    func testExplainIsNotAFork() {
+        let args = ClaudeHeadless.jsonArguments(schema: Work.schema)
+        XCTAssertFalse(args.contains("--resume") || args.contains("--fork-session"))
+        XCTAssertEqual(Array(args.suffix(4)), ["--output-format", "json", "--json-schema", Work.schema])
+        XCTAssertEqual(Array(args.prefix(ClaudeHeadless.arguments.count)), ClaudeHeadless.arguments, "no tools, no hooks, nothing saved")
+    }
+
+    /// claude exits before reading a big prompt: the run fails with its message, meepo doesn't crash (SIGPIPE, EPIPE).
+    func testAClaudeThatExitsEarlyFailsTheRun() async {
+        let prompt = String(repeating: "x", count: 1_000_000)
+        do {
+            _ = try await ClaudeHeadless.run(prompt, claude: "/bin/sh", environment: [:], arguments: ["-c", "echo 'bad flag' >&2; exit 3"])
+            XCTFail("exited with 3")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("bad flag"), error.localizedDescription)
+        }
+    }
+
+    /// A lot on stderr before it exits: read alongside stdout, so neither side waits on the other forever.
+    func testALongStderrDoesNotHang() async {
+        let failed = expectation(description: "the run ends")
+        Task {
+            do { _ = try await ClaudeHeadless.run("hi", claude: "/bin/sh", environment: [:],
+                                                   arguments: ["-c", "head -c 200000 /dev/zero >&2; exit 1"]) } catch { failed.fulfill() }
+        }
+        await fulfillment(of: [failed], timeout: 10)
     }
 }
 

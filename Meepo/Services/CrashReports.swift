@@ -10,8 +10,14 @@ enum CrashReports {
         return files
             .filter { $0.lastPathComponent.hasPrefix("Meepo") && ["ips", "crash"].contains($0.pathExtension) }
             .compactMap { url in modified(url).map { (url, $0) } }
-            .filter { $0.1 > since }
+            .filter { $0.1 > since && !isFromDevelopment($0.0) }
             .max { $0.1 < $1.1 }?.0
+    }
+
+    /// A build run from Xcode or a test run (the test host is Meepo too): not a crash of the app people use.
+    static func isFromDevelopment(_ report: URL) -> Bool {
+        let text = (try? String(contentsOf: report, encoding: .utf8)) ?? ""
+        return text.contains("/DerivedData/") || text.contains("XCTestCore")
     }
 
     /// The report's text for the clipboard; very long ones are cut (GitHub issues take ~65K characters).

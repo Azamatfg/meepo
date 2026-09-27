@@ -267,10 +267,11 @@ private struct MorningRow: View {
 struct DayView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.dismiss) private var dismiss
+    /// Read once the sheet is up: it runs git, which never happens in a view's body (nor on the main thread).
+    @State private var days: [AppStore.ProjectDay]?
 
     var body: some View {
-        let days = store.daySummary()
-        let text = AppStore.dayText(days)
+        let text = days.map { AppStore.dayText($0) } ?? ""
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("DAY").font(Fonts.title(18)).foregroundStyle(Tokens.text)
@@ -284,7 +285,9 @@ struct DayView: View {
             }
             .buttonStyle(PixelButtonStyle())
             ScrollView {
-                if days.isEmpty {
+                if days == nil {
+                    Text("Reading today…").foregroundStyle(Tokens.textDim)
+                } else if days?.isEmpty == true {
                     Text("Nothing happened today yet.").foregroundStyle(Tokens.textDim)
                 }
                 Text(text)
@@ -302,5 +305,13 @@ struct DayView: View {
         .background(Tokens.grass)
         .pixelFrame(6)
         .preferredColorScheme(.light)
+        .task {
+            // git off the main thread; the rest is the database and what the store already holds.
+            let (paths, start) = (store.projects.map(\.path), Calendar.current.startOfDay(for: .now))
+            let commits = await Task.detached {
+                Dictionary(paths.map { ($0, GitService.commits(since: start, in: $0)) }) { first, _ in first }
+            }.value
+            days = store.daySummary(commits: commits)
+        }
     }
 }

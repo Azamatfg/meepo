@@ -71,7 +71,8 @@ private struct SessionRow: View {
                     .foregroundStyle(look.ring == .waiting ? Tokens.need : Tokens.textDim)
                     .lineLimit(1)
                 HStack(spacing: 6) {
-                    ContextBar(fraction: session.id.flatMap(store.contextFraction(for:)))
+                    ContextBar(fraction: session.id.flatMap(store.contextFraction(for:)),
+                               help: session.id.map(store.contextHelp(for:)) ?? "")
                     NumberPlate(text: TokenFormat.short(session.id.flatMap { store.sessionUsage[$0]?.tokensToday } ?? 0))
                         .help("Tokens today (input + output + cache)")
                     if let run = store.ciState(for: session) {

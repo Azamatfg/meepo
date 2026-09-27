@@ -20,6 +20,8 @@ enum Automations {
         var usage: Usage
         var effort: String?
         var model: String?
+        /// `disable-model-invocation: true` in its file (or a Claude Code screen like /plan): only the user starts it.
+        var isUserOnly = false
         var id: String { name }
         var canEdit: Bool { !personalFiles.isEmpty }
     }

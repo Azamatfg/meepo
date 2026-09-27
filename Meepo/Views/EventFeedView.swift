@@ -1,44 +1,5 @@
 import SwiftUI
 
-/// Who listens on which port (SPEC module 5), with the Meepo session or project it belongs to.
-struct PortsView: View {
-    @Environment(AppStore.self) private var store
-    @State private var ports: [ListeningPort] = []
-
-    var body: some View {
-        List(ports) { port in
-            HStack(alignment: .firstTextBaseline) {
-                Text(String(port.port)).font(Fonts.mono(13)).foregroundStyle(owner(of: port) == nil ? Tokens.textDim : Tokens.screen)
-                    .frame(width: 54, alignment: .leading)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(port.process).foregroundStyle(Tokens.text).lineLimit(1)
-                    Text(owner(of: port) ?? port.cwd ?? "pid \(port.pid)")
-                        .font(.caption).foregroundStyle(Tokens.textDim).lineLimit(1).truncationMode(.head)
-                }
-            }
-            .listRowBackground(Tokens.dirt)
-        }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .task {
-            while !Task.isCancelled {
-                ports = await Task.detached { Ports.listening() }.value
-                try? await Task.sleep(for: .seconds(5))
-            }
-        }
-    }
-
-    /// Deepest matching folder wins, so a worktree beats its main checkout.
-    private func owner(of port: ListeningPort) -> String? {
-        guard let cwd = port.cwd else { return nil }
-        let candidates = store.sessions.compactMap { session -> (String, String)? in
-            guard let dir = store.workdir(of: session), let project = store.project(for: session) else { return nil }
-            return (dir, "\(project.name) · \(session.branch ?? "")")
-        }
-        return candidates.filter { cwd == $0.0 || cwd.hasPrefix($0.0 + "/") }.max { $0.0.count < $1.0.count }?.1
-    }
-}
-
 /// CI (SPEC module 9): THIS follows the selected session's project — its default-branch pipeline, the session's
 /// branch, other branches folded; ALL is one line per project, a click unfolds it.
 struct CIView: View {

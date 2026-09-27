@@ -38,6 +38,49 @@ enum Recipes {
         """
     }
 
+    /// "New command…": the user's words as a skill. No `disable-model-invocation`: Claude has to be able to start it,
+    /// or a workflow using it as a step stops there ("cannot be used with Skill tool due to disable-model-invocation").
+    /// Its description is read into every conversation, so it's the first line of the words, kept short.
+    static func command(name: String, instructions: String) -> String {
+        let words = instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+        let first = words.split(whereSeparator: \.isNewline).first.map(String.init) ?? name
+        return """
+            ---
+            name: \(name)
+            description: \(yamlString(first.count > 200 ? String(first.prefix(199)) + "…" : first))
+            ---
+            \(words)
+
+            """
+    }
+
+    /// Why a new command of the user's can't be called `slug`; nil when it can. `taken`: every /name the user
+    /// already has, theirs or a project's — a personal one of the same name would replace it.
+    static func nameProblem(_ slug: String, taken: Set<String>) -> String? {
+        if slug.isEmpty { return "The name needs latin letters or digits" }
+        if CommandCatalog.claudeCodeNames.contains(slug) { return "/\(slug) is Claude Code's own command — pick another name" }
+        if taken.contains(slug) { return "/\(slug) is taken — you or a project already have it. Pick another name" }
+        return nil
+    }
+
+    /// What the step menu offers: commands Claude itself can start. Not meepo's buttons, not what's marked
+    /// "only you" (in its file or by `skillOverrides`) or switched off there, not Claude Code screens like /plan —
+    /// a skill calling one of those is refused, and the workflow stops there.
+    static func stepChoices(_ commands: [SlashCommand], buttons: [String], overrides: [String: String]) -> [SlashCommand] {
+        commands.filter { !$0.isUserOnly && !buttons.contains($0.name) && !["user-invocable-only", "off"].contains(overrides[$0.name]) }
+    }
+
+    /// The commands of a button that runs commands only, two or more — what Noticing calls a chain.
+    static func chain(of steps: [Step]) -> [String]? {
+        let names = steps.compactMap { if case let .command(name) = $0 { name } else { nil } }
+        return names.count == steps.count && names.count > 1 ? names : nil
+    }
+
+    /// Every command the steps run exists among `available`; words for Claude always can.
+    static func canRun(_ steps: [Step], with available: Set<String>) -> Bool {
+        steps.allSatisfy { if case let .command(name) = $0 { available.contains(name) } else { true } }
+    }
+
     /// A double-quoted YAML scalar (JSON's string escaping is valid YAML).
     static func yamlString(_ text: String) -> String {
         (try? JSONEncoder().encode(text)).map { String(decoding: $0, as: UTF8.self) } ?? "\"\""

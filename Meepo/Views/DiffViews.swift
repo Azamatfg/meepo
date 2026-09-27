@@ -10,6 +10,23 @@ struct DiffSource: Identifiable {
     let load: @Sendable () -> (old: Data?, new: Data?)
 }
 
+/// What the compare view opens: a group's files, which one first, and the two sides (`new` nil = on disk).
+struct Compare {
+    let title: String
+    let files: [GitPanel.FileChange]
+    let selected: String
+    let old: String?
+    let new: String?
+
+    func sources(in path: String) -> [DiffSource] {
+        files.map { change in
+            let (old, new) = (old, new)
+            return DiffSource(id: change.path, status: change.status, added: change.added, removed: change.removed,
+                              isUncommitted: change.isUncommitted) { GitPanel.versions(of: change, old: old, new: new, in: path) }
+        }
+    }
+}
+
 /// The compare view, one-to-one with VS Code: the changed files as in Source Control on the left, VS Code's own
 /// diff editor (Monaco) on the right — side by side or inline, ⌥↑ / ⌥↓ between changes.
 struct DiffViewer: View {
@@ -138,5 +155,5 @@ struct DiffViewer: View {
     }
 
     /// A NUL byte in the first 8 KB: binary, like git decides.
-    static func isBinary(_ data: Data) -> Bool { data.prefix(8000).contains(0) }
+    nonisolated static func isBinary(_ data: Data) -> Bool { data.prefix(8000).contains(0) }
 }

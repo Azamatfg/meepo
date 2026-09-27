@@ -134,6 +134,18 @@ enum AppDatabase {
             try db.alter(table: "session") { t in t.add(column: "extraDirs", .text) }
         }
 
+        // Explain for users per unit of work (a push, a commit, what isn't sent yet) of a folder.
+        migrator.registerMigration("v12-work-summaries") { db in
+            try db.create(table: "workSummary") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("folder", .text).notNull()
+                t.column("unit", .text).notNull()
+                t.column("json", .text).notNull()
+                t.column("createdAt", .datetime).notNull()
+                t.uniqueKey(["folder", "unit"])
+            }
+        }
+
         return migrator
     }
 }

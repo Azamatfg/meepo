@@ -2,11 +2,13 @@ import AppKit
 import SwiftUI
 
 /// First launch: two ways in. Someone who already uses Claude Code brings what they have — Claude Code, the
-/// statuses bridge, their projects. Someone new gets Claude Code installed and signed in, a first project, and
-/// Guided mode. Reopen any time from ≡ → Welcome.
+/// statuses bridge, their projects. Someone new gets Claude Code installed and signed in, a place for Claude to
+/// work, and Guided mode. Reopen any time from ≡ → Welcome; then it leaves the layout and Guided mode alone.
 struct OnboardingView: View {
     enum Path { case experienced, new }
 
+    /// The very first launch, not ≡ → Welcome.
+    var isFirstRun = false
     @Environment(AppStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var path: Path?
@@ -16,16 +18,16 @@ struct OnboardingView: View {
             switch path {
             case nil: ChoosePath { path = $0 }
             case .experienced?: ExperiencedSetup(back: { path = nil }, finish: finish)
-            case .new?: NewcomerSetup(back: { path = nil }, finish: finish)
+            case .new?: NewcomerSetup(isFirstRun: isFirstRun, back: { path = nil }, finish: finish)
             }
         }
         .frame(width: 820, height: 680)
         .paperSheet()
     }
 
-    private func finish(_ path: Path, guided: Bool) {
-        store.guidedMode = guided
-        store.applyPreset(path == .new ? .focus : .full)
+    /// Throws only when the session can't be created; the sheet then stays, showing why.
+    private func finish(_ path: Path, guided: Bool, projectId: Int64?) throws {
+        try store.finishOnboarding(newcomer: path == .new, guided: guided, projectId: projectId, isFirstRun: isFirstRun)
         dismiss()
     }
 }
@@ -52,7 +54,7 @@ private struct ChoosePath: View {
                 card("I'm new to this",
                      "Tell Claude what to build; meepo explains each step in plain words.",
                      ["Claude Code installed and signed in, step by step",
-                      "A first project — a folder you have, or a new one",
+                      "Where Claude works: a new folder, one you have, or one of your projects",
                       "Guided mode: Claude explains, and asks before anything risky",
                       "What changed shown for your users, not as code"],
                      "Start guided") { choose(.new) }
@@ -210,7 +212,7 @@ private struct Header: View {
 private struct ExperiencedSetup: View {
     @Environment(AppStore.self) private var store
     let back: () -> Void
-    let finish: (OnboardingView.Path, Bool) -> Void
+    let finish: (OnboardingView.Path, Bool, Int64?) throws -> Void
 
     private static let optional = [("gh", "GitHub CI and pull requests", "brew install gh && gh auth login"),
                                    ("glab", "GitLab CI", "brew install glab && glab auth login")]
@@ -244,7 +246,7 @@ private struct ExperiencedSetup: View {
             }
             HStack {
                 Spacer()
-                Button("Open meepo") { finish(.experienced, false) }.buttonStyle(PixelButtonStyle(large: true, isPrimary: true))
+                Button("Open meepo") { try? finish(.experienced, false, nil) }.buttonStyle(PixelButtonStyle(large: true, isPrimary: true))
             }
         }
         .padding(24)
@@ -255,14 +257,18 @@ private struct ExperiencedSetup: View {
 
 private struct NewcomerSetup: View {
     @Environment(AppStore.self) private var store
+    let isFirstRun: Bool
     let back: () -> Void
-    let finish: (OnboardingView.Path, Bool) -> Void
+    let finish: (OnboardingView.Path, Bool, Int64?) throws -> Void
     @State private var guided = true
     @State private var projectName = ""
+    /// Where Claude works: nothing counts until the user picks it here.
+    @State private var chosenId: Int64?
     @State private var isPickingFolder = false
     @State private var error: String?
 
     private var parent: URL { FileManager.default.homeDirectoryForCurrentUser.appending(path: "Projects") }
+    private var chosen: Project? { store.projects.first { $0.id == chosenId } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -271,33 +277,16 @@ private struct NewcomerSetup: View {
                 VStack(alignment: .leading, spacing: 12) {
                     ClaudeStep(number: 1, isNewcomer: true)
                     BridgeStep(number: 2)
-                    Step(number: 3, title: "Your first project", isDone: !store.projects.isEmpty) {
-                        if let project = store.projects.first {
-                            Text("\(project.name) — \(project.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))").foregroundStyle(Tokens.work)
+                    Step(number: 3, title: "Where Claude works", isDone: chosen != nil) { place }
+                    Step(number: 4, title: "Guided mode", isDone: isFirstRun ? guided : store.guidedMode) {
+                        if isFirstRun {
+                            Toggle("Explain as you go, and ask me before anything risky", isOn: $guided).toggleStyle(.switch)
                         } else {
-                            Text("A project is a folder Claude works in. Start a new one, or use a folder you already have.")
-                                .foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
-                            HStack {
-                                TextField("my-first-app", text: $projectName).textFieldStyle(.roundedBorder).frame(width: 220)
-                                Button("Create in ~/Projects") {
-                                    do { try store.createProject(named: projectName, in: parent); error = nil }
-                                    catch { self.error = error.localizedDescription }
-                                }
-                                .buttonStyle(PixelButtonStyle(compact: true, isPrimary: true))
-                                .disabled(projectName.trimmingCharacters(in: .whitespaces).isEmpty)
-                                Text("or").foregroundStyle(Tokens.textDim)
-                                Button("Choose a folder…") { isPickingFolder = true }.buttonStyle(PixelButtonStyle(compact: true))
-                            }
-                            Text("A new project gets git, so every change is kept and can be compared or undone. Nothing is uploaded anywhere.")
-                                .font(.caption).foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
+                            Text("Guided mode is \(store.guidedMode ? "on" : "off"). Switch it in ≡ → Guided mode.")
                         }
-                        if let error { Text(error).font(.caption).foregroundStyle(Tokens.danger) }
-                    }
-                    Step(number: 4, title: "Guided mode", isDone: guided) {
-                        Toggle("Explain as you go, and ask me before anything risky", isOn: $guided).toggleStyle(.switch)
                         VStack(alignment: .leading, spacing: 3) {
                             Text("• Claude explains what it does and why (Claude Code's Explanatory style)")
-                            Text("• it asks first before pushing code, deleting folders, using sudo, publishing, or touching .env secrets")
+                            Text("• it asks first before pushing code, deleting folders, using sudo, publishing, or editing .env secrets")
                             Text("• only in meepo's sessions; turn it off later in ≡ → Guided mode")
                         }
                         .font(.caption).foregroundStyle(Tokens.textDim)
@@ -306,12 +295,63 @@ private struct NewcomerSetup: View {
             }
             HStack {
                 Spacer()
-                Button("Start") { finish(.new, guided) }.buttonStyle(PixelButtonStyle(large: true, isPrimary: true))
+                // Says why it can't be pressed yet, on the button itself.
+                Button(chosen.map { "Start in \($0.name)" } ?? "Pick a project first") {
+                    do { try finish(.new, guided, chosenId) } catch { self.error = error.localizedDescription }
+                }
+                .buttonStyle(PixelButtonStyle(large: true, isPrimary: true))
+                .disabled(chosen == nil)
             }
         }
         .padding(24)
         .fileImporter(isPresented: $isPickingFolder, allowedContentTypes: [.folder]) { result in
-            do { try store.addProject(at: result.get()); error = nil } catch { self.error = error.localizedDescription }
+            do { chosenId = try store.project(forFolder: result.get())?.id; error = nil } catch { self.error = error.localizedDescription }
         }
+    }
+
+    /// A new folder, one the user has, or one of meepo's projects; once picked, it and a way to change it.
+    @ViewBuilder
+    private var place: some View {
+        if let project = chosen {
+            HStack(spacing: 10) {
+                Text("✓ \(project.name) — \(project.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))")
+                    .foregroundStyle(Tokens.work).lineLimit(1).truncationMode(.middle)
+                Button("Change") { chosenId = nil }.buttonStyle(PixelButtonStyle(compact: true))
+            }
+            Text("Start opens a Claude session in this folder.")
+                .font(.caption).foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
+        } else {
+            Text("A project is the folder Claude works in. Start a new one, or pick a folder you already have.")
+                .foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                TextField("my-first-app", text: $projectName).textFieldStyle(.roundedBorder).frame(width: 220)
+                Button("Create in ~/Projects") {
+                    do { chosenId = try store.createProject(named: projectName, in: parent)?.id; error = nil }
+                    catch { self.error = error.localizedDescription }
+                }
+                .buttonStyle(PixelButtonStyle(compact: true, isPrimary: true))
+                .disabled(projectName.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            HStack {
+                Button("A folder I have…") { isPickingFolder = true }.buttonStyle(PixelButtonStyle(compact: true))
+                if !store.projects.isEmpty {
+                    Text("or").foregroundStyle(Tokens.textDim)
+                    Menu {
+                        ForEach(store.projects) { project in
+                            Button(project.name) { chosenId = project.id; error = nil }
+                        }
+                    } label: {
+                        Text("One of my projects ▾")
+                    }
+                    .menuStyle(.button)
+                    .menuIndicator(.hidden)
+                    .buttonStyle(PixelButtonStyle(compact: true))
+                    .fixedSize()
+                }
+            }
+            Text("A new project gets git, so every change is kept and can be compared or undone. Nothing is uploaded anywhere.")
+                .font(.caption).foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
+        }
+        if let error { Text(error).font(.caption).foregroundStyle(Tokens.danger) }
     }
 }

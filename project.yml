@@ -55,6 +55,9 @@ targets:
       path: Meepo/Meepo.entitlements
       properties:
         com.apple.security.application-groups: [ZKXQWVLBRG.com.azamatfg.meepo]
+        # macOS asks meepo, not claude, for the microphone (/voice in its terminals); the hardened runtime
+        # refuses it without this.
+        com.apple.security.device.audio-input: true
     # meepo:// — the `meepo` command (Resources/meepo) hands folders to the running app through it.
     info:
       path: Meepo/Info.plist
@@ -67,6 +70,9 @@ targets:
         LSApplicationCategoryType: public.app-category.developer-tools
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         MeepoReleaseTag: $(MEEPO_RELEASE_TAG)
+        NSMicrophoneUsageDescription: >-
+          Lets you dictate to Claude Code (/voice) in meepo's terminals.
+          Any program running in meepo's terminals uses this permission.
         CFBundleURLTypes:
           - CFBundleURLName: com.azamatfg.meepo
             CFBundleURLSchemes: [meepo]

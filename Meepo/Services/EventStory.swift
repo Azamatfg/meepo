@@ -16,11 +16,13 @@ enum EventStory {
         let isRunning: Bool
         let isFailure: Bool
         let needsYou: Bool
+        /// Claude Code's own message (a helper's report, a finished background task), not the user's: shown dim.
+        var isQuiet = false
 
         /// The same step, no longer shown as running.
         var finished: Line {
             Line(id: id, icon: icon, title: title.hasSuffix("…") ? String(title.dropLast()) : title, detail: detail, date: date,
-                 file: file, isRunning: false, isFailure: isFailure, needsYou: needsYou)
+                 file: file, isRunning: false, isFailure: isFailure, needsYou: needsYou, isQuiet: isQuiet)
         }
     }
 
@@ -64,7 +66,13 @@ enum EventStory {
             if event.name == "PostToolUseFailure" { return make("exclamationmark.triangle", "Failed: " + phrase.title.lowercasedFirst, file: phrase.file) }
             return make(phrase.icon, event.name == "PreToolUse" ? phrase.title + "…" : phrase.title, file: phrase.file,
                         running: event.name == "PreToolUse")
-        case "UserPromptSubmit": return make("person", "You asked: " + quote(summary))
+        case "UserPromptSubmit":
+            if let note = Runs.claudeCodeNote(summary ?? "") {
+                var line = make("arrow.turn.down.right", note)
+                line.isQuiet = true
+                return line
+            }
+            return make("person", "You asked: " + quote(Runs.typed(summary ?? "")))
         case "UserPromptExpansion": return make("command", "Started " + quote(summary))
         case "Stop": return make("checkmark.bubble", "Claude replied")
         case "StopFailure": return make("xmark.octagon", "The reply failed")

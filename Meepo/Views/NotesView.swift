@@ -84,11 +84,13 @@ private struct DraftsView: View {
     }
 }
 
+/// The note as it will read once pasted (bold, lists); EDIT shows its Markdown.
 private struct NoteEditor: View {
     @Environment(AppStore.self) private var store
     let note: ReleaseNote
     @Binding var confirmation: PixelConfirmation?
     @State private var text = ""
+    @State private var isEditing = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -98,11 +100,10 @@ private struct NoteEditor: View {
                 if text != note.text {
                     Button("SAVE") { var edited = note; edited.text = text; store.updateReleaseNote(edited) }
                 }
-                Button("COPY") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(text, forType: .string)
-                }
-                ShareLink("SHARE", item: text)
+                Button(isEditing ? "PREVIEW" : "EDIT") { isEditing.toggle() }
+                Button("COPY") { MarkdownText.copy(text) }
+                    .help("Copies it formatted: bold stays bold in Telegram, Mail and Slack; apps without formatting, like a LinkedIn post, get plain text")
+                ShareLink("SHARE", item: MarkdownText.plain(text))
                 Button("DELETE") {
                     confirmation = PixelConfirmation(title: "DELETE THIS NOTE?", action: "DELETE") {
                         store.deleteReleaseNote(note.id!)
@@ -110,13 +111,23 @@ private struct NoteEditor: View {
                 }
             }
             .buttonStyle(PixelButtonStyle())
-            TextEditor(text: $text)
-                .font(Fonts.mono(12))
-                .foregroundStyle(Tokens.text)
-                .scrollContentBackground(.hidden)
-                .padding(4)
-                .background(Tokens.terminalBg)
-                .sunken()
+            Group {
+                if isEditing {
+                    TextEditor(text: $text)
+                        .font(Fonts.mono(12))
+                        .scrollContentBackground(.hidden)
+                } else {
+                    ScrollView {
+                        Text(MarkdownText.attributed(text)).font(Fonts.ui(14)).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                            .padding(4)
+                    }
+                }
+            }
+            .foregroundStyle(Tokens.text)
+            .padding(4)
+            .background(Tokens.terminalBg)
+            .sunken()
         }
         .onAppear { text = note.text }
     }
