@@ -53,6 +53,7 @@ struct MainView: View {
         .sheet(isPresented: $isNotesShown) { NotesView() }
         .sheet(isPresented: $isImportShown) { ImportView() }
         .sheet(isPresented: Binding(get: { store.isSettingsShown }, set: { store.isSettingsShown = $0 })) { SettingsView() }
+        .sheet(item: Binding(get: { store.outputAgent }, set: { store.outputAgent = $0 })) { AgentOutputSheet(agent: $0) }
         // Today's click on a push: What changed shows it even when the panel isn't in the layout.
         .sheet(isPresented: Binding(get: { store.isWhatChangedShown }, set: { store.isWhatChangedShown = $0 })) { WhatChangedSheet() }
         .sheet(isPresented: Binding(get: { store.renamingSessionId != nil }, set: { if !$0 { store.renamingSessionId = nil } })) {

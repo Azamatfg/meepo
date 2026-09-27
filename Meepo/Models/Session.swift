@@ -34,6 +34,10 @@ struct Session: Codable, Identifiable, Hashable, FetchableRecord, MutablePersist
     var name: String? = nil
     /// Other folders this session also works in ("Also work in": `claude --add-dir`), e.g. a sibling project.
     var extraDirs: [String]? = nil
+    /// A background agent opened here ("Open here"): its short id; meepo attaches to it (`claude attach`) while it runs.
+    var agentId: String? = nil
+    /// Where claude runs when that isn't the project folder: a session from outside meepo started in a subfolder.
+    var folder: String? = nil
 
     mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID

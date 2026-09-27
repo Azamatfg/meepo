@@ -26,12 +26,24 @@ struct BridgeInstaller {
 
     var scriptURL: URL { meepoHome.appending(path: "bin/\(Self.scriptName)") }
 
-    /// Exits at once for sessions Meepo didn't start (no MEEPO_SESSION_ID), and silently when Meepo isn't running.
+    /// A background agent opened in Meepo runs outside it (no MEEPO_SESSION_ID): `attached/<claude session id>`
+    /// holds its Meepo session number. The folder exists only while one is open, so other sessions exit at once.
+    var attachedURL: URL { meepoHome.appending(path: "attached") }
+
+    /// Exits at once for sessions Meepo didn't start (no MEEPO_SESSION_ID) unless one is attached (see
+    /// `attachedURL`), and silently when Meepo isn't running.
     /// Synchronous on purpose: `async: true` hooks were dropped when claude exited (checked on 2.1.280).
     static let script = """
     #!/bin/bash
     # Meepo hook bridge: forwards Claude Code hook events to Meepo (https://github.com/Azamatfg/meepo).
     # Installed by Meepo; remove it from Meepo ("Remove Hook Bridge"), not by hand.
+    if [ -z "$MEEPO_SESSION_ID" ] && [ "$1" != "statusline" ] && [ -d "$HOME/.meepo/attached" ]; then
+      EVENT=$(cat)
+      SID=$(printf '%s' "$EVENT" | grep -o '"session_id" *: *"[^"]*"' | head -1 | cut -d'"' -f4)
+      case "$SID" in ""|*[!0-9a-f-]*) exit 0 ;; esac
+      MEEPO_SESSION_ID=$(cat "$HOME/.meepo/attached/$SID" 2>/dev/null)
+      exec < <(printf '%s' "$EVENT")
+    fi
     [ -z "$MEEPO_SESSION_ID" ] && exit 0
     if [ "$1" = "statusline" ]; then
       # Meepo's sessions use this as their statusline: model, effort, context and plan limits go to Meepo,

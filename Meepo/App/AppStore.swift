@@ -106,10 +106,13 @@ final class AppStore {
         selectedSessionId = orderedSessions.first?.id
         isBridgeInstalled = bridge.isInstalled()
         refreshVoice()
-        terminals.onExit = { [weak self] id in
-            self?.runningSessionIds.remove(id)
-            self?.exitedSessionIds.insert(id)
-        }
+        terminals.onExit = { [weak self] id in self?.sessionExited(id) }
+    }
+
+    func sessionExited(_ id: Int64) {
+        runningSessionIds.remove(id)
+        exitedSessionIds.insert(id)
+        holds[id] = nil
     }
 
     /// Resolves the login shell environment once, then brings every saved session back
@@ -123,6 +126,12 @@ final class AppStore {
         isLoginResolved = false
         loginEnvironment = await Task.detached { ClaudeLauncher.resolveLoginEnvironment() }.value
         isLoginResolved = true
+        for session in orderedSessions where session.agentId == nil {
+            if let id = session.id { startTerminalIfNeeded(id) }
+        }
+        // An agent opened here re-attaches if it still runs, else its conversation resumes: the list decides
+        // (at most `claude agents`' timeout; without it they attach, see attachId).
+        if sessions.contains(where: { $0.agentId != nil }) { await refreshElsewhere() }
         for session in orderedSessions {
             if let id = session.id { startTerminalIfNeeded(id) }
         }
@@ -839,6 +848,7 @@ final class AppStore {
 
     var waitingCount: Int {
         sessions.filter { $0.status == .waitingInput || $0.status == .waitingPermission }.count
+            + elsewhere.filter(\.needsYou).count
     }
 
     // MARK: Quitting without cutting agents off
@@ -908,7 +918,7 @@ final class AppStore {
     @discardableResult
     func handleHookEvent(_ payload: HookPayload, sessionId: Int64) -> Attention? {
         interruptedSessionIds.remove(sessionId)
-        if payload.event == "UserPromptSubmit" { listeningSessionIds.remove(sessionId) } // what was said reached claude
+        if payload.event == "UserPromptSubmit" { holds[sessionId] = nil } // what was said reached claude
         defer {
             if quitWhenIdle, workingSessionIds.isEmpty {
                 quitWhenIdle = false
@@ -919,7 +929,11 @@ final class AppStore {
         guard var session = sessions.first(where: { $0.id == sessionId }) else { return nil }
         let old = session.status
         // `/clear` starts a new conversation in the same process; resume that one after a restart.
-        if payload.event == "SessionStart" { session.claudeSessionId = payload.claudeSessionId }
+        if payload.event == "SessionStart", payload.claudeSessionId != session.claudeSessionId {
+            if session.agentId != nil { markAttached(session, false) }
+            session.claudeSessionId = payload.claudeSessionId
+            if session.agentId != nil { markAttached(session) }
+        }
         if let stage = nextStage(after: session.stage, for: payload) { session.stage = stage }
         let todos = payload.todoLines.map {
             AgentTodo(projectId: session.projectId, file: payload.toolTarget ?? "", line: $0, createdAt: .now)
@@ -1442,9 +1456,14 @@ final class AppStore {
     private(set) var isVoiceOn = false
     /// Claude Code's voice mode as the settings file has it ("hold" or "tap").
     private(set) var voiceMode = "hold"
-    /// Sessions where SPEAK was pressed and SEND not yet: Claude Code is listening there. A request reaching
-    /// claude (the tap's own send, or Space pressed by hand) ends it.
-    private(set) var listeningSessionIds: Set<Int64> = []
+    /// Sessions where SPEAK was pressed and STOP not yet: Claude Code is listening there. A request reaching
+    /// claude (Space pressed by hand, autoSubmit), a question from Claude, the session ending or 3 minutes end it.
+    var listeningSessionIds: Set<Int64> { Set(holds.keys) }
+    /// Each hold's number: a loop left over from an earlier SPEAK sees another number and quits.
+    private var holds: [Int64: Int] = [:]
+    @ObservationIgnored private var holdCount = 0
+    /// Where typed keys go instead of the terminal — tests only.
+    @ObservationIgnored var keySink: ((String, Int64) -> Void)?
     /// Demo mode: nothing of the user's is written; voice and Guided mode change only in memory.
     private var isDemo = false
 
@@ -1454,27 +1473,59 @@ final class AppStore {
         let on = Voice.isOn(settings), mode = Voice.mode(settings)
         if on != isVoiceOn { isVoiceOn = on }
         if mode != voiceMode { voiceMode = mode }
-        if !on { listeningSessionIds = [] }
+        if !on { holds = [:] }
     }
 
-    /// SPEAK / SEND: presses Space once in the session, the tap that starts or stops Claude Code's listening.
-    /// Switches voice to tap mode first when it's in hold mode (a single Space there would just type a space).
+    /// SPEAK / STOP: holds Space in the session while it listens (Claude Code's hold mode), lets go on STOP — the
+    /// words stay in the prompt unsent, to fix or to add to with another SPEAK. Switches a tap-mode setup to hold.
     func speak(in sessionId: Int64) {
+        if holds.removeValue(forKey: sessionId) != nil { return } // STOP: the loop below sees it and lets go
         refreshVoice()
-        guard isVoiceOn else { return }
-        if voiceMode != "tap" {
+        guard isVoiceOn, !exitedSessionIds.contains(sessionId) else { return }
+        guard !isAwaitingAnswer(sessionId) else {
+            bridgeError = "Claude is asking you something here — answer it first, then SPEAK."
+            return
+        }
+        if voiceMode != "hold" {
             if !isDemo {
                 do {
-                    try bridge.editSettings("Voice: tap to talk") { Voice.setTap(in: &$0) }
+                    try bridge.editSettings("Voice: hold to talk") { Voice.setHold(in: &$0) }
                 } catch {
                     bridgeError = error.localizedDescription
                     return
                 }
             }
-            voiceMode = "tap"
+            voiceMode = "hold"
         }
-        type(Voice.tap, into: sessionId)
-        if listeningSessionIds.remove(sessionId) == nil { listeningSessionIds.insert(sessionId) }
+        holdCount += 1
+        let hold = holdCount
+        holds[sessionId] = hold
+        type(Voice.beforeHold, into: sessionId)
+        Task { @MainActor [weak self] in
+            // Space every 40 ms even with meepo in the background (no App Nap, no timer coalescing).
+            let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical],
+                                                                 reason: "SPEAK holds Space")
+            defer { ProcessInfo.processInfo.endActivity(activity) }
+            let start = ContinuousClock.now
+            var last = start
+            while let self, self.holds[sessionId] == hold, !self.isAwaitingAnswer(sessionId),
+                  ContinuousClock.now - start < Voice.holdLimit {
+                // A stall this long (a busy main thread) and Claude Code has let go already: the next two Spaces
+                // would be a double tap that sends. The words stay in the prompt; SPEAK again goes on.
+                if ContinuousClock.now - last > Voice.letGo { break }
+                last = .now
+                self.type(Voice.holdKey, into: sessionId)
+                try? await Task.sleep(for: Voice.holdRepeat)
+            }
+            if self?.holds[sessionId] == hold { self?.holds[sessionId] = nil }
+        }
+    }
+
+    /// SEND: Enter in the session — what was said (and fixed) goes to Claude. Not while listening (the button is
+    /// off then): the words land a moment after the let-go, and an Enter before them would send the prompt without.
+    func sendSpoken(in sessionId: Int64) {
+        guard holds[sessionId] == nil else { return }
+        type("\r", into: sessionId)
     }
 
     /// VOICE: Claude Code's voice dictation on or off for every session, written the way /voice writes it —
@@ -1498,7 +1549,7 @@ final class AppStore {
             do {
                 try bridge.editSettings(on ? "Voice on, tap to talk (/voice)" : "Voice off (/voice off)") {
                     Voice.set(on, in: &$0)
-                    if on { Voice.setTap(in: &$0) }
+                    if on { Voice.setHold(in: &$0) }
                 }
             } catch {
                 bridgeError = error.localizedDescription
@@ -1506,7 +1557,7 @@ final class AppStore {
             }
         }
         isVoiceOn = on
-        if on { voiceMode = "tap" } else { listeningSessionIds = [] }
+        if on { voiceMode = "hold" } else { holds = [:] }
         guard on, !defaults.bool(forKey: Self.voiceHintKey) else { return false }
         defaults.set(true, forKey: Self.voiceHintKey)
         return true
@@ -1564,7 +1615,7 @@ final class AppStore {
             bridgeError = "Claude is asking you something in \(name) — answer it first, then click again."
             return false
         }
-        terminals.send(text, to: sessionId)
+        if let keySink { keySink(text, sessionId) } else { terminals.send(text, to: sessionId) }
         return true
     }
 
@@ -2222,7 +2273,8 @@ final class AppStore {
     /// `worktree`: a feature name — the session runs in its own git worktree (`claude -w`), SPEC module 5.
     /// `resuming`: an existing Claude Code conversation (e.g. imported from an IDE); it opens with `--resume`.
     func createSession(projectId: Int64, model: String?, prompt: String?, effort: String? = nil, stage: String? = nil,
-                       worktree: String? = nil, resuming: String? = nil, name: String? = nil, extraDirs: [String] = []) throws {
+                       worktree: String? = nil, resuming: String? = nil, name: String? = nil, extraDirs: [String] = [],
+                       agentId: String? = nil, folder: String? = nil) throws {
         guard let project = projects.first(where: { $0.id == projectId }) else { return }
         let worktreeName = worktree.map(ClaudeLauncher.worktreeSlug).flatMap { $0.isEmpty ? nil : $0 }
         if worktreeName != nil { GitService.ensureWorktreesIgnored(in: project.path, backups: backupsDir) }
@@ -2240,9 +2292,12 @@ final class AppStore {
             createdAt: .now,
             lastActiveAt: .now,
             name: name.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0.trimmingCharacters(in: .whitespaces) },
-            extraDirs: extraDirs.isEmpty ? nil : extraDirs
+            extraDirs: extraDirs.isEmpty ? nil : extraDirs,
+            agentId: agentId,
+            folder: folder == project.path ? nil : folder
         )
         try db.write { try session.insert($0) }
+        if agentId != nil { markAttached(session) }
         if let prompt, !prompt.isEmpty { initialPrompts[session.id!] = prompt }
         reload()
         selectedSessionId = session.id
@@ -2328,6 +2383,8 @@ final class AppStore {
         guidedSessionIds.remove(id)
         lastTurnEvents[id] = nil
         initialPrompts[id] = nil
+        holds[id] = nil
+        if let session = sessions.first(where: { $0.id == id }), session.agentId != nil { markAttached(session, false) }
         _ = try? db.write { try Session.deleteOne($0, id: id) }
         if selectedSessionId == id, let index = ordered.firstIndex(where: { $0.id == id }) {
             let rest = ordered.filter { $0.id != id }
@@ -2355,12 +2412,13 @@ final class AppStore {
         terminals.start(session, projectPath: project.path, initialPrompt: initialPrompts.removeValue(forKey: sessionId),
                         login: login,
                         remoteControlName: remoteControlForNewSessions ? [project.name, session.branch].compactMap { $0 }.joined(separator: " · ") : nil,
-                        guided: guidedMode)
+                        guided: guidedMode, attach: attachId(for: session))
         runningSessionIds.insert(sessionId)
         if guidedMode { guidedSessionIds.insert(sessionId) } else { guidedSessionIds.remove(sessionId) }
     }
 
     func restartSession(_ id: Int64) {
+        holds[id] = nil
         terminals.close(id)
         exitedSessionIds.remove(id)
         startTerminalIfNeeded(id)
@@ -2390,7 +2448,151 @@ final class AppStore {
         let rotated = ordered[min(start, ordered.count)...] + ordered[..<min(start, ordered.count)]
         if let waiting = rotated.first(where: { $0.status == .waitingInput || $0.status == .waitingPermission }) {
             selectedSessionId = waiting.id
+        } else if elsewhere.contains(where: \.needsYou) {
+            isHomeShown = true // only an agent outside meepo waits: Home shows it
         }
+    }
+
+    // MARK: Sessions outside meepo
+
+    /// Background agents and claude in other windows (Terminal, VS Code…), meepo's own left out; interactive
+    /// ones that ended in this run stay a day, for Continue here.
+    private(set) var elsewhere: [ClaudeAgents.Agent] = []
+    /// Every running background agent, meepo's own too: an agent opened here re-attaches only while it runs.
+    private var backgroundAgentIds: Set<String> = []
+    /// A `claude agents` list came back in this run: until then a tab opened on an agent attaches rather than
+    /// resuming a conversation the agent may still be running.
+    private var isAgentListKnown = false
+    /// The latest refresh: a slower, older one that comes back after it is dropped.
+    @ObservationIgnored private var elsewhereRefreshes = 0
+    /// The agent whose recent output is shown (Output).
+    var outputAgent: ClaudeAgents.Agent?
+
+    /// Off the main actor; nothing while claude isn't found (or in Demo, which has its own).
+    func refreshElsewhere() async {
+        guard !isDemo, let login = loginEnvironment else { return }
+        await refreshElsewhere { ClaudeAgents.list(login: login) }
+    }
+
+    func refreshElsewhere(_ list: @escaping @Sendable () -> [ClaudeAgents.Agent]?) async {
+        elsewhereRefreshes += 1
+        let refresh = elsewhereRefreshes
+        guard let agents = await Task.detached(operation: list).value, refresh == elsewhereRefreshes else { return }
+        applyAgents(agents)
+    }
+
+    func applyAgents(_ agents: [ClaudeAgents.Agent], now: Date = .now) {
+        backgroundAgentIds = Set(agents.filter(\.isBackground).map(\.id))
+        followClearedAgents(agents)
+        if !isAgentListKnown { reconcileAttached() }
+        isAgentListKnown = true
+        let own = Set(sessions.map(\.claudeSessionId)), ownAgents = Set(sessions.compactMap(\.agentId))
+        elsewhere = ClaudeAgents.merge(ClaudeAgents.others(agents, ownSessionIds: own), into: elsewhere, now: now)
+            .filter { !own.contains($0.sessionId ?? "") && !ownAgents.contains($0.id) }
+    }
+
+    /// `/clear` in an agent open here gives it a new session id; its hooks then carry that one, and the bridge
+    /// finds the tab only by it (the SessionStart saying so can't reach meepo), so the list tells.
+    private func followClearedAgents(_ agents: [ClaudeAgents.Agent]) {
+        for agent in agents where agent.isBackground {
+            guard let sessionId = agent.sessionId,
+                  var session = sessions.first(where: { $0.agentId == agent.id && $0.claudeSessionId != sessionId })
+            else { continue }
+            markAttached(session, false)
+            session.claudeSessionId = sessionId
+            _ = try? db.write { try session.update($0) }
+            markAttached(session)
+            reload()
+        }
+    }
+
+    /// Once per run: a marker is kept only for a tab whose agent still runs; the rest (tabs closed while meepo
+    /// wasn't running, agents that ended) go, and the folder with them when none is left.
+    private func reconcileAttached() {
+        let dir = bridge.attachedURL, fm = FileManager.default
+        let attached = sessions.filter { $0.agentId.map(backgroundAgentIds.contains) == true }
+        let keep = Dictionary(attached.compactMap { s in s.id.map { (s.claudeSessionId, String($0)) } }) { a, _ in a }
+        for file in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        where keep[file.lastPathComponent] != (try? String(contentsOf: file, encoding: .utf8)) {
+            try? fm.removeItem(at: file)
+        }
+        for session in attached { markAttached(session) }
+        if (try? fm.contentsOfDirectory(atPath: dir.path))?.isEmpty == true { try? fm.removeItem(at: dir) }
+    }
+
+    /// The agent to attach to when the session's terminal starts; nil = the usual claude (--resume). Before any
+    /// list came back it attaches: a second claude resuming a conversation its agent still runs would fork it.
+    func attachId(for session: Session) -> String? {
+        session.agentId.flatMap { !isAgentListKnown || backgroundAgentIds.contains($0) ? $0 : nil }
+    }
+
+    /// The agent's folder isn't a meepo project yet: opening it adds one.
+    func isNewProject(_ agent: ClaudeAgents.Agent) -> Bool {
+        agent.cwd.map { projectId(containing: $0) == nil } ?? false
+    }
+
+    private func projectId(containing folder: String) -> Int64? {
+        projects.filter { folder == $0.path || folder.hasPrefix($0.path + "/") }.max { $0.path.count < $1.path.count }?.id
+    }
+
+    /// Background agent → a meepo tab attached to it (stages, What changed, events, notifications: its hook
+    /// events find the tab by its claude session id). Closing the tab doesn't stop it.
+    func openHere(_ agent: ClaudeAgents.Agent) throws {
+        guard agent.isBackground, let sessionId = agent.sessionId, let cwd = agent.cwd else { return }
+        try adopt(agent, sessionId: sessionId, cwd: cwd, agentId: agent.id)
+        if isDemo, let id = selectedSessionId { // Demo runs nothing: the tab shows the agent's page
+            terminals.showText(Demo.agentOutput.replacingOccurrences(of: "\n", with: "\r\n"), for: id)
+            runningSessionIds.insert(id)
+        }
+    }
+
+    /// An interactive session its window has ended → its conversation continues in a meepo tab (claude --resume).
+    func continueHere(_ agent: ClaudeAgents.Agent) throws {
+        guard agent.canContinueHere, let sessionId = agent.sessionId, let cwd = agent.cwd else { return }
+        try adopt(agent, sessionId: sessionId, cwd: cwd, agentId: nil)
+    }
+
+    private func adopt(_ agent: ClaudeAgents.Agent, sessionId: String, cwd: String, agentId: String?) throws {
+        if projectId(containing: cwd) == nil { try addProject(at: URL(filePath: cwd)) }
+        guard let projectId = projectId(containing: cwd) else { return }
+        try createSession(projectId: projectId, model: nil, prompt: nil, resuming: sessionId, name: agent.name,
+                          agentId: agentId, folder: cwd)
+        elsewhere.removeAll { $0.sessionId == sessionId }
+    }
+
+    /// `claude stop <id>`: the agent stops, its conversation is kept.
+    func stopAgent(_ agent: ClaudeAgents.Agent) async {
+        guard agent.isBackground else { return }
+        if isDemo { elsewhere.removeAll { $0.id == agent.id }; return }
+        guard let login = loginEnvironment else { return }
+        let (ok, output) = await Task.detached { ClaudeAgents.run(["stop", agent.id], login: login) }.value
+        if !ok { bridgeError = "claude stop \(agent.id): " + ClaudeAgents.plainText(output).trimmingCharacters(in: .whitespacesAndNewlines) }
+        await refreshElsewhere()
+    }
+
+    /// `claude logs <id>` as plain text.
+    func agentOutput(_ agent: ClaudeAgents.Agent) async -> String {
+        if isDemo { return Demo.agentOutput }
+        guard let login = loginEnvironment else { return "claude isn't found in the login shell" }
+        let output = await Task.detached { ClaudeAgents.run(["logs", agent.id], login: login).output }.value
+        return ClaudeAgents.plainText(output)
+    }
+
+    /// The marker that lets the hook bridge find this tab for the agent's events (see BridgeInstaller.attachedURL).
+    private func markAttached(_ session: Session, _ on: Bool = true) {
+        guard let id = session.id else { return }
+        let dir = bridge.attachedURL, fm = FileManager.default
+        if on {
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            try? Data(String(id).utf8).write(to: dir.appending(path: session.claudeSessionId), options: .atomic)
+            return
+        }
+        for file in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        where (try? String(contentsOf: file, encoding: .utf8)) == String(id) {
+            try? fm.removeItem(at: file)
+        }
+        // No folder when nothing is attached: every other session's hooks then exit at once.
+        if (try? fm.contentsOfDirectory(atPath: dir.path))?.isEmpty == true { try? fm.removeItem(at: dir) }
     }
 }
 
@@ -2494,6 +2696,7 @@ extension AppStore {
             sessionUsage[id] = SessionUsage(tokensToday: spec.tokens, contextTokens: Int(spec.context * 10_000), model: spec.model)
             if let status = StatusLine(json: Demo.statusLine(for: spec)) { applyStatusLine(status, sessionId: id) }
         }
+        elsewhere = Demo.agents { name in projects.first { $0.name == name }?.path }
         // Earlier requests behind the pushes, and Explain for users on storefront's Kaspi push, for What changed and Today.
         let ids = sessions.compactMap(\.id)
         var events: [HookEvent] = []

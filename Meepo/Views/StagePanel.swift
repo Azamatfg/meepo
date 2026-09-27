@@ -120,7 +120,7 @@ struct StagePanel: View {
             // Needs a Claude.ai sign-in; with an API key or a cloud provider Claude Code has no voice.
             if Voice.isAvailable(authMethod: store.claudeAuthMethod) {
                 let listening = store.listeningSessionIds.contains(session.id!)
-                Button(!store.isVoiceOn ? "VOICE" : listening ? "■ SEND" : "SPEAK") {
+                Button(!store.isVoiceOn ? "VOICE" : listening ? "■ STOP" : "SPEAK") {
                     if store.isVoiceOn {
                         store.speak(in: session.id!)
                     } else {
@@ -132,8 +132,8 @@ struct StagePanel: View {
                 .help(!store.isVoiceOn
                       ? "Talk instead of typing: turns on Claude Code's voice dictation (/voice) in every session. The first time, macOS asks whether meepo may use the microphone."
                       : listening
-                      ? "Claude is listening. Click when you're done — what you said is sent to Claude."
-                      : "Click, speak, click SEND — no key to hold. It starts when this session's prompt is empty (with text typed, it just adds a space). Space in the terminal does the same. Right-click to turn voice off.")
+                      ? "Listening. Click STOP when you're done — the words go into the prompt, not sent yet."
+                      : "Click SPEAK and talk, STOP when done: the words land in the prompt, unsent — fix them, SPEAK again to add more, SEND when it's right. Holding Space in the terminal does the same. Right-click to turn voice off.")
                 .contextMenu {
                     if store.isVoiceOn {
                         Button("Turn voice off") { Task { _ = await store.toggleVoice() } }
@@ -142,12 +142,20 @@ struct StagePanel: View {
                 .popover(isPresented: $isVoiceHintShown, arrowEdge: .top) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Voice is on").font(Fonts.ui(14, weight: .bold))
-                        Text("Click SPEAK, talk, click SEND — Claude gets what you said. The prompt has to be empty to start. In a terminal, one Space does the same as the button. It's Claude Code's /voice in tap mode: it works in every session, in meepo and outside it; the language is in /config.")
+                        Text("Click SPEAK and talk, STOP when you're done — the words go into the prompt, not sent. Fix them, SPEAK again to add more, then SEND. Holding Space in a terminal does the same. It's Claude Code's /voice: it works in every session, in meepo and outside it; the language is in /config.")
                             .font(Fonts.ui(13)).foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(14)
                     .frame(width: 320, alignment: .leading)
                     .paperSheet()
+                }
+                if store.isVoiceOn {
+                    Button("SEND") { store.sendSpoken(in: session.id!) }
+                        .buttonStyle(PixelButtonStyle())
+                        .disabled(listening)
+                        .help(listening
+                              ? "STOP first: the words land in the prompt a moment after, then SEND sends them"
+                              : "Enter: sends what's in the prompt — what you said, and any fixes — to Claude")
                 }
             }
             if let port = session.portBase {

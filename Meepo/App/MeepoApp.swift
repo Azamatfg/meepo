@@ -90,6 +90,14 @@ struct MeepoApp: App {
                             try? await Task.sleep(for: .seconds(300))
                         }
                     }
+                    Task { // Sessions outside meepo: every 15 s, and when the user comes back to meepo.
+                        let activations = NotificationCenter.default.notifications(named: NSApplication.didBecomeActiveNotification)
+                        Task { for await _ in activations { await store.refreshElsewhere() } }
+                        while !Task.isCancelled {
+                            await store.refreshElsewhere()
+                            try? await Task.sleep(for: .seconds(15))
+                        }
+                    }
                     Task { // Once a minute is cheap on the GitHub API; every 15 s while a step runs, so it looks live.
                         while !Task.isCancelled {
                             await store.refreshCI()

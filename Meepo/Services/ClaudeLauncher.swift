@@ -98,6 +98,10 @@ enum ClaudeLauncher {
         return args
     }
 
+    /// A background agent in a meepo tab: its own settings, model and effort stay as it was started with.
+    /// Closing the tab only lets go of it — "The session keeps running either way" (`claude attach --help`, 2.1.283).
+    static func attachArguments(agentId: String) -> [String] { ["attach", agentId] }
+
     /// Where claude runs and whether it must create the worktree: `claude -w` makes
     /// `<repo>/.claude/worktrees/<name>` (branch `worktree-<name>`) on first start, honouring the user's
     /// worktree settings and hooks; afterwards the session runs inside that folder (its transcript lives there).

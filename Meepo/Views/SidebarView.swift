@@ -19,6 +19,15 @@ struct SessionsPanel: View {
                     SessionRow(session: session, isSelected: session.id == store.selectedSessionId && !store.isHomeShown)
                 }
             }
+            if !store.elsewhere.isEmpty {
+                HStack(spacing: 4) {
+                    Text("ELSEWHERE").font(Fonts.ui(11, weight: .bold)).tracking(1.2).foregroundStyle(Tokens.textDim)
+                    InfoButton(title: "Elsewhere", text: Explain.elsewhere)
+                }
+                .padding(.horizontal, 4)
+                .padding(.top, 14)
+                ForEach(store.elsewhere) { ElsewhereRow(agent: $0) }
+            }
         }
         .focusable()
         .focusEffectDisabled()
@@ -126,7 +135,9 @@ struct SessionMenu: View {
         Button("Close Session…", role: .destructive) {
             store.confirmation = PixelConfirmation(
                 title: "Close this session?",
-                message: "claude stops. Files and commits stay; the conversation stays in Claude Code (claude --resume).",
+                message: session.agentId != nil && store.attachId(for: session) != nil
+                    ? "Only the tab closes: the agent keeps running in the background (claude agents)."
+                    : "claude stops. Files and commits stay; the conversation stays in Claude Code (claude --resume).",
                 action: "Close"
             ) { store.closeSession(session.id!) }
         }

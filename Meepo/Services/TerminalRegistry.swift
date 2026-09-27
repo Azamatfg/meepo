@@ -12,9 +12,11 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     func start(_ session: Session, projectPath: String, initialPrompt: String?,
-               login: ClaudeLauncher.LoginEnvironment, remoteControlName: String? = nil, guided: Bool = false) {
+               login: ClaudeLauncher.LoginEnvironment, remoteControlName: String? = nil, guided: Bool = false,
+               attach agentId: String? = nil) {
         guard let id = session.id, views[id] == nil else { return }
-        let (directory, createWorktree) = ClaudeLauncher.location(worktreeName: session.worktreeName, projectPath: projectPath)
+        var (directory, createWorktree) = ClaudeLauncher.location(worktreeName: session.worktreeName, projectPath: projectPath)
+        if let folder = session.folder, FileManager.default.fileExists(atPath: folder) { directory = folder }
         // Sessions start before they're on screen; a zero frame would start claude in a 0-column terminal.
         let view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700))
         view.font = Fonts.terminal(13)
@@ -24,7 +26,8 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
         view.processDelegate = self
         let bridge = BridgeInstaller()
         let hasBridge = FileManager.default.isExecutableFile(atPath: bridge.scriptURL.path)
-        let args = ClaudeLauncher.sessionSettings(effort: session.effort,
+        let args = if let agentId { ClaudeLauncher.attachArguments(agentId: agentId) } else {
+            ClaudeLauncher.sessionSettings(effort: session.effort,
                                                   statusLine: hasBridge ? bridge.statusLineCommand : nil,
                                                   guided: guided)
             + ClaudeLauncher.claudeArguments(
@@ -38,6 +41,7 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
             name: session.name,
             addDirs: (session.extraDirs ?? []).filter { FileManager.default.fileExists(atPath: $0) }
         )
+        }
         // Lets meepo-bridge.sh tag every hook event with this session, even after /clear changes the claude id.
         var meepo = ["MEEPO_SESSION_ID": String(id), "MEEPO_PORT": String(EventServer.defaultPort)]
         if hasBridge, let own = bridge.userStatusLine() { meepo["MEEPO_USER_STATUSLINE"] = own }

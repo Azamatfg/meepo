@@ -119,6 +119,30 @@ enum Demo {
                     model: "Opus 5.5", effort: "xhigh", context: 8, tokens: 54_000),
     ]
 
+    /// Sessions outside meepo: a background agent waiting for an answer, and claude open in VS Code.
+    /// `folder`: a demo project's path by name.
+    static func agents(folder: (String) -> String?) -> [ClaudeAgents.Agent] {
+        [ClaudeAgents.Agent(id: "a41c9e02", kind: "background", sessionId: "a41c9e02-7d3b-4f0e-9c21-5be8d0f3a611",
+                            cwd: folder("storefront"), name: "nightly price sync", state: "blocked",
+                            startedAt: .now - 2 * 3600),
+         ClaudeAgents.Agent(id: "5e0b7c9d-2f14-4a88-b6d3-91c0e4a7f252", kind: "interactive",
+                            sessionId: "5e0b7c9d-2f14-4a88-b6d3-91c0e4a7f252", cwd: folder("fleet-api"),
+                            name: "rate limits", state: "busy", pid: 4242, startedAt: .now - 40 * 60, host: "VS Code")]
+    }
+
+    /// What `claude logs` shows for the background agent.
+    static let agentOutput = """
+    > sync tonight's prices from the supplier feed into the catalog
+
+    ⏺ Read(src/catalog/prices.ts)
+      ⎿  Read 96 lines
+
+    ⏺ Bash(npm run feed:download)
+      ⎿  Downloaded 4,812 prices
+
+    ⏺ 312 prices dropped by more than 30%. Should I apply them, or hold those for a person to check?
+    """
+
     /// Explain for users on storefront's Kaspi push.
     static let summary = #"{"headline":"Shoppers can pay with Kaspi at checkout","changes":[{"kind":"new","what":"Kaspi is a payment option next to the card","where":"Checkout → Payment"},{"kind":"changed","what":"A paid order shows how it was paid","where":"Admin → Orders → Order details"},{"kind":"changed","what":"Kaspi payments get their own line in the daily report","where":"Admin → Finance → Daily report"}],"check":["Kaspi's test mode is still on — switch it off before the release?","What happens when a shopper closes Kaspi before paying?"],"how_to_try":"Put something in the cart, pick Kaspi at checkout and pay with the test account."}"#
 

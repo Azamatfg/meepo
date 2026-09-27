@@ -34,13 +34,15 @@ struct HomeView: View {
                 .padding(3)
                 .background(Tokens.ghost, in: RoundedRectangle(cornerRadius: 10))
                 .overlay(alignment: .trailing) { InfoButton(title: "Home", text: Explain.home).offset(x: 26) }
-                if sessions.isEmpty {
+                if sessions.isEmpty && (mode != "deck" || store.elsewhere.isEmpty) {
                     Text("No sessions yet — start one with + above.").foregroundStyle(Tokens.textDim)
                 } else if mode != "deck" {
                     TodayList(sessions: sessions)
                 } else {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 14)], spacing: 14) {
                         ForEach(sessions) { SessionCard(session: $0) }
+                        // Sessions outside meepo, after its own.
+                        ForEach(store.elsewhere) { ElsewhereCard(agent: $0) }
                     }
                 }
             }

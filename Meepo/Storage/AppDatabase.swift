@@ -146,6 +146,14 @@ enum AppDatabase {
             }
         }
 
+        // Sessions from outside meepo: a background agent opened here, a subfolder claude was started in.
+        migrator.registerMigration("v13-agents") { db in
+            try db.alter(table: "session") { t in
+                t.add(column: "agentId", .text)
+                t.add(column: "folder", .text)
+            }
+        }
+
         return migrator
     }
 }
