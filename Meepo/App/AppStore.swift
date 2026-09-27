@@ -908,6 +908,7 @@ final class AppStore {
     @discardableResult
     func handleHookEvent(_ payload: HookPayload, sessionId: Int64) -> Attention? {
         interruptedSessionIds.remove(sessionId)
+        if payload.event == "UserPromptSubmit" { listeningSessionIds.remove(sessionId) } // what was said reached claude
         defer {
             if quitWhenIdle, workingSessionIds.isEmpty {
                 quitWhenIdle = false
@@ -1439,13 +1440,41 @@ final class AppStore {
     /// Claude Code's voice dictation, as ~/.claude/settings.json has it — re-read every 10 s, so /voice typed in
     /// a session shows on the button too.
     private(set) var isVoiceOn = false
+    /// Claude Code's voice mode as the settings file has it ("hold" or "tap").
+    private(set) var voiceMode = "hold"
+    /// Sessions where SPEAK was pressed and SEND not yet: Claude Code is listening there. A request reaching
+    /// claude (the tap's own send, or Space pressed by hand) ends it.
+    private(set) var listeningSessionIds: Set<Int64> = []
     /// Demo mode: nothing of the user's is written; voice and Guided mode change only in memory.
     private var isDemo = false
 
     func refreshVoice() {
         guard !isDemo else { return }
-        let on = Voice.isOn((try? bridge.readSettings()) ?? [:])
+        let settings = (try? bridge.readSettings()) ?? [:]
+        let on = Voice.isOn(settings), mode = Voice.mode(settings)
         if on != isVoiceOn { isVoiceOn = on }
+        if mode != voiceMode { voiceMode = mode }
+        if !on { listeningSessionIds = [] }
+    }
+
+    /// SPEAK / SEND: presses Space once in the session, the tap that starts or stops Claude Code's listening.
+    /// Switches voice to tap mode first when it's in hold mode (a single Space there would just type a space).
+    func speak(in sessionId: Int64) {
+        refreshVoice()
+        guard isVoiceOn else { return }
+        if voiceMode != "tap" {
+            if !isDemo {
+                do {
+                    try bridge.editSettings("Voice: tap to talk") { Voice.setTap(in: &$0) }
+                } catch {
+                    bridgeError = error.localizedDescription
+                    return
+                }
+            }
+            voiceMode = "tap"
+        }
+        type(Voice.tap, into: sessionId)
+        if listeningSessionIds.remove(sessionId) == nil { listeningSessionIds.insert(sessionId) }
     }
 
     /// VOICE: Claude Code's voice dictation on or off for every session, written the way /voice writes it —
@@ -1467,13 +1496,17 @@ final class AppStore {
         }
         if !isDemo {
             do {
-                try bridge.editSettings(on ? "Voice on (/voice)" : "Voice off (/voice off)") { Voice.set(on, in: &$0) }
+                try bridge.editSettings(on ? "Voice on, tap to talk (/voice)" : "Voice off (/voice off)") {
+                    Voice.set(on, in: &$0)
+                    if on { Voice.setTap(in: &$0) }
+                }
             } catch {
                 bridgeError = error.localizedDescription
                 return false
             }
         }
         isVoiceOn = on
+        if on { voiceMode = "tap" } else { listeningSessionIds = [] }
         guard on, !defaults.bool(forKey: Self.voiceHintKey) else { return false }
         defaults.set(true, forKey: Self.voiceHintKey)
         return true

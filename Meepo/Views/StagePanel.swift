@@ -119,18 +119,30 @@ struct StagePanel: View {
                 .help("Turn on Claude Code Remote Control: follow and answer this session from the Claude app or claude.ai")
             // Needs a Claude.ai sign-in; with an API key or a cloud provider Claude Code has no voice.
             if Voice.isAvailable(authMethod: store.claudeAuthMethod) {
-                Button(store.isVoiceOn ? "VOICE ON" : "VOICE") {
-                    Task { if await store.toggleVoice() { isVoiceHintShown = true } }
+                let listening = store.listeningSessionIds.contains(session.id!)
+                Button(!store.isVoiceOn ? "VOICE" : listening ? "■ SEND" : "SPEAK") {
+                    if store.isVoiceOn {
+                        store.speak(in: session.id!)
+                    } else {
+                        Task { if await store.toggleVoice() { isVoiceHintShown = true } }
+                    }
                 }
-                .buttonStyle(PixelButtonStyle())
-                .overlay { if store.isVoiceOn { Capsule().strokeBorder(Tokens.work, lineWidth: 1.5).allowsHitTesting(false) } }
-                .help(store.isVoiceOn
-                      ? "Voice is on in every Claude Code session: hold Space, speak, let go. Click to turn it off (like /voice off)."
-                      : "Talk instead of typing: turns on Claude Code's voice dictation (/voice) in every session. The first time, macOS asks whether meepo may use the microphone.")
+                .buttonStyle(PixelButtonStyle(isPrimary: listening))
+                .overlay { if store.isVoiceOn && !listening { Capsule().strokeBorder(Tokens.work, lineWidth: 1.5).allowsHitTesting(false) } }
+                .help(!store.isVoiceOn
+                      ? "Talk instead of typing: turns on Claude Code's voice dictation (/voice) in every session. The first time, macOS asks whether meepo may use the microphone."
+                      : listening
+                      ? "Claude is listening. Click when you're done — what you said is sent to Claude."
+                      : "Click, speak, click SEND — no key to hold. It starts when this session's prompt is empty (with text typed, it just adds a space). Space in the terminal does the same. Right-click to turn voice off.")
+                .contextMenu {
+                    if store.isVoiceOn {
+                        Button("Turn voice off") { Task { _ = await store.toggleVoice() } }
+                    }
+                }
                 .popover(isPresented: $isVoiceHintShown, arrowEdge: .top) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Voice is on").font(Fonts.ui(14, weight: .bold))
-                        Text("Hold Space in any session, speak, let go — Claude Code writes what you said into the prompt. It's Claude Code's /voice: it works in every session, in meepo and outside it; the language is in /config.")
+                        Text("Click SPEAK, talk, click SEND — Claude gets what you said. The prompt has to be empty to start. In a terminal, one Space does the same as the button. It's Claude Code's /voice in tap mode: it works in every session, in meepo and outside it; the language is in /config.")
                             .font(Fonts.ui(13)).foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(14)

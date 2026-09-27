@@ -1,9 +1,10 @@
 import AppKit
 import AVFoundation
 
-/// Claude Code's voice dictation (/voice): hold Space in a session, speak, let go. meepo turns it on the way /voice
-/// does — in ~/.claude/settings.json, so it holds in every session — and never types /voice into a terminal:
-/// without an argument /voice is a switch, and would turn voice off for someone who already has it on.
+/// Claude Code's voice dictation (/voice). meepo turns it on the way /voice does — in ~/.claude/settings.json, so it
+/// holds in every session — and never types /voice into a terminal: without an argument /voice is a switch, and
+/// would turn voice off for someone who already has it on. meepo uses Claude Code's "tap" mode (checked in 2.1.283):
+/// with an empty prompt one Space starts listening, the next stops and sends — so a button can press it for you.
 enum Voice {
     /// Claude Code's own rule (2.1.283): `voice.enabled` when it's there, else `voiceEnabled` — not either of them.
     static func isOn(_ settings: [String: Any]) -> Bool {
@@ -17,6 +18,21 @@ enum Voice {
         settings["voice"] = voice
         settings["voiceEnabled"] = on
     }
+
+    /// "hold" (Claude Code's default) or "tap".
+    static func mode(_ settings: [String: Any]) -> String {
+        (settings["voice"] as? [String: Any])?["mode"] as? String ?? "hold"
+    }
+
+    /// Tap to start, tap to stop and send — what SPEAK/SEND press. Every other setting stays as it is.
+    static func setTap(in settings: inout [String: Any]) {
+        var voice = settings["voice"] as? [String: Any] ?? [:]
+        voice["mode"] = "tap"
+        settings["voice"] = voice
+    }
+
+    /// What SPEAK and SEND type: the push-to-talk key, Space. In tap mode an empty prompt takes it as a tap.
+    static let tap = " "
 
     /// Voice needs a Claude.ai sign-in (`claude auth status` → authMethod): an API key, a key helper or a cloud
     /// provider can't use it. nil — couldn't tell — hides it too.

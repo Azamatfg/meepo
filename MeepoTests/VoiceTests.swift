@@ -57,6 +57,43 @@ final class VoiceTests: XCTestCase {
         XCTAssertFalse(Voice.isOn(try bridge.readSettings()), "turned off: it was on when clicked")
     }
 
+    func testTapModeKeepsEverythingElse() {
+        var settings: [String: Any] = ["voice": ["enabled": true, "autoSubmit": true], "voiceEnabled": true, "model": "opus"]
+        XCTAssertEqual(Voice.mode(settings), "hold", "Claude Code's default")
+        Voice.setTap(in: &settings)
+        XCTAssertEqual(Voice.mode(settings), "tap")
+        XCTAssertTrue(Voice.isOn(settings))
+        XCTAssertEqual((settings["voice"] as? [String: Any])?["autoSubmit"] as? Bool, true)
+        XCTAssertEqual(settings["model"] as? String, "opus")
+    }
+
+    /// SPEAK on a hold-mode setup switches to tap first (one Space in hold mode would just type a space), then
+    /// the same button is SEND; a request reaching claude ends the listening either way.
+    @MainActor
+    func testSpeakIsATapThatClaudeCodeUnderstands() async throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let home = FileManager.default.temporaryDirectory.appending(path: "voice-\(UUID().uuidString)")
+        let bridge = BridgeInstaller(settingsURL: home.appending(path: "settings.json"), meepoHome: home)
+        let store = AppStore(db: db, bridge: bridge, usageRoot: home, defaults: UserDefaults(suiteName: "meepo-tests-\(UUID().uuidString)")!)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try #"{"voice":{"enabled":true},"theme":"light"}"#.write(to: bridge.settingsURL, atomically: true, encoding: .utf8)
+        try store.addProject(at: try makeTempRepo())
+        try store.createSession(projectId: store.projects[0].id!, model: nil, prompt: nil)
+        let id = store.sessions[0].id!
+
+        store.speak(in: id)
+        XCTAssertEqual(Voice.mode(try bridge.readSettings()), "tap")
+        XCTAssertEqual(try bridge.readSettings()["theme"] as? String, "light")
+        XCTAssertTrue(store.listeningSessionIds.contains(id), "SPEAK → listening, the button reads SEND")
+        store.speak(in: id)
+        XCTAssertFalse(store.listeningSessionIds.contains(id), "SEND → sent")
+
+        store.speak(in: id)
+        _ = store.handleHookEvent(HookPayload(event: "UserPromptSubmit", claudeSessionId: store.sessions[0].claudeSessionId), sessionId: id)
+        XCTAssertFalse(store.listeningSessionIds.contains(id), "Space pressed by hand sent it: the button is SPEAK again")
+    }
+
     /// One edit, one line in Tools → Changes — it used to log a second, "Hook bridge", for every settings edit.
     func testASettingsEditIsLoggedOnceUnderItsOwnName() throws {
         let home = FileManager.default.temporaryDirectory.appending(path: "voice-\(UUID().uuidString)")
