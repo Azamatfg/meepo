@@ -55,9 +55,14 @@ enum GitPanel {
             guard line.count > 3 else { continue }
             let code = String(line.prefix(2))
             var path = String(line.dropFirst(3))
-            if let arrow = path.range(of: " -> ") { path = String(path[arrow.upperBound...]) }
+            var oldPath: String?
+            if let arrow = path.range(of: " -> ") {
+                oldPath = String(path[..<arrow.lowerBound]).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+                path = String(path[arrow.upperBound...])
+            }
             let status = code == "??" ? "?" : String(code.trimmingCharacters(in: .whitespaces).prefix(1))
-            snapshot.changes.append(FileChange(status: status, path: path.trimmingCharacters(in: CharacterSet(charactersIn: "\""))))
+            snapshot.changes.append(FileChange(status: status, path: path.trimmingCharacters(in: CharacterSet(charactersIn: "\"")),
+                                               oldPath: oldPath))
         }
         return snapshot
     }
@@ -211,6 +216,38 @@ enum GitPanel {
     /// For EXPLAIN: the changes between two points (`to` nil = the files on disk).
     static func fullDiff(from: String, to: String?, in path: String) -> String {
         GitService.output(["diff", from] + (to.map { [$0] } ?? []), in: path) ?? ""
+    }
+
+    /// VS Code's Discard Changes for CHANGES (staged or not alike): a file HEAD has goes back to HEAD (a deletion
+    /// comes back, a rename's old name too); a file HEAD doesn't have (untracked, added, a rename's new name) leaves
+    /// the index and goes to the Trash — never deleted outright. nil = done, otherwise the first error.
+    /// Blocking; call off the main thread.
+    static func discard(_ changes: [FileChange], in path: String,
+                        trash: (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }) -> String? {
+        var restore: [String] = [], remove: [String] = []
+        for change in changes {
+            switch change.status {
+            case "?", "A", "C": remove.append(change.path)
+            case "R": remove.append(change.path); restore += change.oldPath.map { [$0] } ?? []
+            default: restore.append(change.path)
+            }
+        }
+        // Literal pathspecs: "report [draft].md" is a file name, not a glob.
+        if !remove.isEmpty, let error = GitService.runReportingError(
+            ["--literal-pathspecs", "rm", "--cached", "-f", "--quiet", "--ignore-unmatch", "--"] + remove, in: path) {
+            return error
+        }
+        if !restore.isEmpty,
+           let error = GitService.runReportingError(["--literal-pathspecs", "restore", "--source=HEAD", "--staged", "--worktree", "--"] + restore,
+                                                    in: path) {
+            return error
+        }
+        for file in remove {
+            let url = URL(filePath: path).appending(path: file)
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            do { try trash(url) } catch { return "\(file): \(error.localizedDescription)" }
+        }
+        return nil
     }
 
     /// No force ever; a branch without an upstream gets one on origin.

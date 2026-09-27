@@ -106,7 +106,9 @@ private struct RepoSourceControl: View {
                 Text("Nothing uncommitted.").font(.caption).foregroundStyle(Tokens.textDim)
             }
             ForEach(scm.changes) { change in
-                FileRow(change: change) { compare = Compare(title: "Working Tree", files: scm.changes, selected: change.path, old: "HEAD", new: nil) }
+                FileRow(change: change, onDiscard: { askDiscard([change], path: path) }) {
+                    compare = Compare(title: "Working Tree", files: scm.changes, selected: change.path, old: "HEAD", new: nil)
+                }
             }
             if !scm.changes.isEmpty {
                 actions {
@@ -115,6 +117,8 @@ private struct RepoSourceControl: View {
                         explain("changes", title: "your changes", path: path, from: "HEAD", to: nil,
                                 whose: "the user's uncommitted", newFiles: scm.changes.filter { $0.status == "?" }.map(\.path))
                     }
+                    Button("Discard All") { askDiscard(scm.changes, path: path) }
+                        .help("Every change back to the last commit; new files go to the Trash")
                 }
             }
         }
@@ -204,6 +208,31 @@ private struct RepoSourceControl: View {
             action: "Push",
             isDestructive: main
         ) { Task { await sync(path) { GitPanel.push(status, in: path) } } }
+    }
+
+    /// VS Code asks before Discard Changes; new files go to the Trash here instead of being deleted for good.
+    private func askDiscard(_ changes: [GitPanel.FileChange], path: String) {
+        let isNew: (GitPanel.FileChange) -> Bool = { ["?", "A", "C"].contains($0.status) }
+        let title: String, message: String
+        if changes.count == 1, let change = changes.first {
+            let name = URL(filePath: change.path).lastPathComponent
+            title = isNew(change) ? "Move \(name) to the Trash?" : "Discard changes in \(name)?"
+            message = switch change.status {
+            case "?", "A", "C": "\(change.path) is new, not in the last commit: it goes to the Trash, and you can put it back from there."
+            case "D": "\(change.path) comes back as it is in the last commit."
+            case "R": "\(change.path) goes back to \(change.oldPath ?? "its old name") as it is in the last commit."
+            default: "\(change.path) goes back to the last commit. Your edits in it can't be undone."
+            }
+        } else {
+            let new = changes.filter(isNew).count, tracked = changes.count - new
+            title = "Discard all \(changes.count) changes?"
+            message = [tracked > 0 ? (tracked == 1 ? "1 file goes" : "\(tracked) files go") + " back to the last commit — those edits can't be undone." : nil,
+                       new > 0 ? (new == 1 ? "1 new file goes" : "\(new) new files go") + " to the Trash." : nil].compactMap { $0 }.joined(separator: " ")
+        }
+        store.confirmation = PixelConfirmation(title: title, message: message,
+                                               action: changes.count == 1 ? "Discard Changes" : "Discard All Changes") {
+            Task { await sync(path) { GitPanel.discard(changes, in: path) } }
+        }
     }
 
     private func sync(_ path: String, _ run: @escaping @Sendable () -> String?) async {
@@ -493,25 +522,41 @@ private struct EventsSheet: View {
 /// One changed file as in VS Code's Source Control: type icon, name, folder, status letter; a click compares it.
 struct FileRow: View {
     let change: GitPanel.FileChange
+    /// VS Code's ↺ Discard Changes, shown while the pointer is on the row; nil = no discard (commits).
+    var onDiscard: (() -> Void)?
     let onTap: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 5) {
-                Image(systemName: FileIcon.symbol(for: change.path)).font(.system(size: 11))
-                    .foregroundStyle(FileIcon.color(for: change.path)).frame(width: 14)
-                Text(URL(filePath: change.path).lastPathComponent).font(.system(size: 12))
-                    .foregroundStyle(change.status == "D" ? Tokens.textDim : Tokens.text)
-                    .strikethrough(change.status == "D").lineLimit(1)
-                Text((change.path as NSString).deletingLastPathComponent)
-                    .font(.system(size: 11)).foregroundStyle(Tokens.textDim).lineLimit(1).truncationMode(.head)
-                Spacer(minLength: 4)
-                Text(DiffViewer.letter(change.status)).font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(FileIcon.statusColor(change.status))
+        HStack(spacing: 5) {
+            Button(action: onTap) {
+                HStack(spacing: 5) {
+                    Image(systemName: FileIcon.symbol(for: change.path)).font(.system(size: 11))
+                        .foregroundStyle(FileIcon.color(for: change.path)).frame(width: 14)
+                    Text(URL(filePath: change.path).lastPathComponent).font(.system(size: 12))
+                        .foregroundStyle(change.status == "D" ? Tokens.textDim : Tokens.text)
+                        .strikethrough(change.status == "D").lineLimit(1)
+                    Text((change.path as NSString).deletingLastPathComponent)
+                        .font(.system(size: 11)).foregroundStyle(Tokens.textDim).lineLimit(1).truncationMode(.head)
+                    Spacer(minLength: 4)
+                }
+                .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            if let onDiscard {
+                Button(action: onDiscard) {
+                    Image(systemName: "arrow.uturn.backward").font(.system(size: 11)).foregroundStyle(Tokens.textDim)
+                }
+                .buttonStyle(.plain)
+                .opacity(isHovered ? 1 : 0)
+                .allowsHitTesting(isHovered)
+                .help(change.status == "?" || change.status == "A" ? "Discard Changes — moves the new file to the Trash" : "Discard Changes")
+            }
+            Text(DiffViewer.letter(change.status)).font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(FileIcon.statusColor(change.status))
+                .onTapGesture(perform: onTap)
         }
-        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
         .help("\(label): \(change.path)\(counts) — click to compare")
     }
 

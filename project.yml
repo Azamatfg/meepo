@@ -26,9 +26,10 @@ settings:
     MEEPO_RELEASE_TAG: ""
   configs:
     # Warn about expressions slow to type-check: CI's release build gave up on one that Debug here accepted
-    # (0.2.6, 2026-09-25). Fix any such warning before tagging.
+    # (0.2.6, 2026-09-25). Fix any such warning before tagging. 1000, not 500: the first use of AppStore in a
+    # compile job costs ~0.5 s once, whatever the expression, and was flagged as slow (2026-09-27).
     Debug:
-      OTHER_SWIFT_FLAGS: "$(inherited) -Xfrontend -warn-long-expression-type-checking=500"
+      OTHER_SWIFT_FLAGS: "$(inherited) -Xfrontend -warn-long-expression-type-checking=1000"
     # Notarization rejects get-task-allow (the debugger entitlement Xcode injects); Debug keeps it for tests.
     Release:
       CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO

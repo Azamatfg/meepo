@@ -37,6 +37,81 @@ final class GitPanelParsingTests: XCTestCase {
     }
 }
 
+/// Discard Changes as in VS Code, against a real repo; the Trash is a stand-in folder, never the user's.
+final class GitPanelDiscardTests: XCTestCase {
+    private var trashed: [String] = []
+
+    private func discard(_ files: [String]?, in repo: URL) -> String? {
+        let changes = GitPanel.sourceControl(in: repo.path).changes                      // what the panel lists
+        let bin = FileManager.default.temporaryDirectory.appending(path: "trash-\(UUID().uuidString)")
+        return GitPanel.discard(changes.filter { files?.contains($0.path) ?? true }, in: repo.path) { url in
+            try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+            try FileManager.default.moveItem(at: url, to: bin.appending(path: UUID().uuidString))
+            self.trashed.append(url.lastPathComponent)
+        }
+    }
+
+    private func read(_ file: String, in repo: URL) -> String? { try? String(contentsOf: repo.appending(path: file), encoding: .utf8) }
+    private func write(_ text: String, _ file: String, in repo: URL) throws {
+        try text.write(to: repo.appending(path: file), atomically: true, encoding: .utf8)
+    }
+
+    private func repoWithCommit() throws -> URL {
+        let repo = try makeTempRepo()
+        for name in ["a.txt", "b.txt", "gone.txt", "old.txt", "x[1].txt", "x1.txt"] { try write("v1 \(name)", name, in: repo) }
+        try git(["add", "."], in: repo)
+        try git(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base"], in: repo)
+        return repo
+    }
+
+    func testOneFileAtATimeLeavesTheOthersAlone() throws {
+        let repo = try repoWithCommit()
+        try write("edited", "a.txt", in: repo)
+        try write("edited too", "b.txt", in: repo)
+        try git(["add", "b.txt"], in: repo)                                  // staged edits are discarded too
+        try write("new", "park_transactions (2).csv", in: repo)
+        try write("edited", "x[1].txt", in: repo)
+        try write("edited", "x1.txt", in: repo)
+
+        XCTAssertNil(discard(["a.txt", "b.txt"], in: repo))
+        XCTAssertEqual(read("a.txt", in: repo), "v1 a.txt")
+        XCTAssertEqual(read("b.txt", in: repo), "v1 b.txt")
+        XCTAssertEqual(read("park_transactions (2).csv", in: repo), "new")   // not asked for: untouched
+        XCTAssertTrue(trashed.isEmpty)
+
+        XCTAssertNil(discard(["park_transactions (2).csv"], in: repo))
+        XCTAssertNil(read("park_transactions (2).csv", in: repo))
+        XCTAssertEqual(trashed, ["park_transactions (2).csv"])               // to the Trash, not deleted
+
+        XCTAssertNil(discard(["x[1].txt"], in: repo))
+        XCTAssertEqual(read("x[1].txt", in: repo), "v1 x[1].txt")
+        XCTAssertEqual(read("x1.txt", in: repo), "edited")                  // "x[1].txt" is a name, not a glob
+    }
+
+    func testAddedDeletedRenamedAndDiscardAll() throws {
+        let repo = try repoWithCommit()
+        try write("staged new", "added.txt", in: repo)
+        try git(["add", "added.txt"], in: repo)
+        try write("then edited", "added.txt", in: repo)                      // AM: index differs from disk
+        try FileManager.default.removeItem(at: repo.appending(path: "gone.txt"))
+        try git(["mv", "old.txt", "renamed.txt"], in: repo)
+        try write("edited", "a.txt", in: repo)
+
+        XCTAssertNil(discard(nil, in: repo))
+        XCTAssertNil(GitService.output(["status", "--porcelain"], in: repo.path))   // clean, like HEAD
+        XCTAssertEqual(read("gone.txt", in: repo), "v1 gone.txt")
+        XCTAssertEqual(read("old.txt", in: repo), "v1 old.txt")
+        XCTAssertEqual(read("a.txt", in: repo), "v1 a.txt")
+        XCTAssertEqual(read("b.txt", in: repo), "v1 b.txt")
+        XCTAssertEqual(Set(trashed), ["added.txt", "renamed.txt"])
+    }
+
+    func testRenameKeepsItsOldPath() {
+        let change = GitPanel.parseStatus("R  old.swift -> renamed.swift\n").changes[0]
+        XCTAssertEqual([change.path, change.oldPath], ["renamed.swift", "old.swift"])
+    }
+}
+
 /// Against a real bare remote: ahead/behind, outgoing commits, PUSH and PULL.
 final class GitPanelRemoteTests: XCTestCase {
     func testAheadOutgoingPushAndPull() throws {

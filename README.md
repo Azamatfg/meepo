@@ -10,7 +10,7 @@ meepo doesn't write code and isn't another agent. Claude Code does the work, wit
 
 ## What it does
 
-**Every session in one window.** Tabs for each Claude session across your projects, up to four terminals side by side, `Ctrl+Tab` to the session that needs you. Home answers the questions you'd otherwise check tab by tab: *Deck* — for each session, is it waiting on me, how did the last request end, what isn't sent yet; *Today* — what you sent today, project by project, and what's still left (a file not committed, a deploy waiting for your click, a question Claude asked).
+**Every session in one window.** Tabs for each Claude session across your projects, up to four terminals side by side, `Ctrl+Tab` to the session that needs you. Claude Code sessions running outside meepo — background agents (`claude --bg`) and ones in another terminal — show up under *Elsewhere*: open one here, read its output, stop it, or continue an ended one. Home answers the questions you'd otherwise check tab by tab: *Deck* — for each session, is it waiting on me, how did the last request end, what isn't sent yet; *Today* — what you sent today, project by project, and what's still left (a file not committed, a deploy waiting for your click, a question Claude asked).
 
 ![Four sessions: working, waiting for a permission, waiting for an answer, ready](docs/screenshots/deck.png)
 
@@ -24,11 +24,11 @@ meepo doesn't write code and isn't another agent. Claude Code does the work, wit
 
 ![Full: Explorer, Source Control, two terminals, events and CI](docs/screenshots/full.png)
 
-**Git like VS Code, teammates included.** CHANGES, INCOMING, OUTGOING and HISTORY per repo — click a commit for its message, files and page on GitHub or GitLab — with Compare in VS Code's own editor (Monaco) and Explain in plain words. Teammates' commits come in by themselves once your work is committed, and the agent is told what changed under it. Projects that hold several repos, and sessions that also work in a second project (`claude --add-dir`), show every repo.
+**Git like VS Code, teammates included.** CHANGES, INCOMING, OUTGOING and HISTORY per repo — click a commit for its message, files and page on GitHub or GitLab — with Compare in VS Code's own editor (Monaco) and Explain in plain words. Teammates' commits come in by themselves once your work is committed, and the agent is told what changed under it. Discard a file's changes (↺) or all of them, as in VS Code — a new file goes to the Trash rather than being deleted. Projects that hold several repos, and sessions that also work in a second project (`claude --add-dir`), show every repo.
 
 **Files in, screenshots in.** Drop a screenshot on a terminal and Claude gets it as an image; drop or paste (⌘V) files into Explorer to copy them into the project.
 
-**Talk instead of typing.** VOICE turns on Claude Code's own dictation: click SPEAK, talk, click SEND — no key to hold.
+**Talk instead of typing.** VOICE turns on Claude Code's own dictation: click SPEAK and talk, STOP to read it and fix a word, SPEAK again to add more, then SEND — no key to hold.
 
 **CI and deploys.** GitHub Actions and GitLab CI as the steps of your latest commit — what each step does, how long it took, a live clock while it runs, and one line on what's up to you. Run for a deploy (always confirmed), Fix with Claude for a failure, Rerun, and the log.
 
