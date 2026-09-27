@@ -112,6 +112,39 @@ final class ShellSnapshotTests: XCTestCase {
         try sheetRep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path!).appending(path: "workflow-sheet.png"))
     }
 
+    func testPipeline() async throws {
+        let path = ProcessInfo.processInfo.environment["MEEPO_SNAPSHOT_DIR"]
+        try XCTSkipIf(path == nil, "pictures only on request")
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        let now = Date.now
+        func shot(_ steps: [Pipeline.Step], _ file: String) async throws {
+            let pipeline = Pipeline(branch: "master", sha: "d015346b", steps: steps, title: "fix: loans recalculation")
+            let view = PipelineView(pipeline: pipeline, runs: [], project: nil, name: "taxinet", confirm: { _ in }, start: { _ in })
+                .padding(14).frame(width: 300, alignment: .topLeading).background(Tokens.surface).environment(store)
+            let window = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 300, height: 330), styleMask: [.titled], backing: .buffered, defer: false)
+            window.contentView = NSHostingView(rootView: view)
+            window.makeKeyAndOrderFront(nil)
+            defer { window.orderOut(nil) }
+            try await Task.sleep(for: .seconds(1.5))
+            let content = try XCTUnwrap(window.contentView)
+            let rep = try XCTUnwrap(content.bitmapImageRepForCachingDisplay(in: content.bounds))
+            content.cacheDisplay(in: content.bounds, to: rep)
+            try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path!).appending(path: file))
+        }
+        try await shot([
+            Pipeline.Step(name: "CI", state: .passed, url: "https://x", started: now - 400, finished: now - 250),
+            Pipeline.Step(name: "Build & Push", state: .running, url: "https://x", started: now - 149),
+            Pipeline.Step(name: "Deploy", state: .manual, trigger: "deploy.yml"),
+        ], "pipeline-running.png")
+        try await shot([
+            Pipeline.Step(name: "CI", state: .passed, url: "https://x", started: now - 400, finished: now - 250),
+            Pipeline.Step(name: "Build & Push", state: .passed, url: "https://x", started: now - 249, finished: now - 60),
+            Pipeline.Step(name: "Deploy", state: .manual, trigger: "deploy.yml"),
+        ], "pipeline-ready.png")
+    }
+
     func testOnboarding() async throws {
         let path = ProcessInfo.processInfo.environment["MEEPO_SNAPSHOT_DIR"]
         try XCTSkipIf(path == nil, "pictures only on request")

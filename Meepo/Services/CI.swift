@@ -15,6 +15,9 @@ struct CIRun: Decodable, Equatable, Identifiable {
     var event: String?
     /// GitLab's job `failure_reason` (script_failure, ci_quota_exceeded, …); GitHub doesn't give one.
     var failureReason: String?
+    /// When it really began (a rerun starts again) and last changed — its end once completed.
+    var startedAt: Date?
+    var updatedAt: Date?
     var id: Int64 { databaseId }
 
     var isRunning: Bool { status != "completed" }
@@ -56,7 +59,20 @@ struct Pipeline: Equatable {
         var url: String?
         /// What `start` launches: a workflow file (GitHub) or a manual job id (GitLab); nil = can't be started.
         var trigger: String?
+        var started: Date?
+        /// Nil while it runs.
+        var finished: Date?
         var id: String { name }
+
+        /// What a step does, in plain words, from its usual names; nil when the name says nothing known.
+        static func purpose(of name: String) -> String? {
+            let rules: [(String, String)] = [
+                (#"(?i)deploy|release|publish|prod|\bcd\b"#, "puts it live"),
+                (#"(?i)build|push|image|docker|package|bundle"#, "builds the app"),
+                (#"(?i)\bci\b|test|check|lint|verify|spec"#, "checks the code: tests and linters"),
+            ]
+            return rules.first { name.range(of: $0.0, options: .regularExpression) != nil }?.1
+        }
     }
 
     let branch: String
@@ -80,6 +96,29 @@ struct Pipeline: Equatable {
     /// The tooltip: "main @ d486833 — feat: new icon".
     var commitHelp: String { "\(branch) @ \(sha.prefix(7))" + (title.map { " — " + $0 } ?? "") }
 
+    /// One sentence for "where is it now, and is it waiting for me?".
+    var summary: (text: String, needsYou: Bool) {
+        if let failed = steps.first(where: { $0.state == .failed }) {
+            return ("\(failed.name) failed — see why, or let Claude fix it.", true)
+        }
+        if let running = steps.first(where: { $0.state == .running }) {
+            let number = (steps.firstIndex(of: running) ?? 0) + 1
+            return ("\(running.name) is running — step \(number) of \(steps.count).", false)
+        }
+        if let ready = steps.first(where: { $0.state == .manual && canStart($0) }) {
+            return ("Ready: press Run when you want \(ready.name) for \(commitLabel).", true)
+        }
+        if let gate = steps.first(where: { $0.state == .manual && $0.trigger == nil }) {
+            return ("\(gate.name) waits for someone's approval on the CI's site.", true)
+        }
+        if let pending = steps.first(where: { $0.state == .pending }) { return ("\(pending.name) is about to start.", false) }
+        if steps.isEmpty { return ("No steps yet for \(commitLabel).", false) }
+        return ("All steps done for \(commitLabel).", false)
+    }
+
+    /// A step is working right now (a stage queued behind a manual gate can wait for days, so it doesn't count).
+    var isRunning: Bool { steps.contains { $0.state == .running } }
+
     /// A manual step may start once every step before it passed or was skipped.
     func canStart(_ step: Step) -> Bool {
         guard step.trigger != nil, let index = steps.firstIndex(of: step) else { return false }
@@ -96,7 +135,7 @@ struct GitHubActions: CIProvider {
     var reviewRequest: String { "a PR into %@ with `gh pr create`" }
 
     func runs(in path: String) async -> [CIRun] {
-        let fields = "databaseId,workflowName,headBranch,headSha,status,conclusion,createdAt,attempt,url,event"
+        let fields = "databaseId,workflowName,headBranch,headSha,status,conclusion,createdAt,startedAt,updatedAt,attempt,url,event"
         guard let data = await CLI.run(gh, ["run", "list", "-L", "30", "--json", fields], in: path) else { return [] }
         return (try? Self.decoder.decode([CIRun].self, from: data)) ?? []
     }
@@ -139,7 +178,8 @@ struct GitHubActions: CIProvider {
         let deploys = workflows.filter { $0.name.range(of: #"(?i)deploy|release|\bcd\b"#, options: .regularExpression) != nil }
         var steps = latest.values.sorted { $0.createdAt < $1.createdAt }.map { run in
             Pipeline.Step(name: run.workflowName, state: state(of: run), url: run.url,
-                          trigger: deploys.first { $0.name == run.workflowName }?.path)
+                          trigger: deploys.first { $0.name == run.workflowName }?.path,
+                          started: run.startedAt ?? run.createdAt, finished: run.isRunning ? nil : run.updatedAt)
         }
         for deploy in deploys where latest[deploy.name] == nil {
             steps.append(Pipeline.Step(name: deploy.name, state: .manual, trigger: deploy.path))
@@ -148,6 +188,8 @@ struct GitHubActions: CIProvider {
     }
 
     private static func state(of run: CIRun) -> Pipeline.Step.State {
+        if run.status == "waiting" { return .manual }            // an environment waiting for someone's approval
+        if ["queued", "requested", "pending"].contains(run.status) { return .pending }
         if run.isRunning { return .running }
         if run.succeeded { return .passed }
         if run.conclusion == "skipped" || run.conclusion == "neutral" { return .skipped }
@@ -251,8 +293,10 @@ struct GitLabCI: CIProvider {
                 : manual != nil ? .manual
                 : !statuses.isEmpty && statuses.subtracting(["skipped"]).isEmpty ? .skipped
                 : .passed
+            let ends = jobs.map(\.finished_at)
             return Pipeline.Step(name: stage, state: state, url: jobs.count == 1 ? jobs[0].web_url : url,
-                                 trigger: manual.map { String($0.id) })
+                                 trigger: manual.map { String($0.id) }, started: jobs.compactMap(\.started_at).min(),
+                                 finished: ends.contains { $0 == nil } ? nil : ends.compactMap { $0 }.max())
         }
     }
 
@@ -266,6 +310,8 @@ struct GitLabCI: CIProvider {
         let web_url: String
         let allow_failure: Bool?
         var failure_reason: String?
+        var started_at: Date?
+        var finished_at: Date?
     }
 
     struct APIPipeline: Decodable {

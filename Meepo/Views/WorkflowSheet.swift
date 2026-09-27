@@ -20,7 +20,7 @@ struct WorkflowSheet: View {
 
     private var suggestedName: String { Recipes.suggestedName(for: steps) }
     private var slug: String { ClaudeLauncher.worktreeSlug(name.isEmpty ? suggestedName : name) }
-    private var trimmedCheck: String { check.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var trimmedCheck: String { check.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces) }
     private var checkProject: Project? { everyProject ? nil : project }
 
     var body: some View {

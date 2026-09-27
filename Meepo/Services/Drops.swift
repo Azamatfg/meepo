@@ -69,9 +69,11 @@ extension AppStore {
     /// terminal, one after another. The user's clipboard comes back afterwards, unless they copied something new.
     func pasteImages(_ images: [NSImage], into sessionId: Int64) {
         guard !images.isEmpty else { return }
-        let pasteboard = NSPasteboard.general
-        let saved = Drops.snapshot(pasteboard)
-        Task { @MainActor in
+        let previous = pasting
+        pasting = Task { @MainActor in
+            await previous?.value
+            let pasteboard = NSPasteboard.general
+            let saved = Drops.snapshot(pasteboard)
             for image in images {
                 pasteboard.clearContents()
                 pasteboard.writeObjects([image])

@@ -186,7 +186,8 @@ private struct ProjectCI: View {
                 .help("On: rerun a failure once, then fix it in a new session with a PR/MR (max 3). Deploys only notify.")
             }
             if let pipeline {
-                PipelineView(pipeline: pipeline, project: project, confirmation: $confirmation)
+                PipelineView(pipeline: pipeline, runs: runs, project: project, name: project.name,
+                             confirm: { confirmation = $0 }) { await store.startPipelineStep($0, in: project) }
                 if let head = runs.first(where: { $0.headBranch == pipeline.branch }), head.isInfraFailure {
                     Text("\(head.failureReason ?? "") — CI didn't run the code, not a code failure")
                         .font(.caption).foregroundStyle(Tokens.warn)
@@ -238,43 +239,6 @@ enum StepLook {
         case .manual: Tokens.alert
         }
     }
-}
-
-/// The default branch's latest commit step by step: CI → build → deploy. Manual steps start on RUN, after a confirmation.
-struct PipelineView: View {
-    @Environment(AppStore.self) private var store
-    let pipeline: Pipeline
-    let project: Project
-    @Binding var confirmation: PixelConfirmation?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text("\(pipeline.branch) · \(pipeline.commitLabel)").font(Fonts.mono(11)).foregroundStyle(Tokens.textDim).lineLimit(1)
-                .help(pipeline.commitHelp)
-            ForEach(pipeline.steps) { step in
-                HStack {
-                    Text(StepLook.symbol(step.state)).font(Fonts.mono(13)).foregroundStyle(StepLook.color(step.state))
-                    Text(step.name).foregroundStyle(Tokens.text).lineLimit(1)
-                    Spacer()
-                    if step.trigger != nil {
-                        Button("RUN") {
-                            confirmation = PixelConfirmation(
-                                title: "RUN \(step.name.uppercased())?",
-                                message: "\(project.name) · \(pipeline.commitDetail)",
-                                action: "RUN"
-                            ) { Task { await store.startPipelineStep(step, in: project) } }
-                        }
-                        .buttonStyle(PixelButtonStyle())
-                        .disabled(!pipeline.canStart(step))
-                        .help(pipeline.canStart(step) ? "Start \(step.name) on this commit" : "Waits for the steps above to pass")
-                    }
-                    if let url = step.url.flatMap(URL.init(string:)) { Link("↗", destination: url).foregroundStyle(Tokens.screen) }
-                }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
 }
 
 struct CIRunRow: View {

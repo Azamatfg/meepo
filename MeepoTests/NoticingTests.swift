@@ -53,9 +53,8 @@ final class NoticingTests: XCTestCase {
 }
 
 @MainActor
-final class ChainRunTests: XCTestCase {
+final class SuggestionStoreTests: XCTestCase {
     private var store: AppStore!
-    private var session: Session { store.sessions[0] }
 
     override func setUp() async throws {
         let db = try DatabaseQueue()
@@ -64,31 +63,22 @@ final class ChainRunTests: XCTestCase {
         store = AppStore(db: db, bridge: BridgeInstaller(settingsURL: tmp.appending(path: "s.json"), meepoHome: tmp),
                          usageRoot: tmp, defaults: UserDefaults(suiteName: "meepo-tests-\(UUID().uuidString)")!)
         try store.addProject(at: try makeTempRepo())
-        try store.createSession(projectId: store.projects[0].id!, model: nil, prompt: nil)
     }
 
-    private func stop(_ reply: String, background: Int = 0) {
-        var payload = HookPayload(event: "Stop", claudeSessionId: session.claudeSessionId, lastAssistantMessage: reply)
-        payload.backgroundTasks = background
-        store.handleHookEvent(payload, sessionId: session.id!)
-    }
-
-    func testEachStepWaitsForTheRealEndAndQuestionsPause() {
-        store.runChain(["simplify", "ship", "sync"], in: session.id!)
-        XCTAssertEqual(store.runningChains[session.id!]?.next, 1)
-        stop("Started the build.", background: 1)
-        XCTAssertEqual(store.runningChains[session.id!]?.next, 1, "background work still running: not done")
-        stop("Simplified three files.")
-        XCTAssertEqual(store.runningChains[session.id!]?.next, 2)
-        stop("Push to main now?")
-        XCTAssertEqual(store.runningChains[session.id!]?.paused, true, "Claude asked: the user answers first")
-        stop("Pushed.")
-        XCTAssertEqual(store.runningChains[session.id!]?.next, 2, "paused stays paused")
-        store.resumeChain(session.id!)
-        XCTAssertEqual(store.runningChains[session.id!]?.next, 3)
-        stop("Memory updated.")
-        XCTAssertNil(store.runningChains[session.id!])
-        XCTAssertEqual(store.chainRuns["simplify>ship>sync"], 1, "measured: ran to the end once")
+    func testOldChainsComeBackAsSuggestions() throws {
+        let defaults = UserDefaults(suiteName: "meepo-tests-\(UUID().uuidString)")!
+        defaults.set(try JSONEncoder().encode([["simplify", "sync"]]), forKey: "chains")
+        defaults.set(["simplify>sync": 2], forKey: "chainRuns")
+        let applied = ["chain:simplify>sync": AppStore.SuggestionState(dismissedAt: nil, appliedAt: .now)]
+        defaults.set(try JSONEncoder().encode(applied), forKey: "suggestionStates")
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let tmp = FileManager.default.temporaryDirectory.appending(path: "retire-\(UUID().uuidString)")
+        let store = AppStore(db: db, bridge: BridgeInstaller(settingsURL: tmp.appending(path: "s.json"), meepoHome: tmp),
+                             usageRoot: tmp, defaults: defaults)
+        XCTAssertNil(store.suggestionStates["chain:simplify>sync"]?.appliedAt, "offered again, now as a skill button")
+        XCTAssertNil(defaults.object(forKey: "chains"))
+        XCTAssertNil(defaults.object(forKey: "chainRuns"))
     }
 
     func testNotNowComesBackWhenTheHabitDoubles() throws {

@@ -58,6 +58,27 @@ final class RecipesTests: XCTestCase {
         XCTAssertNil(Recipes.check(inHookCommand: "npm test"), "not meepo's")
     }
 
+    /// Checks as people type them — a trailing `;`, a background `&`, a `# comment` — still run as the shell
+    /// sees them, instead of the hook failing to parse (which would block Claude after every answer).
+    func testChecksWithShellEndingsStillParse() throws {
+        let repo = FileManager.default.temporaryDirectory.appending(path: "recipes-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        XCTAssertEqual(try sh("git init -q && echo x > a.txt", in: repo).status, 0)
+        for check in ["true;", "true # fast", "true &"] {
+            XCTAssertEqual(try sh(Recipes.checkHookCommand(check), in: repo).status, 0, check)
+            XCTAssertEqual(Recipes.check(inHookCommand: Recipes.checkHookCommand(check)), check)
+        }
+        XCTAssertEqual(try sh(Recipes.checkHookCommand("false # always"), in: repo).status, 2)
+    }
+
+    func testDescriptionIsAQuotedYAMLString() throws {
+        let text = Recipes.skill(name: "lint", steps: [.prompt("Fix lint: run npm test # all of it")])
+        let line = try XCTUnwrap(text.components(separatedBy: "\n").first { $0.hasPrefix("description: ") })
+        let value = String(line.dropFirst("description: ".count))
+        XCTAssertEqual(try JSONDecoder().decode(String.self, from: Data(value.utf8)), "Runs Fix lint: run npm test # all of it")
+    }
+
     func testSavedWorkflowsReadMeta() throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "wf-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -125,7 +146,6 @@ final class WorkflowStoreTests: XCTestCase {
         let suggestion = Noticing.Suggestion(kind: .chain(["simplify", "ship"]), count: 5)
         try store.makeButton(from: suggestion)
         XCTAssertEqual(store.skillButtons, ["simplify-ship"])
-        XCTAssertTrue(store.chains.isEmpty, "noticed chains no longer go to meepo's own runner")
     }
 
     func testProjectCheckStaysPersonal() throws {

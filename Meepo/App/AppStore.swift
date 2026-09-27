@@ -65,9 +65,8 @@ final class AppStore {
         contextWindows = Self.load([String: Int].self, Self.contextWindowsKey, from: defaults) ?? [:]
         stages = Self.load([Stage].self, Self.stagesKey, from: defaults) ?? Stage.defaults
         guidedMode = defaults.bool(forKey: Self.guidedKey)
+        Self.retireChains(from: defaults)
         suggestionStates = Self.load([String: SuggestionState].self, Self.suggestionsKey, from: defaults) ?? [:]
-        chains = Self.load([[String]].self, Self.chainsKey, from: defaults) ?? []
-        chainRuns = (defaults.dictionary(forKey: Self.chainRunsKey) as? [String: Int]) ?? [:]
         skillButtons = defaults.stringArray(forKey: Self.skillButtonsKey) ?? []
         let preset = defaults.string(forKey: Self.shellPresetKey).flatMap(ShellLayout.Preset.init(rawValue:)) ?? .focus
         shellPreset = preset
@@ -305,18 +304,10 @@ final class AppStore {
     }
 
     private static let suggestionsKey = "suggestionStates"
-    private static let chainsKey = "chains"
-    private static let chainRunsKey = "chainRuns"
 
     private(set) var suggestionStates: [String: SuggestionState] = [:]
     /// Everything noticed in history, newest reading; `visibleSuggestions` filters what the user already answered.
     private(set) var suggestions: [Noticing.Suggestion] = []
-    /// Command chains the user turned into buttons, e.g. ["simplify", "ship", "sync"].
-    private(set) var chains: [[String]] = []
-    /// How many times each chain ran to the end — the measure for an applied chain.
-    private(set) var chainRuns: [String: Int] = [:]
-    /// Chains running now: which step comes next; `paused` when Claude ended a step with a question.
-    private(set) var runningChains: [Int64: (commands: [String], next: Int, paused: Bool)] = [:]
 
     var visibleSuggestions: [Noticing.Suggestion] {
         suggestions.filter { suggestion in
@@ -342,68 +333,24 @@ final class AppStore {
         saveSuggestionStates()
     }
 
-    func removeChain(_ commands: [String]) {
-        chains.removeAll { $0 == commands }
-        defaults.set(try? JSONEncoder().encode(chains), forKey: Self.chainsKey)
-        if let key = suggestionStates.keys.first(where: { $0 == "chain:" + commands.joined(separator: ">") }) {
-            suggestionStates[key]?.appliedAt = nil
-            saveSuggestionStates()
-        }
-    }
-
     func markApplied(_ suggestion: Noticing.Suggestion) {
         suggestionStates[suggestion.id, default: SuggestionState()].appliedAt = .now
         saveSuggestionStates()
     }
 
+    /// Before 0.4 meepo typed a chain's commands itself (a "Chain paused" banner and all). Those chains are
+    /// gone; each one's suggestion comes back, so "Make a button" can turn it into a skill.
+    private static func retireChains(from defaults: UserDefaults) {
+        guard let data = defaults.data(forKey: "chains"), let chains = try? JSONDecoder().decode([[String]].self, from: data) else { return }
+        var states = load([String: SuggestionState].self, suggestionsKey, from: defaults) ?? [:]
+        for chain in chains { states["chain:" + chain.joined(separator: ">")]?.appliedAt = nil }
+        defaults.set(try? JSONEncoder().encode(states), forKey: suggestionsKey)
+        defaults.removeObject(forKey: "chains")
+        defaults.removeObject(forKey: "chainRuns")
+    }
+
     private func saveSuggestionStates() {
         defaults.set(try? JSONEncoder().encode(suggestionStates), forKey: Self.suggestionsKey)
-    }
-
-    /// Chains this project can run: every command in it exists here (own or built in).
-    func chains(for projectId: Int64) -> [[String]] {
-        let names = Set((commandsByProject[projectId] ?? []).map(\.name))
-        return chains.filter { $0.allSatisfy(names.contains) }
-    }
-
-    /// Types the first command; each next one follows the session's real end of turn (a Stop with no
-    /// background work). A step that ends with a question pauses the chain until the user resumes it.
-    func runChain(_ commands: [String], in sessionId: Int64) {
-        guard let first = commands.first else { return }
-        runningChains[sessionId] = (commands, 1, false)
-        type("/\(first)\r", into: sessionId)
-    }
-
-    func resumeChain(_ sessionId: Int64) {
-        guard let run = runningChains[sessionId] else { return }
-        runningChains[sessionId]?.paused = false
-        advanceChain(sessionId, run: (run.commands, run.next, false))
-    }
-
-    func stopChain(_ sessionId: Int64) { runningChains[sessionId] = nil }
-
-    private func advanceChain(_ sessionId: Int64, run: (commands: [String], next: Int, paused: Bool)) {
-        guard run.next < run.commands.count else {
-            runningChains[sessionId] = nil
-            chainRuns[run.commands.joined(separator: ">"), default: 0] += 1
-            defaults.set(chainRuns, forKey: Self.chainRunsKey)
-            return
-        }
-        runningChains[sessionId] = (run.commands, run.next + 1, false)
-        type("/\(run.commands[run.next])\r", into: sessionId)
-    }
-
-    /// Called for every hook event of a session with a chain running.
-    private func stepChain(_ payload: HookPayload, sessionId: Int64) {
-        guard let run = runningChains[sessionId], !run.paused else { return }
-        if payload.event == "StopFailure" { runningChains[sessionId] = nil; return }
-        guard payload.event == "Stop", payload.backgroundTasks == 0 else { return }
-        let reply = (payload.lastAssistantMessage ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if reply.hasSuffix("?") || reply.hasSuffix("？") {
-            runningChains[sessionId]?.paused = true // Claude asked something: the user answers first
-            return
-        }
-        advanceChain(sessionId, run: run)
     }
 
     /// A first draft of a personal skill for a request the user keeps typing — `claude -p`, only on click.
@@ -454,6 +401,8 @@ final class AppStore {
     // MARK: Workflows — the constructor writes Claude Code files (Recipes), meepo only starts them
 
     private static let skillButtonsKey = "skillButtons"
+    /// The image paste in progress (Drops): the next one waits for it and its clipboard restore.
+    var pasting: Task<Void, Never>?
     /// Personal skills shown as buttons next to the stages, in the order they were made.
     private(set) var skillButtons: [String] = []
     /// Claude Code's saved workflows each project can run (~/.claude/workflows and the project's own).
@@ -498,13 +447,6 @@ final class AppStore {
         try makeButton(named: Recipes.buttonName(for: commands), steps: commands.map(Recipes.Step.command))
     }
 
-    /// An older meepo-run chain, rewritten as a skill button.
-    func saveChainAsSkill(_ chain: [String]) throws {
-        try makeButton(chain: chain)
-        chains.removeAll { $0 == chain }
-        defaults.set(try? JSONEncoder().encode(chains), forKey: Self.chainsKey)
-    }
-
     /// Repeats a button's skill in this session while it stays open (Claude Code's /loop).
     func repeatButton(_ name: String, every minutes: Int, in sessionId: Int64) {
         type(Recipes.loopCommand(skill: name, minutes: minutes) + "\r", into: sessionId)
@@ -512,8 +454,11 @@ final class AppStore {
 
     /// Asks Claude Code's /schedule for a cloud routine with the button's steps written out.
     func scheduleButton(_ name: String, when: String, in sessionId: Int64) throws {
-        let text = try String(contentsOf: skillFile(name), encoding: .utf8)
-        type(Recipes.scheduleRequest(steps: Recipes.steps(inSkill: text), when: when) + "\r", into: sessionId)
+        let steps = Recipes.steps(inSkill: try String(contentsOf: skillFile(name), encoding: .utf8))
+        guard !steps.isEmpty else {
+            throw ClaudeHeadless.Failure(errorDescription: "/\(name) isn't a numbered list of steps any more — schedule it in Claude Code with /schedule")
+        }
+        type(Recipes.scheduleRequest(steps: steps, when: when) + "\r", into: sessionId)
     }
 
     func runWorkflow(_ workflow: Recipes.SavedWorkflow, in sessionId: Int64) {
@@ -731,7 +676,6 @@ final class AppStore {
         }
         reload()
         if sessionId == selectedSessionId { reloadEvents() }
-        stepChain(payload, sessionId: sessionId)
         if payload.event == "Stop", payload.backgroundTasks == 0, relayingSessionIds.contains(sessionId) {
             finishRelay(sessionId, summary: payload.lastAssistantMessage)
             return nil
@@ -1469,6 +1413,11 @@ final class AppStore {
     /// CI of repos that aren't Meepo projects themselves: the ones inside a plain project folder and "Also work
     /// in" folders. Shown next to the project's CI; no autofix or notifications for them.
     private(set) var repoCI: [String: (runs: [CIRun], pipeline: Pipeline?)] = [:]
+
+    /// A step is running or queued somewhere: CI is polled more often.
+    var isCIRunning: Bool {
+        pipelines.values.contains(where: \.isRunning) || repoCI.values.contains { $0.pipeline?.isRunning == true }
+    }
 
     /// Repos inside a project folder that isn't one itself (charge-ev → ocpi, ocpp2.0, …), by project path.
     private(set) var nestedRepos: [String: [Repo]] = [:]

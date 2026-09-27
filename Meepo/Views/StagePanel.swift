@@ -55,13 +55,6 @@ struct StagePanel: View {
                     .overlay { if index == next { Capsule().strokeBorder(Tokens.work, lineWidth: 1.5) } }
                     .help(help(for: stage))
             }
-            ForEach(store.chains(for: session.projectId), id: \.self) { chain in
-                Button(chain.map { "/" + $0 }.joined(separator: " → ")) { store.runChain(chain, in: session.id!) }
-                    .buttonStyle(PixelButtonStyle())
-                    .overlay { Capsule().strokeBorder(Tokens.work.opacity(0.5), lineWidth: 1) }
-                    .disabled(store.runningChains[session.id!] != nil)
-                    .help("Runs them in order, each after the one before really ends (Automations)")
-            }
             ForEach(store.skillButtons(for: session.projectId), id: \.self) { name in
                 Button("/" + name) { store.type("/\(name)\r", into: session.id!) }
                     .buttonStyle(PixelButtonStyle())
@@ -75,7 +68,10 @@ struct StagePanel: View {
                                 }
                             }
                         }
-                        Button("Schedule in the cloud…") { scheduling = name }
+                        Button("Schedule in the cloud…") {
+                            buttonError = nil
+                            scheduling = name
+                        }
                         Divider()
                         Button("Remove button") { store.removeButton(name) }
                     }

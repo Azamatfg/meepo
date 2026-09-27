@@ -267,33 +267,19 @@ struct CIPanel: View {
         let runs = store.ciRuns[project.id!] ?? []
         let pipeline = store.pipelines[project.id!]
         let failing = runs.first { $0.headBranch == session.branch && $0.failed && $0.headBranch != pipeline?.branch }
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                if let pipeline {
-                    ForEach(pipeline.steps) { step in
-                        Text(StepLook.symbol(step.state) + step.name).font(Fonts.mono(11))
-                            .foregroundStyle(StepLook.color(step.state)).lineLimit(1)
-                    }
-                } else if runs.isEmpty {
-                    Text("No CI").font(.caption).foregroundStyle(Tokens.textDim)
+                if pipeline == nil {
+                    Text(runs.isEmpty ? "No CI" : "No runs on the main branch yet").font(.caption).foregroundStyle(Tokens.textDim)
                 }
                 Spacer(minLength: 0)
                 Button("All") { isCIShown = true }.buttonStyle(PixelButtonStyle(compact: true))
                     .help("Every project's CI, with autofix and other branches")
             }
-            if let pipeline, let step = pipeline.steps.first(where: { $0.trigger != nil && pipeline.canStart($0) }) {
-                HStack {
-                    Text("\(step.name) ready · \(pipeline.commitLabel)").font(.caption).foregroundStyle(Tokens.textDim).lineLimit(1)
-                        .help(pipeline.commitHelp)
-                    Spacer()
-                    Button("Run") {
-                        store.confirmation = PixelConfirmation(
-                            title: "Run \(step.name)?",
-                            message: "\(project.name) · \(pipeline.commitDetail)",
-                            action: "Run"
-                        ) { Task { await store.startPipelineStep(step, in: project) } }
-                    }
-                    .buttonStyle(PixelButtonStyle(compact: true))
+            if let pipeline {
+                PipelineView(pipeline: pipeline, runs: runs, project: project, name: project.name,
+                             confirm: { store.confirmation = $0 }) {
+                    await store.startPipelineStep($0, in: project)
                 }
             }
             if let head = runs.first(where: { $0.headBranch == pipeline?.branch }), head.isInfraFailure {
@@ -315,26 +301,9 @@ private struct RepoCI: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let pipeline {
-                HStack(spacing: 6) {
-                    ForEach(pipeline.steps) { step in
-                        Text(StepLook.symbol(step.state) + step.name).font(Fonts.mono(11))
-                            .foregroundStyle(StepLook.color(step.state)).lineLimit(1)
-                    }
-                }
-                if let step = pipeline.steps.first(where: { $0.trigger != nil && pipeline.canStart($0) }) {
-                    HStack {
-                        Text("\(step.name) ready · \(pipeline.commitLabel)").font(.caption).foregroundStyle(Tokens.textDim).lineLimit(1)
-                        .help(pipeline.commitHelp)
-                        Spacer()
-                        Button("Run") {
-                            store.confirmation = PixelConfirmation(
-                                title: "Run \(step.name)?",
-                                message: "\(repo.name) · \(pipeline.commitDetail)",
-                                action: "Run"
-                            ) { Task { await store.startRepoPipelineStep(step, in: repo) } }
-                        }
-                        .buttonStyle(PixelButtonStyle(compact: true))
-                    }
+                PipelineView(pipeline: pipeline, runs: runs, project: nil, name: repo.name,
+                             confirm: { store.confirmation = $0 }) {
+                    await store.startRepoPipelineStep($0, in: repo)
                 }
             } else if runs.isEmpty {
                 Text("No CI").font(.caption).foregroundStyle(Tokens.textDim)

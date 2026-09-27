@@ -174,11 +174,16 @@ enum GitPanel {
         } else if base.hasPrefix("ssh://git@") {
             base = "https://" + base.dropFirst("ssh://git@".count)
         }
-        if base.hasSuffix(".git") { base.removeLast(4) }
-        guard base.hasPrefix("https://"), let host = URL(string: base)?.host() else { return nil }
-        if host.contains("github") { return URL(string: base + "/commit/" + commit) }
-        if host.contains("gitlab") { return URL(string: base + "/-/commit/" + commit) }
-        return nil
+        guard var parts = URLComponents(string: base), parts.scheme == "https", let host = parts.host else { return nil }
+        // https://user:TOKEN@github.com/o/r.git: the token must not end up in the browser's history.
+        (parts.user, parts.password, parts.port) = (nil, nil, nil)
+        var path = parts.path
+        while path.hasSuffix("/") { path.removeLast() }
+        if path.hasSuffix(".git") { path.removeLast(4) }
+        if host.contains("github") { parts.path = path + "/commit/" + commit } else if host.contains("gitlab") {
+            parts.path = path + "/-/commit/" + commit
+        } else { return nil }
+        return parts.url
     }
 
     /// Files that differ between two commits, with +/− (renames keep their old path for the left side).

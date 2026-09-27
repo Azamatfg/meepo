@@ -69,10 +69,10 @@ struct MeepoApp: App {
                             try? await Task.sleep(for: .seconds(300))
                         }
                     }
-                    Task { // CI changes slowly; once a minute is plenty and cheap on the GitHub API
+                    Task { // Once a minute is cheap on the GitHub API; every 15 s while a step runs, so it looks live.
                         while !Task.isCancelled {
                             await store.refreshCI()
-                            try? await Task.sleep(for: .seconds(60))
+                            try? await Task.sleep(for: .seconds(store.isCIRunning ? 15 : 60))
                         }
                     }
                     // JSONL is appended continuously; Stop events also trigger a refresh.

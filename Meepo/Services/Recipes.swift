@@ -27,7 +27,7 @@ enum Recipes {
         """
         ---
         name: \(name)
-        description: Runs \(steps.map(\.line).joined(separator: ", then "))
+        description: \(yamlString("Runs " + steps.map(\.line).joined(separator: ", then ")))
         disable-model-invocation: true
         ---
         Run these steps in order. Start each one only after the one before it has fully finished.
@@ -36,6 +36,11 @@ enum Recipes {
         \(steps.enumerated().map { "\($0.offset + 1). \($0.element.line)" }.joined(separator: "\n"))
 
         """
+    }
+
+    /// A double-quoted YAML scalar (JSON's string escaping is valid YAML).
+    static func yamlString(_ text: String) -> String {
+        (try? JSONEncoder().encode(text)).map { String(decoding: $0, as: UTF8.self) } ?? "\"\""
     }
 
     /// The steps of a skill written by `skill(…)` — or of any skill that is a numbered list.
@@ -85,14 +90,14 @@ enum Recipes {
     static func checkHookCommand(_ check: String) -> String {
         let quoted = "'" + check.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
         return "\(checkMarker) [ -n \"$(git status --porcelain 2>/dev/null)\" ] || exit 0; "
-            + "out=$( { \(check) ; } 2>&1 ) && exit 0; "
+            + "out=$( {\n\(check)\n} 2>&1 ) && exit 0; "
             + "{ printf 'This check failed: %s\\nFix it, then finish.\\n' \(quoted); printf '%s\\n' \"$out\" | tail -n 40; } >&2; exit 2"
     }
 
     /// The check a hook command runs, if meepo wrote it.
     static func check(inHookCommand command: String) -> String? {
         guard command.hasPrefix(checkMarker),
-              let match = command.firstMatch(of: #/out=\$\( \{ (.+) ; \} 2>&1 \)/#) else { return nil }
+              let match = command.firstMatch(of: #/out=\$\( \{\n(.+)\n\} 2>&1 \)/#) else { return nil }
         return String(match.1)
     }
 

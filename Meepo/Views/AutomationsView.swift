@@ -37,10 +37,6 @@ struct AutomationsView: View {
                             ForEach(store.visibleSuggestions) { NoticedRow(suggestion: $0) }
                         }
                         workflowsSection
-                        if !store.chains.isEmpty {
-                            section("OLDER CHAINS — RUN BY MEEPO")
-                            ForEach(store.chains, id: \.self) { chainRow($0) }
-                        }
                         section("DID MEEPO HELP?")
                         ForEach(Noticing.meepoReplacements, id: \.command) { measureRow($0) }
                         section("SKILLS AND COMMANDS")
@@ -107,20 +103,6 @@ struct AutomationsView: View {
 
     private func section(_ title: String) -> some View {
         Text(title).font(Fonts.ui(11, weight: .bold)).tracking(1.2).foregroundStyle(Tokens.textDim).padding(.top, 14)
-    }
-
-    private func chainRow(_ chain: [String]) -> some View {
-        HStack {
-            Text(chain.map { "/" + $0 }.joined(separator: " → ")).font(Fonts.mono(13).weight(.semibold))
-            Text("ran to the end \(store.chainRuns[chain.joined(separator: ">")] ?? 0)×").foregroundStyle(Tokens.textDim)
-            Spacer()
-            Button("Save as skill") { apply { try store.saveChainAsSkill(chain) } }
-                .buttonStyle(PixelButtonStyle(compact: true, isPrimary: true))
-                .help("A skill of yours runs the same steps and works in any terminal, as /" + chain.joined(separator: "-"))
-            Button("Remove") { store.removeChain(chain) }.buttonStyle(PixelButtonStyle(compact: true))
-        }
-        .padding(12)
-        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 10))
     }
 
     /// A change in Meepo against the user's real behavior: how often they still reach for the old way.
