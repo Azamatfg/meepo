@@ -91,13 +91,13 @@ final class ChainRunTests: XCTestCase {
         XCTAssertEqual(store.chainRuns["simplify>ship>sync"], 1, "measured: ran to the end once")
     }
 
-    func testNotNowComesBackWhenTheHabitDoubles() {
+    func testNotNowComesBackWhenTheHabitDoubles() throws {
         let suggestion = Noticing.Suggestion(kind: .chain(["qa", "ship"]), count: 6)
         store.dismissSuggestion(suggestion)
         XCTAssertEqual(store.suggestionStates[suggestion.id]?.dismissedAt, 6)
-        store.addChain(["qa", "ship"], from: suggestion)
+        try store.makeButton(from: suggestion)
         XCTAssertNotNil(store.suggestionStates[suggestion.id]?.appliedAt)
-        store.removeChain(["qa", "ship"])
+        store.removeButton("qa-ship")
         XCTAssertNil(store.suggestionStates[suggestion.id]?.appliedAt, "removing the button makes it a suggestion again")
     }
 }

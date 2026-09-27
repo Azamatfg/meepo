@@ -11,6 +11,10 @@ struct StagePanel: View {
     @State private var isHandoffShown = false
     @State private var handoffNotes = ""
     @State private var planTask = ""
+    /// The button whose "Schedule in the cloud…" is open.
+    @State private var scheduling: String?
+    @State private var scheduleWhen = ""
+    @State private var buttonError: String?
 
     var body: some View {
         // Scrolls sideways when the window is narrow. Not ViewThatFits: on macOS 15 it measures its options on
@@ -57,6 +61,41 @@ struct StagePanel: View {
                     .overlay { Capsule().strokeBorder(Tokens.work.opacity(0.5), lineWidth: 1) }
                     .disabled(store.runningChains[session.id!] != nil)
                     .help("Runs them in order, each after the one before really ends (Automations)")
+            }
+            ForEach(store.skillButtons(for: session.projectId), id: \.self) { name in
+                Button("/" + name) { store.type("/\(name)\r", into: session.id!) }
+                    .buttonStyle(PixelButtonStyle())
+                    .overlay { Capsule().strokeBorder(Tokens.work.opacity(0.5), lineWidth: 1) }
+                    .help("Your workflow /\(name): runs its steps in order. Right-click to repeat or schedule it.")
+                    .contextMenu {
+                        Menu("Repeat while this session is open") {
+                            ForEach([10, 30, 60, 120], id: \.self) { minutes in
+                                Button(minutes < 60 ? "Every \(minutes) minutes" : "Every \(minutes / 60) hour\(minutes > 60 ? "s" : "")") {
+                                    store.repeatButton(name, every: minutes, in: session.id!)
+                                }
+                            }
+                        }
+                        Button("Schedule in the cloud…") { scheduling = name }
+                        Divider()
+                        Button("Remove button") { store.removeButton(name) }
+                    }
+                    .popover(isPresented: Binding(get: { scheduling == name }, set: { if !$0 { scheduling = nil } }), arrowEdge: .top) {
+                        SchedulePrompt(when: $scheduleWhen, error: buttonError) { when in
+                            do {
+                                try store.scheduleButton(name, when: when, in: session.id!)
+                                scheduling = nil
+                                buttonError = nil
+                            } catch { buttonError = error.localizedDescription }
+                        }
+                    }
+            }
+            if let workflows = store.workflowsByProject[session.projectId], !workflows.isEmpty {
+                PixelMenu(selection: "WORKFLOWS") {
+                    ForEach(workflows) { workflow in
+                        Button(workflow.name) { store.runWorkflow(workflow, in: session.id!) }
+                    }
+                }
+                .help("Claude Code's saved workflows: several agents at once. Pick one to run it in this session.")
             }
             let others = (store.commandsByProject[session.projectId] ?? [])
                 .filter { command in !stages.contains { $0.command == command.name } }
@@ -194,6 +233,32 @@ private struct CommandRow: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
+    }
+}
+
+/// When a button's cloud routine runs, in the user's words — Claude Code's /schedule asks for the rest.
+private struct SchedulePrompt: View {
+    @Binding var when: String
+    let error: String?
+    let onSubmit: (String) -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("WHEN SHOULD IT RUN?").font(Fonts.title(16))
+            TextField("every weekday at 9am", text: $when)
+                .textFieldStyle(.roundedBorder)
+                .font(Fonts.mono(13))
+                .focused($focused)
+                .onSubmit { if !when.trimmingCharacters(in: .whitespaces).isEmpty { onSubmit(when) } }
+            Text("Claude Code's /schedule makes a routine on claude.ai that runs in the cloud on this repo — even with your Mac off. It needs GitHub connected there; your own skills aren't in the cloud, so the steps are sent written out.")
+                .font(.caption).foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
+            if let error { Text(error).font(.caption).foregroundStyle(Tokens.danger) }
+        }
+        .padding(12)
+        .frame(width: 380)
+        .paperSheet()
+        .onAppear { focused = true }
     }
 }
 

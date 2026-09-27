@@ -6,6 +6,7 @@ struct NoticedRow: View {
     let suggestion: Noticing.Suggestion
     var isCard = false
     @State private var isDrafting = false
+    @State private var error: String?
 
     var body: some View {
         HStack(alignment: .center, spacing: 18) {
@@ -15,11 +16,15 @@ struct NoticedRow: View {
                 if isCard { Text("MEEPO NOTICED").font(Fonts.ui(11, weight: .bold)).tracking(1.2).foregroundStyle(Tokens.work) }
                 Text(title).font(Fonts.ui(isCard ? 18 : 15, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
                 Text(detail).font(.caption).foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
+                if let error { Text(error).font(.caption).foregroundStyle(Tokens.danger) }
             }
             Spacer(minLength: 8)
             switch suggestion.kind {
             case let .chain(commands):
-                Button("Make a button") { store.addChain(commands, from: suggestion) }
+                Button("Make a button") {
+                    do { try store.makeButton(from: suggestion) } catch { self.error = error.localizedDescription }
+                }
+                .help("Saves /" + commands.joined(separator: "-") + " as a skill of yours and puts it next to the stages")
                     .buttonStyle(PixelButtonStyle(compact: !isCard, isPrimary: true))
             case .skill:
                 Button("Draft a skill…") { isDrafting = true }
@@ -44,7 +49,7 @@ struct NoticedRow: View {
 
     private var detail: String {
         switch suggestion.kind {
-        case .chain: "In the last 8 weeks. A button runs them in order: each starts when the one before really ends, and it stops to let you answer if Claude asks something."
+        case .chain: "In the last 8 weeks. A button runs them in order, as a skill of your own: each starts when the one before has finished, and Claude stops if one asks you something."
         case .skill: "In the last 8 weeks. A skill of your own does it with one command — Claude drafts it, you read and save it."
         }
     }

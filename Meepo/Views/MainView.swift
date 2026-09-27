@@ -644,7 +644,12 @@ private struct TerminalPane: View {
             Tokens.terminalBg
             if let view = store.terminalView(for: sessionId),
                store.runningSessionIds.contains(sessionId) || store.exitedSessionIds.contains(sessionId) {
-                TerminalHost(terminal: view, isFocused: isFocused) { store.selectedSessionId = sessionId }
+                TerminalHost(terminal: view, isFocused: isFocused) {
+                    store.selectedSessionId = sessionId
+                } onDrop: { urls in
+                    store.selectedSessionId = sessionId
+                    store.dropFiles(urls, into: sessionId)
+                }
                     .padding(8)
             }
             if store.terminalView(for: sessionId) == nil {
@@ -790,15 +795,36 @@ private struct CrashNotice: View {
 }
 
 /// Hosts a cached terminal view; swapping views keeps every session's process alive.
-/// A click inside selects the session, since the terminal itself swallows the mouse.
+/// A click inside selects the session, since the terminal itself swallows the mouse. Files dropped on it go to
+/// the session (SwiftTerm doesn't take drops; AppKit hands them to this container, the nearest view that does).
 private struct TerminalHost: NSViewRepresentable {
     let terminal: LocalProcessTerminalView
     let isFocused: Bool
     let onClick: () -> Void
+    let onDrop: ([URL]) -> Void
 
     final class Container: NSView {
         var onClick: (() -> Void)?
+        var onDrop: (([URL]) -> Void)?
         private var monitor: Any?
+
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            registerForDraggedTypes([.fileURL])
+        }
+
+        required init?(coder: NSCoder) { fatalError("not from a nib") }
+
+        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+            Drops.fileURLs(sender.draggingPasteboard).isEmpty ? [] : .copy
+        }
+
+        override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            let urls = Drops.fileURLs(sender.draggingPasteboard)
+            guard !urls.isEmpty else { return false }
+            onDrop?(urls)
+            return true
+        }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -822,6 +848,7 @@ private struct TerminalHost: NSViewRepresentable {
 
     func updateNSView(_ container: Container, context: Context) {
         container.onClick = onClick
+        container.onDrop = onDrop
         let attached = container.subviews.first === terminal
         if !attached {
             container.subviews.forEach { $0.removeFromSuperview() }

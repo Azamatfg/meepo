@@ -33,10 +33,10 @@ final class ClipboardRestoreTests: XCTestCase {
         pasteboard.clearContents()
         pasteboard.writeObjects([item])
 
-        let saved = ScreenshotFlow.snapshot(pasteboard)
+        let saved = Drops.snapshot(pasteboard)
         pasteboard.clearContents()
         pasteboard.writeObjects([NSImage(size: NSSize(width: 2, height: 2))])
-        ScreenshotFlow.restore(saved, to: pasteboard)
+        Drops.restore(saved, to: pasteboard)
 
         XCTAssertEqual(pasteboard.string(forType: .string), "copied text")
         XCTAssertEqual(pasteboard.string(forType: .html), "<b>copied</b>")

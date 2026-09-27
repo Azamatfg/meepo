@@ -2,14 +2,18 @@ import AppKit
 import SwiftUI
 
 /// VS Code's Explorer as a panel: the session folder as a tree, folders open on click, changed files
-/// in their Source Control color; a file opens read-only in Monaco.
+/// in their Source Control color; a file opens read-only in Monaco. Files dropped from Finder are copied in,
+/// like VS Code: onto a folder into it, elsewhere into the project's root.
 struct ExplorerSection: View {
+    @Environment(AppStore.self) private var store
     let root: String
     let changes: [GitPanel.FileChange]
     @State private var expanded: Set<String> = []
     /// Listings by folder ("" = root), read for the root and every open folder.
     @State private var children: [String: [FileTree.Entry]] = [:]
     @State private var opened: String?
+    /// The folder a drag is over ("" = the root).
+    @State private var dropTarget: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
@@ -18,6 +22,10 @@ struct ExplorerSection: View {
                 Text("Empty folder").font(.caption).foregroundStyle(Tokens.textDim)
             }
         }
+        .frame(maxWidth: .infinity, minHeight: 60, alignment: .topLeading)
+        .contentShape(Rectangle())
+        .background(dropTarget == "" ? Tokens.workTint : .clear, in: RoundedRectangle(cornerRadius: 6))
+        .dropDestination(for: URL.self) { urls, _ in copy(urls, into: "") } isTargeted: { dropTarget = $0 ? "" : nil }
         // New files from claude show up without a click; only the root and open folders are read.
         .task(id: root) {
             expanded = []
@@ -67,9 +75,32 @@ struct ExplorerSection: View {
             .padding(.leading, CGFloat(depth) * 12)
             .frame(height: 20)
             .contentShape(Rectangle())
+            .background(dropTarget == entry.path ? Tokens.workTint : .clear, in: RoundedRectangle(cornerRadius: 4))
         }
         .buttonStyle(.plain)
         .help(entry.path)
+        .dropDestination(for: URL.self) { urls, _ in
+            copy(urls, into: entry.isDirectory ? entry.path : (entry.path as NSString).deletingLastPathComponent)
+        } isTargeted: { over in
+            if over { dropTarget = entry.isDirectory ? entry.path : nil } else if dropTarget == entry.path { dropTarget = nil }
+        }
+    }
+
+    /// Copies dropped files into `dir` (relative to the root), then shows that folder open with them in it.
+    private func copy(_ urls: [URL], into dir: String) -> Bool {
+        let files = urls.filter(\.isFileURL)
+        guard !files.isEmpty else { return false }
+        let root = root
+        Task {
+            do {
+                _ = try await Task.detached { try Drops.copy(files, into: URL(filePath: root).appending(path: dir)) }.value
+            } catch {
+                store.bridgeError = "Couldn't copy into \(dir.isEmpty ? "the project" : dir): \(error.localizedDescription)"
+            }
+            if !dir.isEmpty { expanded.insert(dir) }
+            children[dir] = await Task.detached { FileTree.list(dir, in: root) }.value
+        }
+        return true
     }
 
     private func toggle(_ dir: String) {

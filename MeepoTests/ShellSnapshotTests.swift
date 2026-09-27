@@ -88,6 +88,8 @@ final class ShellSnapshotTests: XCTestCase {
         let store = AppStore(db: db, bridge: BridgeInstaller(settingsURL: tmp.appending(path: "s.json"), meepoHome: tmp),
                              usageRoot: tmp, defaults: UserDefaults(suiteName: "meepo-snap-\(UUID().uuidString)")!)
         try store.addProject(at: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()) // this repo
+        try store.makeButton(named: "tidy-ship", steps: [.command("simplify"), .command("commit-push-pr")])
+        try store.addCheck("swift test", in: nil)
         store.refreshProjects()
         let window = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 980, height: 680), styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = NSHostingView(rootView: AutomationsView().environment(store))
@@ -98,6 +100,16 @@ final class ShellSnapshotTests: XCTestCase {
         let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.cacheDisplay(in: view.bounds, to: rep)
         try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path!).appending(path: "automations.png"))
+
+        let sheet = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 720, height: 640), styleMask: [.titled], backing: .buffered, defer: false)
+        sheet.contentView = NSHostingView(rootView: WorkflowSheet(project: store.projects[0]).environment(store))
+        sheet.makeKeyAndOrderFront(nil)
+        defer { sheet.orderOut(nil) }
+        try await Task.sleep(for: .seconds(2))
+        let sheetView = try XCTUnwrap(sheet.contentView)
+        let sheetRep = try XCTUnwrap(sheetView.bitmapImageRepForCachingDisplay(in: sheetView.bounds))
+        sheetView.cacheDisplay(in: sheetView.bounds, to: sheetRep)
+        try sheetRep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path!).appending(path: "workflow-sheet.png"))
     }
 
     func testOnboarding() async throws {

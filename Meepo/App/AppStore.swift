@@ -68,6 +68,7 @@ final class AppStore {
         suggestionStates = Self.load([String: SuggestionState].self, Self.suggestionsKey, from: defaults) ?? [:]
         chains = Self.load([[String]].self, Self.chainsKey, from: defaults) ?? []
         chainRuns = (defaults.dictionary(forKey: Self.chainRunsKey) as? [String: Int]) ?? [:]
+        skillButtons = defaults.stringArray(forKey: Self.skillButtonsKey) ?? []
         let preset = defaults.string(forKey: Self.shellPresetKey).flatMap(ShellLayout.Preset.init(rawValue:)) ?? .focus
         shellPreset = preset
         shell = Self.load(ShellLayout.self, Self.shellKey, from: defaults) ?? ShellLayout.preset(preset) ?? ShellLayout.preset(.focus)!
@@ -227,7 +228,7 @@ final class AppStore {
         let topModel = usageStats(since: .now.addingTimeInterval(-7 * 24 * 3600)).byModel
             .filter { $0.name.hasPrefix("claude-") }.max { $0.totals.total < $1.totals.total }?.name
         return SetupCheck.findings(settings: settings, topModel: topModel,
-                                   commands: SetupCheck.userCommands(claudeHome: bridge.settingsURL.deletingLastPathComponent()))
+                                   commands: SetupCheck.userCommands(claudeHome: claudeHome))
     }
 
     /// Applies a finding's fix, or takes exactly that fix back (`undo`). Logged in Tools → Changes either way.
@@ -341,12 +342,6 @@ final class AppStore {
         saveSuggestionStates()
     }
 
-    func addChain(_ commands: [String], from suggestion: Noticing.Suggestion? = nil) {
-        if !chains.contains(commands) { chains.append(commands) }
-        defaults.set(try? JSONEncoder().encode(chains), forKey: Self.chainsKey)
-        if let suggestion { markApplied(suggestion) }
-    }
-
     func removeChain(_ commands: [String]) {
         chains.removeAll { $0 == commands }
         defaults.set(try? JSONEncoder().encode(chains), forKey: Self.chainsKey)
@@ -433,18 +428,124 @@ final class AppStore {
 
     /// Saves a drafted skill as the user's own (~/.claude/skills/<name>/SKILL.md); never overwrites one.
     func saveSkill(named name: String, text: String, for suggestion: Noticing.Suggestion) throws -> URL {
+        let file = try writeSkill(named: name) { _ in text }
+        markApplied(suggestion)
+        return file
+    }
+
+    /// A new personal skill, logged in Tools → Changes. `text` gets the final name (latin letters, digits, hyphens).
+    private func writeSkill(named name: String, text: (String) -> String) throws -> URL {
         let slug = ClaudeLauncher.worktreeSlug(name)
         guard !slug.isEmpty else { throw ClaudeHeadless.Failure(errorDescription: "The name needs latin letters or digits") }
-        let file = bridge.settingsURL.deletingLastPathComponent().appending(path: "skills/\(slug)/SKILL.md")
+        let file = skillFile(slug)
         guard !FileManager.default.fileExists(atPath: file.path) else {
             throw ClaudeHeadless.Failure(errorDescription: "You already have a skill called \(slug)")
         }
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try text.write(to: file, atomically: true, encoding: .utf8)
+        try text(slug).write(to: file, atomically: true, encoding: .utf8)
         ChangeLog.record("New skill /\(slug)", file: file, backup: nil, backups: backupsDir)
-        markApplied(suggestion)
         refreshProjects()
         return file
+    }
+
+    var claudeHome: URL { bridge.settingsURL.deletingLastPathComponent() }
+    private func skillFile(_ name: String) -> URL { claudeHome.appending(path: "skills/\(name)/SKILL.md") }
+
+    // MARK: Workflows — the constructor writes Claude Code files (Recipes), meepo only starts them
+
+    private static let skillButtonsKey = "skillButtons"
+    /// Personal skills shown as buttons next to the stages, in the order they were made.
+    private(set) var skillButtons: [String] = []
+    /// Claude Code's saved workflows each project can run (~/.claude/workflows and the project's own).
+    private(set) var workflowsByProject: [Int64: [Recipes.SavedWorkflow]] = [:]
+
+    /// Writes the steps as a personal skill and pins it as a button. Returns the skill's name.
+    @discardableResult
+    func makeButton(named name: String, steps: [Recipes.Step]) throws -> String {
+        let file = try writeSkill(named: name) { Recipes.skill(name: $0, steps: steps) }
+        let slug = file.deletingLastPathComponent().lastPathComponent
+        if !skillButtons.contains(slug) { skillButtons.append(slug) }
+        defaults.set(skillButtons, forKey: Self.skillButtonsKey)
+        return slug
+    }
+
+    /// Unpins a button; the skill stays in ~/.claude/skills (Automations lists it; /name still runs it).
+    func removeButton(_ name: String) {
+        skillButtons.removeAll { $0 == name }
+        defaults.set(skillButtons, forKey: Self.skillButtonsKey)
+        // A button made from something noticed ("chain:simplify>ship"): it becomes a suggestion again.
+        for key in suggestionStates.keys where key.hasPrefix("chain:")
+            && Recipes.buttonName(for: key.dropFirst(6).components(separatedBy: ">")) == name {
+            suggestionStates[key]?.appliedAt = nil
+        }
+        saveSuggestionStates()
+    }
+
+    /// Buttons this project can run — the skill still exists.
+    func skillButtons(for projectId: Int64) -> [String] {
+        let names = Set((commandsByProject[projectId] ?? []).map(\.name))
+        return skillButtons.filter(names.contains)
+    }
+
+    /// "Make a button" on a noticed chain: a skill named after its commands.
+    func makeButton(from suggestion: Noticing.Suggestion) throws {
+        guard case let .chain(commands) = suggestion.kind else { return }
+        try makeButton(chain: commands)
+        markApplied(suggestion)
+    }
+
+    private func makeButton(chain commands: [String]) throws {
+        try makeButton(named: Recipes.buttonName(for: commands), steps: commands.map(Recipes.Step.command))
+    }
+
+    /// An older meepo-run chain, rewritten as a skill button.
+    func saveChainAsSkill(_ chain: [String]) throws {
+        try makeButton(chain: chain)
+        chains.removeAll { $0 == chain }
+        defaults.set(try? JSONEncoder().encode(chains), forKey: Self.chainsKey)
+    }
+
+    /// Repeats a button's skill in this session while it stays open (Claude Code's /loop).
+    func repeatButton(_ name: String, every minutes: Int, in sessionId: Int64) {
+        type(Recipes.loopCommand(skill: name, minutes: minutes) + "\r", into: sessionId)
+    }
+
+    /// Asks Claude Code's /schedule for a cloud routine with the button's steps written out.
+    func scheduleButton(_ name: String, when: String, in sessionId: Int64) throws {
+        let text = try String(contentsOf: skillFile(name), encoding: .utf8)
+        type(Recipes.scheduleRequest(steps: Recipes.steps(inSkill: text), when: when) + "\r", into: sessionId)
+    }
+
+    func runWorkflow(_ workflow: Recipes.SavedWorkflow, in sessionId: Int64) {
+        type(Recipes.runRequest(workflow) + "\r", into: sessionId)
+    }
+
+    /// Checks after every answer: in one project's own `.claude/settings.local.json` (nil: every project, in
+    /// ~/.claude/settings.json).
+    func checks(in project: Project?) -> [String] {
+        Recipes.checks(in: (try? settings(for: project).readSettings()) ?? [:])
+    }
+
+    func addCheck(_ check: String, in project: Project?) throws {
+        try editChecks("Check after every answer: \(check)", project) { Recipes.addingCheck(check, to: $0) }
+    }
+
+    func removeCheck(_ check: String, in project: Project?) throws {
+        try editChecks("Remove check: \(check)", project) { Recipes.removingCheck(check, from: $0) }
+    }
+
+    private func editChecks(_ action: String, _ project: Project?, _ change: @escaping ([String: Any]) -> [String: Any]) throws {
+        try settings(for: project).editSettings(action) { $0 = change($0) }
+        // A personal file stays personal: the repo's own exclude file, never committed.
+        if let project { GitService.ignoreLocally(".claude/settings.local.json", in: project.path, backups: backupsDir) }
+    }
+
+    /// The settings file checks live in: the project's own local one, or ~/.claude/settings.json for every project.
+    private func settings(for project: Project?) -> BridgeInstaller {
+        guard let project else { return bridge }
+        var local = bridge
+        local.settingsURL = URL(filePath: project.path).appending(path: ".claude/settings.local.json")
+        return local
     }
 
     // MARK: Automations — the user's skills and commands, how they're used, their settings
@@ -452,7 +553,7 @@ final class AppStore {
     /// Built off the main thread: reads history.jsonl and asks git which project files are the team's.
     func automations() async -> [Automations.Item] {
         let projects = projects.map { (name: $0.name, path: $0.path) }
-        let home = bridge.settingsURL.deletingLastPathComponent()
+        let home = claudeHome
         return await Task.detached {
             let history = (try? String(contentsOf: Automations.historyFile, encoding: .utf8)) ?? ""
             let usage = Automations.usage(historyLines: history.split(separator: "\n"))
@@ -1334,7 +1435,7 @@ final class AppStore {
         for project in projects {
             guard let projectId = project.id, let provider = ciProvider(for: project) else { continue }
             let runs = await provider.runs(in: project.path).sorted { $0.createdAt > $1.createdAt }
-            pipelines[projectId] = await provider.pipeline(runs: runs, in: project.path)
+            pipelines[projectId] = await Pipeline.titled(await provider.pipeline(runs: runs, in: project.path), in: project.path)
             var latest: [String: CIRun] = [:]
             for run in runs where latest[run.key] == nil { latest[run.key] = run }
             ciRuns[projectId] = latest.values.sorted { $0.createdAt > $1.createdAt }
@@ -1390,7 +1491,8 @@ final class AppStore {
             let runs = await provider.runs(in: repo.path).sorted { $0.createdAt > $1.createdAt }
             var latest: [String: CIRun] = [:]
             for run in runs where latest[run.key] == nil { latest[run.key] = run }
-            repoCI[repo.path] = (latest.values.sorted { $0.createdAt > $1.createdAt }, await provider.pipeline(runs: runs, in: repo.path))
+            let pipeline = await Pipeline.titled(await provider.pipeline(runs: runs, in: repo.path), in: repo.path)
+            repoCI[repo.path] = (latest.values.sorted { $0.createdAt > $1.createdAt }, pipeline)
         }
     }
 
@@ -1689,13 +1791,17 @@ final class AppStore {
         }
         mergedWorktreeSessionIds = merged
         var commands: [Int64: [SlashCommand]] = [:]
+        var workflows: [Int64: [Recipes.SavedWorkflow]] = [:]
+        let ownWorkflows = Recipes.savedWorkflows(in: [claudeHome.appending(path: "workflows")])
         var dirty: Set<Int64> = []
         for project in projects {
             guard let id = project.id else { continue }
             commands[id] = CommandCatalog.commands(projectPath: project.path)
+            workflows[id] = ownWorkflows + Recipes.savedWorkflows(in: [URL(filePath: project.path).appending(path: ".claude/workflows")])
             if GitService.hasUncommittedChanges(in: project.path) { dirty.insert(id) }
         }
         commandsByProject = commands
+        workflowsByProject = workflows
         dirtyProjectIds = dirty
     }
 

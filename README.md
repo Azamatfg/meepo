@@ -33,6 +33,8 @@ meepo doesn't write code and isn't another agent. Claude Code does the work, wit
 
 **Learns from how you work.** *Automations* shows your skills and commands with how often you really use them, effort and model per skill, and which ones Claude may start by itself. meepo notices what you repeat — commands in a row, requests you keep typing — and offers a button or a personal skill for it. Then it checks whether it helped.
 
+**Workflows of your own.** *New workflow…* builds automations as plain Claude Code files, shown before they're saved: a button that runs steps in order (a skill of yours, so `/name` works in any terminal), which you can repeat while a session is open (`/loop`) or schedule in the cloud (`/schedule`); and a check after every answer (a Stop hook: if `npm test` fails, Claude reads why and fixes it). Workflows with several agents at once are Claude Code's own — save one there and meepo lists it with a Run button.
+
 **Stages.** PLAN → CODE → QA → SECURITY → SIMPLIFY → SHIP → SYNC, each a click that runs your own command — or Claude Code's built-in one (`/verify`, `/security-review`, `/commit-push-pr`) when a project has none.
 
 **For people new to Claude Code.** Onboarding installs and signs in Claude Code step by step and starts a first project. *Guided mode* makes Claude explain what it does and ask before anything risky — pushing, deleting folders, `sudo`, `.env` secrets.

@@ -249,7 +249,8 @@ struct PipelineView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("\(pipeline.branch) @ \(pipeline.sha.prefix(7))").font(Fonts.mono(11)).foregroundStyle(Tokens.textDim)
+            Text("\(pipeline.branch) · \(pipeline.commitLabel)").font(Fonts.mono(11)).foregroundStyle(Tokens.textDim).lineLimit(1)
+                .help(pipeline.commitHelp)
             ForEach(pipeline.steps) { step in
                 HStack {
                     Text(StepLook.symbol(step.state)).font(Fonts.mono(13)).foregroundStyle(StepLook.color(step.state))
@@ -259,7 +260,7 @@ struct PipelineView: View {
                         Button("RUN") {
                             confirmation = PixelConfirmation(
                                 title: "RUN \(step.name.uppercased())?",
-                                message: "\(project.name) · \(pipeline.branch) @ \(pipeline.sha.prefix(7))",
+                                message: "\(project.name) · \(pipeline.commitDetail)",
                                 action: "RUN"
                             ) { Task { await store.startPipelineStep(step, in: project) } }
                         }

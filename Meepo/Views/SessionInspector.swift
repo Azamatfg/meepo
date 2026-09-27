@@ -42,6 +42,8 @@ private struct RepoSourceControl: View {
     /// Which EXPLAIN is running ("changes", "incoming").
     @State private var explaining: String?
     @State private var isSyncing = false
+    /// The history commit whose card is open.
+    @State private var openedCommit: String?
 
     private var scm: GitPanel.SourceControl? { store.sourceControls[path] }
 
@@ -78,6 +80,7 @@ private struct RepoSourceControl: View {
                 changesGroup(scm, path: path)
                 if !scm.incoming.commits.isEmpty { incomingGroup(scm, path: path) }
                 if !scm.outgoing.commits.isEmpty || scm.upstream == nil { outgoingGroup(scm, path: path) }
+                if !scm.history.isEmpty { historyGroup(scm) }
                 if let explanation {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
@@ -154,6 +157,31 @@ private struct RepoSourceControl: View {
                 Button(scm.upstream == nil ? "Publish" : "Push") { askPush(scm, path: path) }
                     .disabled(!scm.incoming.commits.isEmpty)
                     .help(scm.incoming.commits.isEmpty ? "git push, never forced" : "Take the incoming commits first (PULL)")
+            }
+        }
+    }
+
+    /// The branch's last commits with their short hash; a click opens the commit like VS Code's Git Graph hover.
+    private func historyGroup(_ scm: GitPanel.SourceControl) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            GroupHeader(title: "HISTORY", count: scm.branch, hint: "last \(scm.history.count) commits")
+            ForEach(scm.history) { commit in
+                Button { openedCommit = commit.sha } label: {
+                    HStack(spacing: 6) {
+                        Text(commit.sha).font(Fonts.mono(11)).foregroundStyle(Tokens.work).fixedSize()
+                        CommitRow(commit: commit)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: Binding(get: { openedCommit == commit.sha }, set: { if !$0 { openedCommit = nil } }),
+                         arrowEdge: .trailing) {
+                    CommitCard(sha: commit.sha, path: path) { detail, file in
+                        openedCommit = nil
+                        compare = Compare(title: detail.message.components(separatedBy: "\n")[0], files: detail.files, selected: file.path,
+                                          old: detail.parent, new: detail.sha)
+                    }
+                }
             }
         }
     }
@@ -255,12 +283,13 @@ struct CIPanel: View {
             }
             if let pipeline, let step = pipeline.steps.first(where: { $0.trigger != nil && pipeline.canStart($0) }) {
                 HStack {
-                    Text("\(step.name) ready on \(pipeline.branch) @ \(pipeline.sha.prefix(7))").font(.caption).foregroundStyle(Tokens.textDim)
+                    Text("\(step.name) ready · \(pipeline.commitLabel)").font(.caption).foregroundStyle(Tokens.textDim).lineLimit(1)
+                        .help(pipeline.commitHelp)
                     Spacer()
                     Button("Run") {
                         store.confirmation = PixelConfirmation(
                             title: "Run \(step.name)?",
-                            message: "\(project.name) · \(pipeline.branch) @ \(pipeline.sha.prefix(7))",
+                            message: "\(project.name) · \(pipeline.commitDetail)",
                             action: "Run"
                         ) { Task { await store.startPipelineStep(step, in: project) } }
                     }
@@ -294,12 +323,13 @@ private struct RepoCI: View {
                 }
                 if let step = pipeline.steps.first(where: { $0.trigger != nil && pipeline.canStart($0) }) {
                     HStack {
-                        Text("\(step.name) ready on \(pipeline.branch) @ \(pipeline.sha.prefix(7))").font(.caption).foregroundStyle(Tokens.textDim)
+                        Text("\(step.name) ready · \(pipeline.commitLabel)").font(.caption).foregroundStyle(Tokens.textDim).lineLimit(1)
+                        .help(pipeline.commitHelp)
                         Spacer()
                         Button("Run") {
                             store.confirmation = PixelConfirmation(
                                 title: "Run \(step.name)?",
-                                message: "\(repo.name) · \(pipeline.branch) @ \(pipeline.sha.prefix(7))",
+                                message: "\(repo.name) · \(pipeline.commitDetail)",
                                 action: "Run"
                             ) { Task { await store.startRepoPipelineStep(step, in: repo) } }
                         }
@@ -382,6 +412,62 @@ private struct CommitRow: View {
             Text(commit.when).font(.caption2).foregroundStyle(Tokens.textDim).lineLimit(1).fixedSize()
         }
         .help("\(commit.sha) · \(commit.author) · \(commit.subject)")
+    }
+}
+
+/// One commit, as VS Code shows it on hover: who and when, the whole message, the hash to copy, what it
+/// changed (a file opens the compare view), and its page on GitHub or GitLab.
+private struct CommitCard: View {
+    let sha: String
+    let path: String
+    let onFile: (GitPanel.CommitDetail, GitPanel.FileChange) -> Void
+    @State private var detail: GitPanel.CommitDetail?
+    @State private var web: URL?
+    @State private var isLoaded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let detail {
+                HStack(spacing: 6) {
+                    Text(detail.author).font(Fonts.ui(14, weight: .bold))
+                    Text(detail.date).font(.caption).foregroundStyle(Tokens.textDim).lineLimit(1)
+                }
+                Text(detail.message).font(Fonts.ui(13)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                let added = detail.files.compactMap(\.added).reduce(0, +), removed = detail.files.compactMap(\.removed).reduce(0, +)
+                Text("\(detail.files.count) file\(detail.files.count == 1 ? "" : "s") changed, ")
+                    + Text("\(added) insertions(+)").foregroundStyle(Tokens.added)
+                    + Text(", ") + Text("\(removed) deletions(−)").foregroundStyle(Tokens.danger)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(detail.files) { file in FileRow(change: file) { onFile(detail, file) } }
+                    }
+                }
+                .frame(maxHeight: 180)
+                HStack(spacing: 10) {
+                    Text(String(detail.sha.prefix(12))).font(Fonts.mono(12)).foregroundStyle(Tokens.work).textSelection(.enabled)
+                    Button("Copy hash") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(detail.sha, forType: .string)
+                    }
+                    if let web { Link(web.host()?.contains("gitlab") == true ? "Open on GitLab" : "Open on GitHub", destination: web) }
+                    Spacer()
+                }
+                .buttonStyle(PixelButtonStyle(compact: true))
+            } else {
+                Text(isLoaded ? "Can't read this commit." : "Reading…").foregroundStyle(Tokens.textDim)
+            }
+        }
+        .padding(14)
+        .frame(width: 420, alignment: .leading)
+        .paperSheet()
+        .task {
+            let (sha, path) = (sha, path)
+            (detail, web) = await Task.detached {
+                let detail = GitPanel.detail(of: sha, in: path)
+                return (detail, detail.flatMap { GitPanel.webURL(remote: GitService.remoteURL(in: path), commit: $0.sha) })
+            }.value
+            isLoaded = true
+        }
     }
 }
 

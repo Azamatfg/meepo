@@ -10,6 +10,9 @@ struct AutomationsView: View {
     @State private var overrides: [String: String] = [:]
     @State private var error: String?
     @State private var measures: [String: (before: Double, after: Double?)] = [:]
+    @State private var isNewWorkflow = false
+    /// Checks after every answer — for every project, then this project's own; read in `reload`, not per render.
+    @State private var checks: [(id: String, check: String, project: Project?)] = []
 
     private static let efforts = ["", "low", "medium", "high", "xhigh", "max"]
 
@@ -18,6 +21,7 @@ struct AutomationsView: View {
             HStack(alignment: .firstTextBaseline) {
                 Text("Your automations").font(Fonts.title(26))
                 Spacer()
+                Button("New workflow…") { isNewWorkflow = true }.buttonStyle(PixelButtonStyle(isPrimary: true))
                 Button("Close") { dismiss() }.keyboardShortcut(.cancelAction).buttonStyle(PixelButtonStyle())
             }
             Text("Skills and commands you have, counted from your own Claude Code history — every session, in meepo or not. Settings are yours: effort and model go into your own skill files; the rest into your ~/.claude/settings.json, so team files stay untouched.")
@@ -32,8 +36,9 @@ struct AutomationsView: View {
                             section("MEEPO NOTICED")
                             ForEach(store.visibleSuggestions) { NoticedRow(suggestion: $0) }
                         }
+                        workflowsSection
                         if !store.chains.isEmpty {
-                            section("YOUR CHAINS")
+                            section("OLDER CHAINS — RUN BY MEEPO")
                             ForEach(store.chains, id: \.self) { chainRow($0) }
                         }
                         section("DID MEEPO HELP?")
@@ -59,6 +64,45 @@ struct AutomationsView: View {
         .frame(width: 980, height: 680)
         .paperSheet()
         .task { await reload() }
+        .sheet(isPresented: $isNewWorkflow, onDismiss: { Task { await reload() } }) { WorkflowSheet(project: project) }
+    }
+
+    private var project: Project? { store.selectedSession.flatMap(store.project(for:)) }
+
+    /// Buttons, checks and Claude Code's saved workflows — what New workflow… made, and what's there already.
+    @ViewBuilder
+    private var workflowsSection: some View {
+        let saved = project.flatMap { store.workflowsByProject[$0.id!] } ?? []
+        HStack(alignment: .firstTextBaseline) {
+            section("YOUR WORKFLOWS")
+            InfoButton(title: "Workflows", text: Explain.workflows)
+        }
+        if store.skillButtons.isEmpty && checks.isEmpty && saved.isEmpty {
+            Text("None yet. New workflow… makes a button that runs steps in order, or a check after every answer.")
+                .foregroundStyle(Tokens.textDim)
+        }
+        ForEach(store.skillButtons, id: \.self) { name in
+            workflowRow("/" + name, "Button · a skill of yours") { store.removeButton(name) }
+        }
+        ForEach(checks, id: \.id) { _, check, project in
+            workflowRow(check, "After every answer · " + (project.map { "only \($0.name)" } ?? "all projects")) {
+                apply { try store.removeCheck(check, in: project) }
+            }
+        }
+        ForEach(saved) { workflow in
+            workflowRow(workflow.name, "Saved workflow · Claude Code" + (workflow.description.map { " · " + $0 } ?? ""), remove: nil)
+        }
+    }
+
+    private func workflowRow(_ title: String, _ detail: String, remove: (() -> Void)?) -> some View {
+        HStack {
+            Text(title).font(Fonts.mono(13).weight(.semibold)).lineLimit(1)
+            Text(detail).foregroundStyle(Tokens.textDim).lineLimit(1)
+            Spacer()
+            if let remove { Button("Remove", action: remove).buttonStyle(PixelButtonStyle(compact: true)) }
+        }
+        .padding(12)
+        .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 10))
     }
 
     private func section(_ title: String) -> some View {
@@ -70,6 +114,9 @@ struct AutomationsView: View {
             Text(chain.map { "/" + $0 }.joined(separator: " → ")).font(Fonts.mono(13).weight(.semibold))
             Text("ran to the end \(store.chainRuns[chain.joined(separator: ">")] ?? 0)×").foregroundStyle(Tokens.textDim)
             Spacer()
+            Button("Save as skill") { apply { try store.saveChainAsSkill(chain) } }
+                .buttonStyle(PixelButtonStyle(compact: true, isPrimary: true))
+                .help("A skill of yours runs the same steps and works in any terminal, as /" + chain.joined(separator: "-"))
             Button("Remove") { store.removeChain(chain) }.buttonStyle(PixelButtonStyle(compact: true))
         }
         .padding(12)
@@ -204,6 +251,8 @@ struct AutomationsView: View {
     }
 
     private func reload() async {
+        checks = store.checks(in: nil).map { (id: $0, check: $0, project: nil as Project?) }
+            + (project.map { p in store.checks(in: p).map { (id: p.path + $0, check: $0, project: p as Project?) } } ?? [])
         overrides = store.skillOverrides()
         items = await store.automations()
         await store.refreshSuggestions()

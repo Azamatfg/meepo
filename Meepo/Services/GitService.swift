@@ -39,15 +39,21 @@ enum GitService {
 
     /// `.claude/worktrees/` must not show up as untracked; uses the local, uncommitted exclude file.
     static func ensureWorktreesIgnored(in path: String, backups: URL) {
-        guard !succeeds(["check-ignore", "-q", ".claude/worktrees/x"], in: path),
+        ignoreLocally(".claude/worktrees/", in: path, backups: backups)
+    }
+
+    /// Adds `pattern` to the repo's own exclude file (never committed; worktrees find theirs), unless git
+    /// already ignores it. Backed up and logged in Tools → Changes.
+    static func ignoreLocally(_ pattern: String, in path: String, backups: URL) {
+        guard !succeeds(["check-ignore", "-q", pattern.hasSuffix("/") ? pattern + "x" : pattern], in: path),
               let exclude = run(["rev-parse", "--git-path", "info/exclude"], in: path) else { return }
         let url = exclude.hasPrefix("/") ? URL(filePath: exclude) : URL(filePath: path).appending(path: exclude)
         let current = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        let line = (current.isEmpty || current.hasSuffix("\n") ? "" : "\n") + ".claude/worktrees/\n"
+        let line = (current.isEmpty || current.hasSuffix("\n") ? "" : "\n") + pattern + "\n"
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let backup = try? ChangeLog.backup(url, folder: "git-exclude", backups: backups)
         guard (try? Data((current + line).utf8).write(to: url)) != nil else { return }
-        ChangeLog.record("Ignore .claude/worktrees", file: url, backup: backup, backups: backups)
+        ChangeLog.record("Ignore \(pattern.trimmingCharacters(in: CharacterSet(charactersIn: "/")))", file: url, backup: backup, backups: backups)
     }
 
     /// `git worktree remove` refuses a dirty worktree; `branch -d` refuses an unmerged branch. Nil = done.

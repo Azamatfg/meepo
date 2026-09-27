@@ -62,6 +62,23 @@ struct Pipeline: Equatable {
     let branch: String
     let sha: String
     let steps: [Step]
+    /// The commit's subject, from local git (people know commits by their message, not their hash).
+    var title: String?
+
+    /// `pipeline` with its commit's subject filled in; the hash stays when git doesn't have the commit.
+    static func titled(_ pipeline: Pipeline?, in path: String) async -> Pipeline? {
+        guard var pipeline else { return nil }
+        let sha = pipeline.sha
+        pipeline.title = await Task.detached { GitService.output(["log", "-1", "--format=%s", sha], in: path) }.value
+        return pipeline
+    }
+
+    /// "feat: new icon" — or the short hash when the subject isn't known.
+    var commitLabel: String { title.map { "“\($0)”" } ?? String(sha.prefix(7)) }
+    /// For confirmations: "main · “feat: new icon” (d486833)".
+    var commitDetail: String { "\(branch) · \(commitLabel) (\(sha.prefix(7)))" }
+    /// The tooltip: "main @ d486833 — feat: new icon".
+    var commitHelp: String { "\(branch) @ \(sha.prefix(7))" + (title.map { " — " + $0 } ?? "") }
 
     /// A manual step may start once every step before it passed or was skipped.
     func canStart(_ step: Step) -> Bool {

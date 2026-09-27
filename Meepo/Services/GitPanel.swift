@@ -82,6 +82,8 @@ enum GitPanel {
         var changes: [FileChange] = []
         var incoming = Group()
         var outgoing = Group()
+        /// The branch's last commits, newest first (VS Code's Git Graph).
+        var history: [CommitLine] = []
         var ahead: Int { outgoing.commits.count }
         var behind: Int { incoming.commits.count }
     }
@@ -118,6 +120,7 @@ enum GitPanel {
             change.isUncommitted = true
             return change
         }
+        result.history = commits(in: path, range: "HEAD", limit: 20)
         guard status.upstream != nil, let base = GitService.output(["merge-base", "HEAD", "@{u}"], in: path) else { return result }
         result.incoming = group(from: base, to: "@{u}", range: "HEAD..@{u}", in: path)
         result.outgoing = group(from: base, to: "HEAD", range: "@{u}..HEAD", in: path)
@@ -125,13 +128,57 @@ enum GitPanel {
     }
 
     private static func group(from base: String, to tip: String, range: String, in path: String) -> Group {
-        let log = GitService.output(["log", "--format=%h%x1f%an%x1f%s%x1f%cr", "-n", "30", range], in: path) ?? ""
-        let commits = log.split(separator: "\n").compactMap { line -> CommitLine? in
+        let commits = commits(in: path, range: range, limit: 30)
+        guard !commits.isEmpty else { return Group() }
+        return Group(commits: commits, files: files(between: base, and: tip, in: path), from: base, to: tip)
+    }
+
+    /// Commits in `range`, newest first; none in a repo without commits yet.
+    static func commits(in path: String, range: String, limit: Int) -> [CommitLine] {
+        let log = GitService.output(["log", "--format=%h%x1f%an%x1f%s%x1f%cr", "-n", "\(limit)", range], in: path) ?? ""
+        return log.split(separator: "\n").compactMap { line -> CommitLine? in
             let f = line.split(separator: "\u{1f}", omittingEmptySubsequences: false).map(String.init)
             return f.count == 4 ? CommitLine(sha: f[0], author: f[1], subject: f[2], when: f[3]) : nil
         }
-        guard !commits.isEmpty else { return Group() }
-        return Group(commits: commits, files: files(between: base, and: tip, in: path), from: base, to: tip)
+    }
+
+    /// One commit as VS Code's hover shows it: full hash, author, date, whole message, the files it changed.
+    struct CommitDetail: Equatable {
+        let sha: String
+        let author: String
+        let date: String
+        let message: String
+        /// The left side of its compare view: the parent, or the empty tree for a first commit.
+        let parent: String
+        let files: [FileChange]
+    }
+
+    /// git's empty tree: what a first commit is compared against.
+    static let emptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+    /// Blocking; call off the main thread.
+    static func detail(of sha: String, in path: String) -> CommitDetail? {
+        guard let show = GitService.output(["show", "-s", "--format=%H%x1f%an%x1f%aD%x1f%B", sha], in: path) else { return nil }
+        let f = show.split(separator: "\u{1f}", maxSplits: 3, omittingEmptySubsequences: false).map(String.init)
+        guard f.count == 4 else { return nil }
+        let parent = GitService.output(["rev-parse", "--verify", "-q", sha + "^"], in: path) ?? emptyTree
+        return CommitDetail(sha: f[0], author: f[1], date: f[2], message: f[3].trimmingCharacters(in: .whitespacesAndNewlines),
+                            parent: parent, files: files(between: parent, and: f[0], in: path))
+    }
+
+    /// The commit's page on GitHub or GitLab, from the remote in either form (https or git@host:owner/repo).
+    static func webURL(remote: String?, commit: String) -> URL? {
+        guard var base = remote?.trimmingCharacters(in: .whitespacesAndNewlines), !base.isEmpty else { return nil }
+        if base.hasPrefix("git@"), let colon = base.firstIndex(of: ":") {
+            base = "https://" + base[base.index(base.startIndex, offsetBy: 4)..<colon] + "/" + base[base.index(after: colon)...]
+        } else if base.hasPrefix("ssh://git@") {
+            base = "https://" + base.dropFirst("ssh://git@".count)
+        }
+        if base.hasSuffix(".git") { base.removeLast(4) }
+        guard base.hasPrefix("https://"), let host = URL(string: base)?.host() else { return nil }
+        if host.contains("github") { return URL(string: base + "/commit/" + commit) }
+        if host.contains("gitlab") { return URL(string: base + "/-/commit/" + commit) }
+        return nil
     }
 
     /// Files that differ between two commits, with +/− (renames keep their old path for the left side).

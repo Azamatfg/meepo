@@ -95,7 +95,7 @@ final class ScreenshotFlow {
         }
         let finish = { [weak self] (target: Int64?) in
             guard let self else { return }
-            if let target { self.deliver(image, to: target) }
+            if let target { self.store.pasteImages([image], into: target) }
             try? FileManager.default.removeItem(at: file)
             self.panel?.close()
             self.panel = nil
@@ -127,39 +127,6 @@ final class ScreenshotFlow {
             process.waitForExit()
             return FileManager.default.fileExists(atPath: file.path)
         }.value
-    }
-
-    /// Claude Code pastes images with Ctrl+V: put the shot on the clipboard and press it in that terminal.
-    /// The user's clipboard comes back afterwards, unless they copied something new meanwhile.
-    private func deliver(_ image: NSImage, to sessionId: Int64) {
-        let pasteboard = NSPasteboard.general
-        let saved = Self.snapshot(pasteboard)
-        pasteboard.clearContents()
-        pasteboard.writeObjects([image])
-        let ours = pasteboard.changeCount
-        store.type("\u{16}", into: sessionId)
-        // claude reads the image asynchronously after the keypress; restoring at once would paste the old clipboard.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            guard pasteboard.changeCount == ours else { return }
-            Self.restore(saved, to: pasteboard)
-        }
-    }
-
-    /// Every item with every type it offers, so text, files and images all survive.
-    static func snapshot(_ pasteboard: NSPasteboard) -> [[NSPasteboard.PasteboardType: Data]] {
-        (pasteboard.pasteboardItems ?? []).map { item in
-            item.types.reduce(into: [:]) { result, type in result[type] = item.data(forType: type) }
-        }
-    }
-
-    static func restore(_ items: [[NSPasteboard.PasteboardType: Data]], to pasteboard: NSPasteboard) {
-        pasteboard.clearContents()
-        guard !items.isEmpty else { return }
-        pasteboard.writeObjects(items.map { types in
-            let item = NSPasteboardItem()
-            for (type, data) in types { item.setData(data, forType: type) }
-            return item
-        })
     }
 
     /// macOS asks for Screen Recording the first time; say why before it does (SPEC module 8).

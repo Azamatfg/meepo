@@ -142,13 +142,18 @@ struct BridgeInstaller {
 
     /// Drops only handlers whose command is our script; groups/events left empty by that go too.
     static func removingBridge(from hooks: [String: Any]) -> [String: Any] {
+        removingHandlers(from: hooks, where: isBridge)
+    }
+
+    /// Drops the handlers `matches` picks, in every event; groups/events left empty by that go too.
+    static func removingHandlers(from hooks: [String: Any], where matches: ([String: Any]) -> Bool) -> [String: Any] {
         var result: [String: Any] = [:]
         for (event, value) in hooks {
             guard let groups = value as? [[String: Any]] else { result[event] = value; continue }
             var removedAny = false
             let kept = groups.compactMap { group -> [String: Any]? in
                 guard let handlers = group["hooks"] as? [[String: Any]] else { return group }
-                let rest = handlers.filter { !isBridge($0) }
+                let rest = handlers.filter { !matches($0) }
                 guard rest.count != handlers.count else { return group }
                 removedAny = true
                 if rest.isEmpty { return nil }
