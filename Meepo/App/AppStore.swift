@@ -1554,9 +1554,24 @@ final class AppStore {
         return stages[index + 1].name
     }
 
-    /// Types text into a session's terminal ("\r" = Enter).
-    func type(_ text: String, into sessionId: Int64) {
+    /// Types text into a session's terminal ("\r" = Enter). A line ending in Enter waits while Claude is asking
+    /// something (a permission, or a question with choices): that Enter would pick the highlighted answer for the
+    /// user. False when it wasn't typed.
+    @discardableResult
+    func type(_ text: String, into sessionId: Int64) -> Bool {
+        if text.hasSuffix("\r"), isAwaitingAnswer(sessionId) {
+            let name = sessions.first { $0.id == sessionId }.map(displayName(of:)) ?? "this session"
+            bridgeError = "Claude is asking you something in \(name) — answer it first, then click again."
+            return false
+        }
         terminals.send(text, to: sessionId)
+        return true
+    }
+
+    /// Claude waits on the user's answer, not on a new request: a permission prompt, or AskUserQuestion (which comes
+    /// in as a PermissionRequest too).
+    func isAwaitingAnswer(_ sessionId: Int64) -> Bool {
+        sessions.first { $0.id == sessionId }?.status == .waitingPermission || lastTurnEvents[sessionId] == "PermissionRequest"
     }
 
     /// Code was edited after the last QA stage ran in this session (reminder before ship).

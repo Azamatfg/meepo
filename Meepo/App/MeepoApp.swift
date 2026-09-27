@@ -27,13 +27,24 @@ struct MeepoApp: App {
                 own.removePersistentDomain(forName: suite)
                 defaults = own
             }
-            let store = AppStore(db: db, defaults: defaults)
+            let store = AppStore(db: db, bridge: Demo.isOn ? Self.demoBridge() : BridgeInstaller(), defaults: defaults)
             _store = State(initialValue: store)
             hotkeys = HotkeyMonitor(store: store)
             services = isolated ? nil : LiveServices(store: store)
         } catch {
             fatalError("Cannot open ~/.meepo/meepo.sqlite: \(error)")
         }
+    }
+
+    /// Demo mode's own ~/.claude and ~/.meepo in a temp folder, starting from a copy of the user's settings (so the
+    /// hook bridge shows as it is): Make a button, New command, VOICE… write there, never to the real ones.
+    private static func demoBridge() -> BridgeInstaller {
+        let home = FileManager.default.temporaryDirectory.appending(path: "meepo-demo-home")
+        try? FileManager.default.removeItem(at: home)
+        let settings = home.appending(path: ".claude/settings.json")
+        try? FileManager.default.createDirectory(at: settings.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? FileManager.default.copyItem(at: BridgeInstaller().settingsURL, to: settings)
+        return BridgeInstaller(settingsURL: settings, meepoHome: home.appending(path: ".meepo"))
     }
 
     var body: some Scene {
@@ -222,8 +233,34 @@ final class QuitHandler: NSObject, NSApplicationDelegate {
         MainActor.assumeIsolated {
             guard let store, !store.shouldQuit() else { return .terminateNow }
             NSApp.activate(ignoringOtherApps: true)
+            // A sheet (Stats, Tools, Automations…) would cover the question drawn in the window: ask as macOS does.
+            if NSApp.windows.contains(where: { $0.attachedSheet != nil }), let question = store.confirmation {
+                store.confirmation = nil
+                return Self.ask(question) ? .terminateNow : .terminateCancel
+            }
             NSApp.windows.first { $0.canBecomeMain }?.makeKeyAndOrderFront(nil) // where the question is
             return .terminateCancel
+        }
+    }
+
+    /// The quit question as a system alert, on top of everything. True: quit now.
+    @MainActor
+    private static func ask(_ question: PixelConfirmation) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = question.title
+        alert.informativeText = question.message ?? ""
+        alert.addButton(withTitle: question.action)
+        if let alternative = question.alternative { alert.addButton(withTitle: alternative.title) }
+        alert.addButton(withTitle: question.cancel ?? "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            return true // not perform(): it calls terminate, and this is already the answer to one
+        case .alertSecondButtonReturn where question.alternative != nil:
+            question.alternative?.perform()
+            return false
+        default:
+            question.onCancel?()
+            return false
         }
     }
 

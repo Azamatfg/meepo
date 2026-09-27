@@ -107,3 +107,26 @@ final class VoiceTests: XCTestCase {
         XCTAssertEqual(ChangeLog.entries(backups: home.appending(path: "backups")).first?.action, "Hook bridge")
     }
 }
+
+/// A button's command ends in Enter; while Claude asks something, that Enter would pick an answer for the user.
+@MainActor
+final class TypingTests: XCTestCase {
+    func testEnterWaitsWhileClaudeAsks() async throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let home = FileManager.default.temporaryDirectory.appending(path: "typing-\(UUID().uuidString)")
+        let store = AppStore(db: db, bridge: BridgeInstaller(settingsURL: home.appending(path: "s.json"), meepoHome: home),
+                             usageRoot: home, defaults: UserDefaults(suiteName: "meepo-tests-\(UUID().uuidString)")!)
+        try store.addProject(at: try makeTempRepo())
+        try store.createSession(projectId: store.projects[0].id!, model: nil, prompt: nil)
+        let session = store.sessions[0], id = session.id!
+
+        XCTAssertTrue(store.type("/qa\r", into: id), "nothing asked: the button works")
+        _ = store.handleHookEvent(HookPayload(event: "PermissionRequest", claudeSessionId: session.claudeSessionId), sessionId: id)
+        XCTAssertFalse(store.type("/qa\r", into: id), "a permission is open: Enter would answer it")
+        XCTAssertNotNil(store.bridgeError)
+        XCTAssertTrue(store.type(" ", into: id), "no Enter: SPEAK's tap still goes through")
+        _ = store.handleHookEvent(HookPayload(event: "Stop", claudeSessionId: session.claudeSessionId), sessionId: id)
+        XCTAssertTrue(store.type("/qa\r", into: id), "answered and done: the button works again")
+    }
+}

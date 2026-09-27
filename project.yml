@@ -123,6 +123,8 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+        # Cleans up the settings suites tests leave in ~/Library/Preferences (TestCleanup.swift).
+        INFOPLIST_KEY_NSPrincipalClass: MeepoTests.TestCleanup
 
 schemes:
   Meepo:
