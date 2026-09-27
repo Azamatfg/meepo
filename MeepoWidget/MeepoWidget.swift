@@ -44,7 +44,7 @@ struct MeepoWidgetView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("MEEPO").font(Fonts.title(16)).foregroundStyle(Tokens.text)
+            Text("meepo").font(Fonts.title(16)).foregroundStyle(Tokens.text)
             if family == .systemMedium {
                 HStack(spacing: 16) { tokens; sessions }
             } else {

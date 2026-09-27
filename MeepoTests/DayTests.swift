@@ -28,7 +28,7 @@ final class MorningEveningTests: XCTestCase {
         store = makeIsolatedStore(db: db)
         for name in ["webapp", "billing-api"] {
             let repo = try makeTempRepo()
-            let named = repo.deletingLastPathComponent().appending(path: name + "-" + UUID().uuidString.prefix(4))
+            let named = repo.deletingLastPathComponent().appending(path: name + "-" + UUID().uuidString.prefix(8))
             try FileManager.default.moveItem(at: repo, to: named)
             try git(["commit", "-q", "--allow-empty", "-m", "init \(name)"], in: named)
             try store.addProject(at: named)

@@ -21,7 +21,7 @@ struct MenuBarPanel: View {
             }
             Divider()
             // All Claude Code usage on this Mac today, like Stats (SPEC §5).
-            Text("\(TokenFormat.short(store.usageStats(since: Calendar.current.startOfDay(for: .now)).total.total)) tokens today")
+            Text("\(TokenFormat.short(store.usageToday)) tokens today")
                 .font(Fonts.mono(12))
                 .foregroundStyle(Tokens.screen)
             HStack {

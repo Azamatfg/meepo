@@ -1222,10 +1222,13 @@ final class AppStore {
     }
 
     private var widgetSnapshot = WidgetSnapshot()
+    /// All Claude Code tokens on this Mac today, for the menu bar; refreshed with the widget's numbers so both agree.
+    private(set) var usageToday = 0
 
     /// Hands the desktop widget its numbers; reloads it only when they change (WidgetKit budgets reloads).
     func publishWidgetSnapshot() {
-        let next = WidgetSnapshot(tokensToday: usageStats(since: Calendar.current.startOfDay(for: .now)).total.total,
+        usageToday = usageStats(since: Calendar.current.startOfDay(for: .now)).total.total
+        let next = WidgetSnapshot(tokensToday: usageToday,
                                   activeSessions: runningSessionIds.count, waitingSessions: waitingCount, updatedAt: .now)
         var previous = widgetSnapshot
         previous.updatedAt = next.updatedAt

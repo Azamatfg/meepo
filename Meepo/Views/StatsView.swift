@@ -46,11 +46,15 @@ struct StatsView: View {
                         .help("""
                             meepo's own count, from its first record. Claude Code deletes a conversation's transcript \
                             after 30 days by default (cleanupPeriodDays), so nothing older is left to count. Claude Code's /stats shows \
-                            more: it adds up every line of a transcript, and one reply is often written as several lines; \
-                            meepo counts each reply once.
+                            more: it keeps its own totals from before that, and one request is written as several transcript lines \
+                            with the same usage, some of which it counts again; meepo counts each request once.
                             """)
                 }
             }
+            Text("Counts each API request once. Claude Code's /stats also keeps history from before these transcripts and can count one request more than once.")
+                .font(.caption)
+                .foregroundStyle(Tokens.textDim)
+                .fixedSize(horizontal: false, vertical: true)
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     UsageTable(title: "By project", rows: stats.byProject)
