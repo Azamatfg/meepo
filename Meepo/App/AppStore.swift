@@ -842,6 +842,7 @@ final class AppStore {
     func reload() {
         projects = (try? db.read { try Project.order(Column("name").collating(.localizedCaseInsensitiveCompare)).fetchAll($0) }) ?? []
         sessions = (try? db.read { try Session.order(Column("createdAt")).fetchAll($0) }) ?? []
+        servers = (try? db.read { try Server.order(Column("label"), Column("host")).fetchAll($0) }) ?? []
     }
 
     // MARK: Hook events
@@ -1872,7 +1873,8 @@ final class AppStore {
                 case .reportInfra:
                     onCINotice?("CI didn't run", "\(label): \(run.failureReason ?? "") — not a code failure")
                 case .reportDeploy:
-                    onCINotice?("Deploy failed", "\(label): \(run.workflowName) — not fixed automatically")
+                    let logs = servers(of: projectId).contains { !$0.sources.isEmpty } ? " — Get server logs in the CI tab" : ""
+                    onCINotice?("Deploy failed", "\(label): \(run.workflowName) — not fixed automatically\(logs)")
                 case .none:
                     onCINotice?("CI failed", "\(label): \(run.workflowName) — FIX in the CI tab")
                 }
@@ -1935,6 +1937,88 @@ final class AppStore {
         do {
             try createSession(projectId: projectId, model: nil, prompt: CIGuard.fixPrompt(run, log: log, reviewRequest: provider.reviewRequest), worktree: name)
             onCINotice?("Fixing CI", "\(project.name) · \(run.headBranch): \(run.workflowName) — new session \(name)")
+        } catch {
+            bridgeError = error.localizedDescription
+        }
+    }
+
+    // MARK: Servers and logs (SPEC module 10)
+
+    /// Servers of every project; ssh logs in with the user's own keys, meepo stores none.
+    private(set) var servers: [Server] = []
+    /// Runs ssh; injected in tests so no real ssh ever runs.
+    @ObservationIgnored var sshRunner: ServerLogs.Runner = ServerLogs.runProcess
+
+    func servers(of projectId: Int64?) -> [Server] {
+        servers.filter { $0.projectId == projectId }
+    }
+
+    /// Adds or updates a server. Only a valid host and log sources the templates accept are kept.
+    func saveServer(_ server: Server) throws {
+        guard ServerLogs.isValidHost(server.host) else { throw ServerError.badHost(server.host) }
+        if let bad = server.sources.first(where: { !ServerLogs.isValid($0) }) { throw ServerError.badSource(bad.name) }
+        var saved = server
+        try db.write { try saved.save($0) }
+        reload()
+    }
+
+    func deleteServer(_ id: Int64) {
+        _ = try? db.write { try Server.deleteOne($0, id: id) }
+        reload()
+    }
+
+    enum ServerError: LocalizedError, Equatable {
+        case badHost(String), badSource(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .badHost(let host): "“\(host)” isn't an ssh host — use an alias from ~/.ssh/config or user@host."
+            case .badSource(let name): "“\(name)” can't be passed safely: letters, digits and . _ - @ : only (a file path starts with / and may have /)."
+            }
+        }
+    }
+
+    /// Each source through its read-only template, off the main thread.
+    func fetchLogs(_ picks: [(host: String, source: LogSource)]) async -> [ServerLogs.Fetched] {
+        let runner = sshRunner
+        let pairs = picks.map { ($0.host, $0.source) }
+        return await Task.detached { pairs.map { ServerLogs.fetch($0.1, from: $0.0, runner: runner) } }.value
+    }
+
+    func listContainers(on host: String) async -> Result<[String], ServerLogs.ListError> {
+        let runner = sshRunner
+        return await Task.detached { ServerLogs.containers(on: host, runner: runner) }.value
+    }
+
+    /// Where logs go: the selected session when it's the project's and running, else its latest running one.
+    func logsTarget(in projectId: Int64) -> Session? {
+        if let selected = selectedSession, selected.projectId == projectId, let id = selected.id, runningSessionIds.contains(id) {
+            return selected
+        }
+        return sessions.last { $0.projectId == projectId && $0.id.map(runningSessionIds.contains) == true }
+    }
+
+    /// Pastes the logs into the session's prompt; the user adds a question and sends it.
+    func pasteLogs(_ fetched: [ServerLogs.Fetched], into sessionId: Int64) {
+        guard type(ServerLogs.paste(fetched), into: sessionId) else { return }
+        selectedSessionId = sessionId
+    }
+
+    /// A new session in the project that starts by investigating the logs.
+    func investigateLogs(_ fetched: [ServerLogs.Fetched], in projectId: Int64, why: String? = nil) throws {
+        try createSession(projectId: projectId, model: nil, prompt: ServerLogs.investigatePrompt(fetched, why: why),
+                          name: "logs \(fetched.first?.host ?? "")")
+    }
+
+    /// A failed deploy: every log source of the project's servers → a new session investigating them.
+    func investigateDeploy(_ run: CIRun, in project: Project) async {
+        guard let projectId = project.id else { return }
+        let picks = servers(of: projectId).flatMap { server in server.sources.map { (host: server.host, source: $0) } }
+        guard !picks.isEmpty else { return }
+        let fetched = await fetchLogs(picks)
+        do {
+            try investigateLogs(fetched, in: projectId,
+                                why: "Deploy “\(run.workflowName)” failed on \(run.headBranch) @ \(run.headSha.prefix(7)) (\(run.url)).")
         } catch {
             bridgeError = error.localizedDescription
         }

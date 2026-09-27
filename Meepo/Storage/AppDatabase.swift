@@ -154,6 +154,17 @@ enum AppDatabase {
             }
         }
 
+        // Servers a project runs on and where their logs are (SPEC module 10); no keys, ssh logs in.
+        migrator.registerMigration("v14-servers") { db in
+            try db.create(table: "server") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.belongsTo("project", onDelete: .cascade).notNull()
+                t.column("host", .text).notNull()
+                t.column("label", .text).notNull().defaults(to: "")
+                t.column("sources", .jsonText).notNull().defaults(to: "[]")
+            }
+        }
+
         return migrator
     }
 }

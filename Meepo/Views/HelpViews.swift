@@ -55,6 +55,8 @@ enum Explain {
 
     static let ports = "A port is a numbered door a program opens on this Mac: a dev server on 3000 is what localhost:3000 shows in the browser. One left running keeps its port busy, and the next can't start there (\"address already in use\") — Stop frees it. Grouped by project: programs started in its folder, its Docker containers, and each session's own ports — Open shows one in the browser."
 
+    static let servers = "The servers your projects run on, and where their logs are. meepo logs in with your own ssh (the keys and agent you already use — it stores no keys and never asks for a password) and only ever reads logs: the last 200 lines of a service (journalctl), a container (docker logs) or a file (tail) — nothing else runs there. Get logs, then paste them into the project's session and ask Claude, or start a new session that looks into them. When a deploy fails, the CI tab offers the same."
+
     static let presets = "Focus: one terminal and what changed. Deck: up to four sessions at once. Full: files, git and two terminals, like VS Code. Change any of them — move, hide or add panels — and it stays that way; a • marks a changed one, right-click it to reset."
 }
 

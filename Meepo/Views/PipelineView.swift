@@ -109,6 +109,12 @@ struct PipelineView: View {
                         .buttonStyle(PixelButtonStyle(compact: true, isPrimary: true))
                         .help("A new session in a worktree with the failed step's log; it opens a PR, never pushes to main")
                 }
+                if let project, let run, run.isDeploy || Self.isDeploy(step),
+                   store.servers(of: project.id).contains(where: { !$0.sources.isEmpty }) {
+                    Button("Get server logs") { Task { await store.investigateDeploy(run, in: project) } }
+                        .buttonStyle(PixelButtonStyle(compact: true, isPrimary: true))
+                        .help("Reads the logs of this project's servers (only the log sources set in Tools → SERVERS) and opens a new session that looks into why the deploy failed")
+                }
                 if let project, let run, !run.isDeploy, !pipeline.steps.contains(where: { $0.state == .failed && Self.isDeploy($0) }) {
                     Button("Rerun") {
                         Task {
