@@ -181,6 +181,11 @@ struct CIRunRow: View {
                 }
                 .buttonStyle(PixelButtonStyle())
             }
+            if run.failed && run.isDeploy && store.servers(of: project.id).contains(where: { !$0.sources.isEmpty }) {
+                Button("GET SERVER LOGS") { Task { await store.investigateDeploy(run, in: project) } }
+                    .buttonStyle(PixelButtonStyle())
+                    .help("Reads the logs of this project's servers (only the log sources set in Tools → SERVERS) and opens a new session that looks into why the deploy failed")
+            }
         }
     }
 }

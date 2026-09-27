@@ -119,7 +119,7 @@ private struct TitleBar: View {
                 Button("Day — end-of-day summary") { isDayShown = true }
                 Divider()
                 Button("Stats") { isStatsShown = true }
-                Button("Tools — Docker space, ports, meepo's edits") { isToolsShown = true }
+                Button("Tools — Docker space, ports, servers, meepo's edits") { isToolsShown = true }
                 Button("Notes — release notes") { isNotesShown = true }
                 Divider()
                 Toggle("Guided mode — Claude explains, asks first", isOn: Binding(get: { store.guidedMode }, set: { store.setGuidedMode($0) }))

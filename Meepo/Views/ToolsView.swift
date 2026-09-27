@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// TOOLS sheet (SPEC module 11): Docker upkeep, ports, and every change meepo made to your files.
+/// TOOLS sheet (SPEC module 11): Docker upkeep, ports, servers' logs (module 10), and every change meepo made to your files.
 /// No shared-commands library: Claude Code already gives one command to every project through ~/.claude.
 struct ToolsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var tab = Tab.docker
     @State private var confirmation: PixelConfirmation?
 
-    enum Tab: String, CaseIterable { case docker = "DOCKER", ports = "PORTS", changes = "CHANGES" }
+    enum Tab: String, CaseIterable { case docker = "DOCKER", ports = "PORTS", servers = "SERVERS", changes = "CHANGES" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -24,6 +24,7 @@ struct ToolsView: View {
             switch tab {
             case .docker: DockerView(confirmation: $confirmation)
             case .ports: PortsView(confirmation: $confirmation)
+            case .servers: ServersView(confirmation: $confirmation)
             case .changes: ChangesView(confirmation: $confirmation)
             }
         }
