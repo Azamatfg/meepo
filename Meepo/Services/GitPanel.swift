@@ -43,10 +43,13 @@ enum GitPanel {
         var snapshot = Snapshot()
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
             if line.hasPrefix("## ") {
-                let header = line.dropFirst(3)
+                var header = line.dropFirst(3)
+                // A repo without commits: `## No commits yet on main` — the prefix goes before the name is split off.
+                let unborn = "No commits yet on "
+                if header.hasPrefix(unborn) { header = header.dropFirst(unborn.count) }
                 let names = header.split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
                 let parts = names.components(separatedBy: "...")
-                snapshot.branch = parts[0].replacingOccurrences(of: "No commits yet on ", with: "")
+                snapshot.branch = parts[0]
                 snapshot.upstream = parts.count > 1 ? parts[1] : nil
                 if let ahead = header.firstMatch(of: /ahead (\d+)/) { snapshot.ahead = Int(ahead.1) ?? 0 }
                 if let behind = header.firstMatch(of: /behind (\d+)/) { snapshot.behind = Int(behind.1) ?? 0 }
@@ -67,13 +70,21 @@ enum GitPanel {
         return snapshot
     }
 
-    /// `added<TAB>removed<TAB>path`; binary files show "-".
+    /// `added<TAB>removed<TAB>path`; binary files show "-". A rename (`old => new`, `dir/{a => b}/x`) is keyed
+    /// by its new path, the one status and name-status report.
     static func parseNumstat(_ text: String) -> [String: (Int, Int)] {
         var result: [String: (Int, Int)] = [:]
         for line in text.split(separator: "\n") {
             let fields = line.split(separator: "\t", maxSplits: 2)
             guard fields.count == 3 else { continue }
-            result[String(fields[2])] = (Int(fields[0]) ?? 0, Int(fields[1]) ?? 0)
+            var file = String(fields[2])
+            if let m = file.firstMatch(of: /^(.*)\{(.*) => (.*)\}(.*)$/) {
+                // `dir/{sub => }/x`: an empty side leaves "//".
+                file = String(m.1 + m.3 + m.4).replacingOccurrences(of: "//", with: "/")
+            } else if let arrow = file.range(of: " => ") {
+                file = String(file[arrow.upperBound...])
+            }
+            result[file] = (Int(fields[0]) ?? 0, Int(fields[1]) ?? 0)
         }
         return result
     }
@@ -90,6 +101,11 @@ enum GitPanel {
         var outgoing = Group()
         /// The branch's last commits, newest first (VS Code's Git Graph).
         var history: [CommitLine] = []
+        /// origin exists: where Publish pushes (`push` hard-codes origin).
+        var hasRemote = false
+        /// A branch with commits and somewhere to send them; a detached HEAD isn't a branch, a repo without
+        /// commits has nothing to push.
+        var canPublish: Bool { upstream == nil && hasRemote && branch != "HEAD" && !history.isEmpty }
         var ahead: Int { outgoing.commits.count }
         var behind: Int { incoming.commits.count }
     }
@@ -127,6 +143,7 @@ enum GitPanel {
             return change
         }
         result.history = commits(in: path, range: "HEAD", limit: 20)
+        result.hasRemote = GitService.remoteURL(in: path) != nil
         guard status.upstream != nil, let base = GitService.output(["merge-base", "HEAD", "@{u}"], in: path) else { return result }
         result.incoming = group(from: base, to: "@{u}", range: "HEAD..@{u}", in: path)
         result.outgoing = group(from: base, to: "HEAD", range: "@{u}..HEAD", in: path)
@@ -280,7 +297,7 @@ enum GitPanel {
         // (2026-09-24), and commits happen only when the user asks. Commit messages are quoted as data.
         var lines = ["[meepo] Teammates pushed \(commits.count) new commit\(commits.count == 1 ? "" : "s") to \(upstream)"
             + (pulled ? ", already pulled into this folder (git pull --rebase). Their commit messages, quoted:"
-                      : ". Not pulled yet: this folder has uncommitted changes, and meepo pulls them itself once it's clean."
+                      : ". Not pulled yet: meepo pulls them itself once the folder is clean and you're between turns."
                         + " Don't commit, pull or rebase because of this note. Their commit messages, quoted:")]
         lines += commits.prefix(15).map { "- \"\($0)\"" }
         if !files.isEmpty {

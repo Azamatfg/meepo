@@ -27,6 +27,22 @@ final class ChangeLogTests: XCTestCase {
         XCTAssertEqual(try read(file), "meepo's")
     }
 
+    /// A backup that's gone (the Trash emptied, backups cleaned) fails before the current file is touched.
+    func testRestoreWithAMissingBackupLeavesTheFileAlone() throws {
+        let file = tmp.appending(path: "settings.json")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try "mine".write(to: file, atomically: true, encoding: .utf8)
+        let backup = try XCTUnwrap(ChangeLog.backup(file, folder: "t", backups: backups))
+        try "meepo's".write(to: file, atomically: true, encoding: .utf8)
+        ChangeLog.record("Hook bridge", file: file, backup: backup, backups: backups)
+        try FileManager.default.removeItem(at: backup)
+        let entry = try XCTUnwrap(ChangeLog.entries(backups: backups).first)
+        XCTAssertThrowsError(try ChangeLog.restore(entry, backups: backups))
+        XCTAssertEqual(try read(file), "meepo's", "the current file stays where it was")
+        XCTAssertEqual(ChangeLog.entries(backups: backups).count, 1, "nothing was restored, nothing logged")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: backups.appending(path: "restored").path), "no stray copy")
+    }
+
     /// What meepo created (a folder dropped into Explorer can be big) goes to the Trash — no backup copy of it —
     /// and undoing that brings it back from there.
     func testWhatMeepoCreatedGoesToTheTrashOnRestore() throws {

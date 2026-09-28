@@ -69,12 +69,13 @@ final class GuidedRestartTests: XCTestCase {
     }
 
     /// A session claude only (re)started, left alone until the idle prompt came (status "waiting for you" after
-    /// SessionStart — every session right after meepo opens), and one whose turn an API error ended, are between turns.
+    /// SessionStart — every session right after meepo opens), and one whose turn an API error ended — before or
+    /// after its idle prompt — are between turns.
     func testAFreshlyStartedOrFailedSessionIsBetweenTurns() {
         let sessions = [state(1, .waitingInput, "SessionStart"), state(2, .error, "StopFailure"),
-                        state(3, .waitingInput, nil), state(4, .error, "PreToolUse")]
+                        state(3, .waitingInput, nil), state(4, .error, "PreToolUse"), state(5, .waitingInput, "StopFailure")]
         let (now, later) = AppStore.guidedRestart(sessions, guided: true, hooks: true)
-        XCTAssertEqual(now, [1, 2])
+        XCTAssertEqual(now, [1, 2, 5])
         XCTAssertEqual(later, [3, 4], "nothing known about its turn: don't cut it off")
     }
 
@@ -194,5 +195,34 @@ final class DemoGitTests: XCTestCase {
         let folder = FileManager.default.temporaryDirectory.appending(path: "Meepo Demo/\(Demo.projects[0].name)")
         let count = Int(GitService.output(["rev-list", "--count", "HEAD"], in: folder.path) ?? "") ?? 0
         XCTAssertEqual(count, 1 + Demo.projects[0].history.count, "every commit made, none signed or blocked by a hook")
+    }
+}
+
+@MainActor
+final class ImportPicksTests: XCTestCase {
+    /// Onboarding's Open meepo imports what step 3 has checked; after IMPORT the same picks add nothing twice.
+    func testImportingTakesTheFoldersOffTheList() throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        let conversation = ClaudeImport.ClaudeSession(id: UUID().uuidString.lowercased(), title: "fix login", date: .now)
+        let folders = [ClaudeImport.Folder(path: try makeTempRepo().path, lastUsed: .now, isGit: true, session: conversation),
+                       ClaudeImport.Folder(path: try makeTempRepo().path, lastUsed: .now, isGit: true)]
+        var picks = ImportPicks(folders: folders, picked: Set(folders.map(\.id)), resumed: [folders[0].id])
+        store.importPicked(&picks)
+        XCTAssertEqual(store.projects.count, 2)
+        XCTAssertEqual(store.sessions.map(\.claudeSessionId), [conversation.id], "the checked conversation continues")
+        XCTAssertEqual(picks.folders, [])
+        XCTAssertTrue(picks.picked.isEmpty && picks.resumed.isEmpty)
+        XCTAssertNil(store.bridgeError)
+
+        // A folder already in meepo (the list read before it was added): no error, no second resumed session.
+        picks = ImportPicks(folders: [folders[0]], picked: [folders[0].id], resumed: [folders[0].id])
+        store.importPicked(&picks)
+        XCTAssertNil(store.bridgeError)
+        XCTAssertEqual(store.projects.count, 2)
+        XCTAssertEqual(store.sessions.count, 1)
+        XCTAssertEqual(picks.folders, [])
+        XCTAssertTrue(picks.picked.isEmpty && picks.resumed.isEmpty)
     }
 }

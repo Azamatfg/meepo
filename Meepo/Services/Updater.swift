@@ -77,6 +77,11 @@ enum Updater {
             .max { $0.1 < $1.1 }?.0
     }
 
+    /// A downloaded prerelease stays staged only on the beta channel ("Stable — releases only").
+    static func keepsStaged(_ version: String, on channel: Channel) -> Bool {
+        channel == .beta || Version(version)?.isPrerelease != true
+    }
+
     static func fetchReleases() async throws -> [Release] {
         var request = URLRequest(url: releasesURL)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")

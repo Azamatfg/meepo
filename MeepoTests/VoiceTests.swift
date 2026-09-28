@@ -239,8 +239,8 @@ final class TypingTests: XCTestCase {
         XCTAssertTrue(store.type("/qa\r", into: id), "nothing asked: the button works")
         _ = store.handleHookEvent(HookPayload(event: "PermissionRequest", claudeSessionId: session.claudeSessionId), sessionId: id)
         XCTAssertFalse(store.type("/qa\r", into: id), "a permission is open: Enter would answer it")
-        XCTAssertNotNil(store.bridgeError)
-        XCTAssertTrue(store.type(" ", into: id), "no Enter: SPEAK's tap still goes through")
+        XCTAssertNotNil(store.confirmation?.alternative, "says why, and lets the user send anyway")
+        XCTAssertTrue(store.type(" ", into: id), "no Enter: type() lets it through (SPEAK checks for itself)")
         _ = store.handleHookEvent(HookPayload(event: "Stop", claudeSessionId: session.claudeSessionId), sessionId: id)
         XCTAssertTrue(store.type("/qa\r", into: id), "answered and done: the button works again")
     }

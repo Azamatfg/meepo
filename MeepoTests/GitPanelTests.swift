@@ -17,16 +17,43 @@ final class GitPanelParsingTests: XCTestCase {
         XCTAssertEqual([snapshot.ahead, snapshot.behind], [5, 1])
         XCTAssertEqual(snapshot.changes.map(\.status), ["M", "A", "R", "D", "?"])
         XCTAssertEqual(snapshot.changes.map(\.path), ["Meepo/App/AppStore.swift", "new.swift", "renamed.swift", "gone.swift", "with space.md"])
+        XCTAssertEqual(snapshot.changes[2].oldPath, "old.swift")         // Compare's left side
+        XCTAssertNil(snapshot.changes[0].oldPath)
 
         let local = GitPanel.parseStatus("## feature\n")
         XCTAssertEqual(local.branch, "feature")
         XCTAssertNil(local.upstream)                                     // PUBLISH, not PUSH
     }
 
+    /// A repo without commits yet (right after `git init`): the branch is "main", not "No".
+    func testStatusHeaderWithoutCommits() {
+        let fresh = GitPanel.parseStatus("## No commits yet on main\n?? a.txt\n")
+        XCTAssertEqual(fresh.branch, "main")
+        XCTAssertNil(fresh.upstream)
+        XCTAssertEqual(fresh.changes.map(\.path), ["a.txt"])
+        let cloned = GitPanel.parseStatus("## No commits yet on dev...origin/dev\n")
+        XCTAssertEqual(cloned.branch, "dev")
+        XCTAssertEqual(cloned.upstream, "origin/dev")
+    }
+
     func testNumstatAndBinaryFiles() {
         let counts = GitPanel.parseNumstat("3\t0\tMeepo/App/AppStore.swift\n-\t-\tassets/icon.png\n")
         XCTAssertEqual(counts["Meepo/App/AppStore.swift"]?.0, 3)
         XCTAssertEqual(counts["assets/icon.png"]?.0, 0)
+    }
+
+    /// numstat names a rename `old => new` or `dir/{a => b}/x`; status and name-status name it by the new path.
+    func testRenamesCountByTheNewPathAndKeepTheOldOne() {
+        let counts = GitPanel.parseNumstat("2\t2\tOld.swift => New.swift\n1\t0\tdir/{a.swift => b.swift}\n"
+                                           + "3\t1\tdir/{sub => }/c.swift\n4\t0\t{a => b}/x.swift\n")
+        XCTAssertEqual(counts["New.swift"]?.0, 2)
+        XCTAssertEqual(counts["dir/b.swift"]?.0, 1)
+        XCTAssertEqual(counts["dir/c.swift"]?.0, 3)
+        XCTAssertEqual(counts["b/x.swift"]?.0, 4)
+
+        let quoted = GitPanel.parseStatus("R  \"a b.md\" -> \"c d.md\"\n").changes   // each side quoted on its own
+        XCTAssertEqual(quoted.map(\.path), ["c d.md"])
+        XCTAssertEqual(quoted.map(\.oldPath), ["a b.md"])
     }
 
     func testExplainPromptSpeaksTheUsersLanguageAndListsNewFiles() {
@@ -148,6 +175,48 @@ final class GitPanelRemoteTests: XCTestCase {
         XCTAssertEqual(GitPanel.snapshot(in: repo.path).behind, 1)
         XCTAssertNil(GitPanel.pull(in: repo.path))
         XCTAssertEqual(GitPanel.snapshot(in: repo.path).behind, 0)
+    }
+
+    /// Publish shows only where it can work: a branch with commits and an origin to push to.
+    func testPublishOnlyWithARemoteAndABranch() throws {
+        let repo = try makeTempRepo()
+        try git(["commit", "-q", "--allow-empty", "-m", "base"], in: repo)
+        XCTAssertFalse(GitPanel.sourceControl(in: repo.path).canPublish, "no remote")
+        try git(["remote", "add", "origin", repo.path + "-remote.git"], in: repo)   // get-url doesn't need it to exist
+        XCTAssertTrue(GitPanel.sourceControl(in: repo.path).canPublish)
+
+        try git(["checkout", "-q", "--detach"], in: repo)
+        let detached = GitPanel.sourceControl(in: repo.path)
+        XCTAssertEqual(detached.branch, "HEAD")
+        XCTAssertFalse(detached.canPublish, "a detached HEAD isn't a branch")
+
+        let unborn = GitPanel.sourceControl(in: try makeTempRepo(remote: "x").path)
+        XCTAssertEqual(unborn.branch, "trunk")
+        XCTAssertFalse(unborn.canPublish, "nothing committed to push yet")
+    }
+}
+
+/// A staged rename (`git mv`, or `mv` then `git add -A`).
+final class GitPanelRenameTests: XCTestCase {
+    func testStagedRenameComparesWithItsOldPath() throws {
+        let repo = try makeTempRepo()
+        try git(["config", "diff.renames", "true"], in: repo)      // the user's global config may turn rename detection off
+        try git(["config", "status.renames", "true"], in: repo)
+        let lines = (1...10).map { "line \($0)\n" }.joined()
+        try lines.write(to: repo.appending(path: "Old.swift"), atomically: true, encoding: .utf8)
+        try git(["add", "."], in: repo)
+        try git(["-c", "user.name=T", "-c", "user.email=t@t", "commit", "-qm", "init"], in: repo)
+        try git(["mv", "Old.swift", "New.swift"], in: repo)
+        try lines.replacingOccurrences(of: "line 5\n", with: "line five\n")
+            .write(to: repo.appending(path: "New.swift"), atomically: true, encoding: .utf8)
+
+        let change = try XCTUnwrap(GitPanel.sourceControl(in: repo.path).changes.first)
+        XCTAssertEqual(change.status, "R")
+        XCTAssertEqual(change.path, "New.swift")
+        XCTAssertEqual(change.oldPath, "Old.swift")
+        XCTAssertEqual([change.added, change.removed], [1, 1], "the edit, not the whole file")
+        XCTAssertEqual(GitPanel.versions(of: change, old: "HEAD", new: nil, in: repo.path).old, Data(lines.utf8),
+                       "the left side is the file before the rename")
     }
 }
 

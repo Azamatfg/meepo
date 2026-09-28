@@ -180,6 +180,24 @@ final class WorkTests: XCTestCase {
         XCTAssertEqual(Work.pending([read]), ["1 file not committed"], "nothing to send to: no remote")
     }
 
+    /// A worktree branch (`claude -w`) starts from origin/main with no upstream: only its own commits are units,
+    /// not the ones the remote already has.
+    func testAWorktreeBranchListsOnlyItsOwnCommits() throws {
+        let remote = try Remote()
+        try remote.commit("fix: teammate's fix", file: "api.go", in: remote.theirs, as: "Rustem")
+        try git(["push", "-q"], in: remote.theirs)
+        try git(["fetch", "-q"], in: remote.mine)
+        try git(["checkout", "-q", "--no-track", "-b", "worktree-x", "origin/main"], in: remote.mine)
+        try remote.commit("feat: mine", file: "mine.txt", in: remote.mine)
+
+        let repo = try XCTUnwrap(remote.read())
+        XCTAssertNil(repo.upstream)
+        XCTAssertTrue(repo.hasRemote)
+        XCTAssertEqual(repo.commits.map(\.subject), ["feat: mine"])
+        let listed = Work.units(repo, runs: []).flatMap { $0.commits(in: repo) }.map(\.subject)
+        XCTAssertFalse(listed.contains("base") || listed.contains("fix: teammate's fix"), "\(listed)")
+    }
+
     /// A folder of two repos has a NOW for each: Today lists both, so they can't share an id.
     func testEachReposNowIsItsOwn() {
         let api = Work.Repo(name: "api", path: "/p/api", upstream: "origin/main", head: "a", uncommitted: ["x.go"])
@@ -349,6 +367,33 @@ final class WorkStoreTests: XCTestCase {
         XCTAssertEqual(work.repos.first?.sends.last?.id, "sent:" + sha)
         XCTAssertEqual(work.summaries["sent:" + sha]?.headline, "h")
         XCTAssertEqual(store.titles[session.id!], "закоммить и запушь")
+    }
+
+    /// A closed session's requests leave its folder's work at once: Today must not open a session that is gone.
+    func testClosingASessionDropsItsRuns() throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        try store.addProject(at: try makeTempRepo())
+        let (projectId, path) = (store.projects[0].id!, store.projects[0].path)
+        try store.createSession(projectId: projectId, model: nil, prompt: nil)
+        try store.createSession(projectId: projectId, model: nil, prompt: nil)
+        let (a, b) = (store.sessions[0], store.sessions[1])
+        func ask(_ session: Session) {
+            store.handleHookEvent(HookPayload(event: "UserPromptSubmit", claudeSessionId: session.claudeSessionId,
+                                              prompt: "add the export"), sessionId: session.id!)
+        }
+
+        ask(a)
+        XCTAssertEqual(store.work[path]?.runs.map(\.sessionId), [a.id!])
+        store.closeSession(a.id!)
+        XCTAssertEqual(store.work[path]?.runs.map(\.sessionId), [])
+
+        // The folder's last session closes and a new one opens there: none of the old requests stay.
+        ask(b)
+        store.closeSession(b.id!)
+        try store.createSession(projectId: projectId, model: nil, prompt: nil)
+        XCTAssertEqual(store.work[path]?.runs.map(\.sessionId), [])
     }
 
     /// The card's "needs you" line keeps what the session waits on: the Notification Claude Code sends ~6 s after

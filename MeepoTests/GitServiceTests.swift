@@ -55,6 +55,61 @@ final class GitServiceTests: XCTestCase {
             XCTAssertEqual($0 as? GitError, .notARepository(dir.path))
         }
     }
+
+    /// The 10 s poll must not write the index back: that holds index.lock, and Claude's `git commit` would fail.
+    func testUncommittedCheckLeavesTheIndexAlone() throws {
+        let repo = try makeTempRepo()
+        let file = repo.appending(path: "a.txt")
+        try "a\n".write(to: file, atomically: true, encoding: .utf8)
+        try git(["add", "a.txt"], in: repo)
+        try git(["-c", "user.name=T", "-c", "user.email=t@t", "commit", "-qm", "init"], in: repo)
+        // Same content, newer mtime: a plain `git status` refreshes the stat data and rewrites the index.
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(100)], ofItemAtPath: file.path)
+        let index = repo.appending(path: ".git/index")
+        let before = try Data(contentsOf: index)
+        XCTAssertFalse(GitService.hasUncommittedChanges(in: repo.path))
+        XCTAssertEqual(try Data(contentsOf: index), before)
+
+        try "b\n".write(to: repo.appending(path: "b.txt"), atomically: true, encoding: .utf8)
+        XCTAssertTrue(GitService.hasUncommittedChanges(in: repo.path), "an untracked file is a change")
+    }
+
+    /// check-ignore never reports a tracked file, so the exclude line must not be added again on every call.
+    func testIgnoreLocallyAddsATrackedFileOnce() throws {
+        let repo = try makeTempRepo()
+        try git(["config", "core.excludesFile", "/dev/null"], in: repo)   // the user's global excludes may already ignore it
+        try FileManager.default.createDirectory(at: repo.appending(path: ".claude"), withIntermediateDirectories: true)
+        try "{}".write(to: repo.appending(path: ".claude/settings.local.json"), atomically: true, encoding: .utf8)
+        try git(["add", ".claude/settings.local.json"], in: repo)
+        let backups = FileManager.default.temporaryDirectory.appending(path: "backups-\(UUID().uuidString)")
+
+        GitService.ignoreLocally(".claude/settings.local.json", in: repo.path, backups: backups)
+        GitService.ignoreLocally(".claude/settings.local.json", in: repo.path, backups: backups)
+        let exclude = try String(contentsOf: repo.appending(path: ".git/info/exclude"), encoding: .utf8)
+        XCTAssertEqual(exclude.split(separator: "\n").filter { $0 == ".claude/settings.local.json" }.count, 1)
+        XCTAssertEqual(ChangeLog.entries(backups: backups).filter { $0.action == "Ignore .claude/settings.local.json" }.count, 1)
+    }
+
+    /// The day report: commits on local branches, not a fetched remote branch's or the stash's.
+    func testTodaysCommitsAreLocalBranchesOnly() throws {
+        let repo = try makeTempRepo()
+        let id = ["-c", "user.name=T", "-c", "user.email=t@t"]
+        try "a\n".write(to: repo.appending(path: "a.txt"), atomically: true, encoding: .utf8)
+        try git(["add", "."], in: repo)
+        try git(id + ["commit", "-qm", "my work"], in: repo)
+        try git(["checkout", "-q", "-b", "teammate"], in: repo)
+        try git(id + ["commit", "-q", "--allow-empty", "-m", "teammate work"], in: repo)
+        try git(["update-ref", "refs/remotes/origin/feature", "HEAD"], in: repo)   // as a fetch leaves it
+        try git(["checkout", "-q", "trunk"], in: repo)
+        try git(["branch", "-q", "-D", "teammate"], in: repo)
+        try "wip\n".write(to: repo.appending(path: "a.txt"), atomically: true, encoding: .utf8)
+        try git(id + ["stash", "push", "-q", "-m", "t"], in: repo)   // this temp repo's own stash
+
+        let commits = GitService.commits(since: Calendar.current.startOfDay(for: .now), in: repo.path)
+        XCTAssertTrue(commits.contains { $0.hasSuffix(" my work") }, "\(commits)")
+        XCTAssertFalse(commits.contains { $0.hasSuffix(" teammate work") }, "\(commits)")
+        XCTAssertFalse(commits.contains { $0.contains("index on") }, "\(commits)")
+    }
 }
 
 @MainActor

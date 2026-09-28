@@ -10,7 +10,10 @@ struct SourceControlPanel: View {
         if let session = store.selectedSession, let folder = store.workdir(of: session) {
             let repos = store.sessionRepos
             if repos.count <= 1 {
-                RepoSourceControl(path: repos.first?.path ?? folder)
+                // Keyed by path like the ForEach below: another session's repo gets its own state, so an
+                // EXPLAIN still running for this one can't land there.
+                let path = repos.first?.path ?? folder
+                RepoSourceControl(path: path).id(path)
             } else {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(repos) { repo in
@@ -49,7 +52,6 @@ private struct RepoSourceControl: View {
 
     var body: some View {
         sourceControl(path: path)
-            .onChange(of: path) { explanation = nil }
             .sheet(isPresented: Binding(get: { compare != nil }, set: { if !$0 { compare = nil } })) {
                 if let compare {
                     DiffViewer(title: compare.title, sources: compare.sources(in: path), selected: compare.selected)
@@ -79,7 +81,7 @@ private struct RepoSourceControl: View {
             } else if let scm {
                 changesGroup(scm, path: path)
                 if !scm.incoming.commits.isEmpty { incomingGroup(scm, path: path) }
-                if !scm.outgoing.commits.isEmpty || scm.upstream == nil { outgoingGroup(scm, path: path) }
+                if !scm.outgoing.commits.isEmpty || scm.canPublish { outgoingGroup(scm, path: path) }
                 if !scm.history.isEmpty { historyGroup(scm) }
                 if let explanation {
                     VStack(alignment: .leading, spacing: 4) {
@@ -142,7 +144,7 @@ private struct RepoSourceControl: View {
                             whose: "the teammates' incoming", newFiles: [])
                 }
             }
-            if !scm.changes.isEmpty {
+            if !scm.changes.isEmpty, store.isBridgeInstalled {    // without hooks auto-sync never pulls
                 Text("Pulled automatically once your changes are committed.").font(.caption2).foregroundStyle(Tokens.textDim)
             }
         }

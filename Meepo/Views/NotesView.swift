@@ -40,6 +40,8 @@ private struct DraftsView: View {
     @Binding var confirmation: PixelConfirmation?
     @State private var projectId: Int64?
     @State private var noteId: Int64?
+    /// The note on screen has unsaved edits: a finished NEW must not swap it away.
+    @State private var isDirty = false
 
     var body: some View {
         let project = store.projects.first { $0.id == projectId } ?? store.projects.first
@@ -53,7 +55,14 @@ private struct DraftsView: View {
                 if let project {
                     let isWriting = store.writingNotes.contains(project.id!)
                     Button(isWriting ? "WRITING…" : "NEW") {
-                        Task { await store.writeReleaseNote(for: project); noteId = nil }
+                        let shown = note?.id, newestBefore = notes.first?.id
+                        noteId = shown // the new note becoming notes.first must not swap the note on screen
+                        Task {
+                            await store.writeReleaseNote(for: project)
+                            let newest = store.releaseNotes.first { $0.projectId == project.id }?.id
+                            // Show it only if one arrived and the user is still on the same note, with nothing unsaved.
+                            if newest != newestBefore, noteId == shown, !isDirty { noteId = newest }
+                        }
                     }
                     .disabled(isWriting)
                     .help("Draft a note about the commits since the last one, in the voice of STYLE")
@@ -67,7 +76,7 @@ private struct DraftsView: View {
             }
             .buttonStyle(PixelButtonStyle())
             if let note {
-                NoteEditor(note: note, confirmation: $confirmation).id(note.id)
+                NoteEditor(note: note, confirmation: $confirmation, isDirty: $isDirty).id(note.id)
             } else {
                 Text("No notes yet. NEW writes one from the commits (and the last /ship report).")
                     .foregroundStyle(Tokens.textDim)
@@ -89,6 +98,7 @@ private struct NoteEditor: View {
     @Environment(AppStore.self) private var store
     let note: ReleaseNote
     @Binding var confirmation: PixelConfirmation?
+    @Binding var isDirty: Bool
     @State private var text = ""
     @State private var isEditing = false
 
@@ -130,11 +140,13 @@ private struct NoteEditor: View {
             .sunken()
         }
         .onAppear { text = note.text }
+        .onChange(of: text != note.text) { _, dirty in isDirty = dirty }
     }
 }
 
 /// The user's own posts: NEW copies their language, length, tone and formatting.
 private struct StyleView: View {
+    @Environment(AppStore.self) private var store
     @State private var samples = ""
     @State private var saved = ""
 
@@ -145,8 +157,9 @@ private struct StyleView: View {
                     .font(.caption).foregroundStyle(Tokens.textDim)
                 Spacer()
                 Button("SAVE") {
-                    try? FileManager.default.createDirectory(at: MeepoHome.url, withIntermediateDirectories: true)
-                    if (try? samples.write(to: ReleaseNotes.styleURL, atomically: true, encoding: .utf8)) != nil { saved = samples }
+                    try? FileManager.default.createDirectory(at: store.releaseStyleURL.deletingLastPathComponent(),
+                                                             withIntermediateDirectories: true)
+                    if (try? samples.write(to: store.releaseStyleURL, atomically: true, encoding: .utf8)) != nil { saved = samples }
                 }
                 .buttonStyle(PixelButtonStyle())
                 .disabled(samples == saved)
@@ -160,7 +173,7 @@ private struct StyleView: View {
                 .sunken()
         }
         .onAppear {
-            saved = (try? String(contentsOf: ReleaseNotes.styleURL, encoding: .utf8)) ?? ""
+            saved = (try? String(contentsOf: store.releaseStyleURL, encoding: .utf8)) ?? ""
             samples = saved
         }
     }

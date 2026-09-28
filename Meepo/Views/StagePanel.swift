@@ -160,7 +160,7 @@ struct StagePanel: View {
                         title: "REMOVE WORKTREE \((session.worktreeName ?? "").uppercased())?",
                         message: "Branch \(session.branch ?? "") is merged. The worktree and the branch are deleted, the session closes.",
                         action: "REMOVE"
-                    ) { store.removeWorktree(of: session.id!) }
+                    ) { Task { await store.removeWorktree(of: session.id!) } }
                 }
                 .buttonStyle(PixelButtonStyle())
                 .overlay { Capsule().strokeBorder(Tokens.work, lineWidth: 1.5) }

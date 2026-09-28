@@ -88,6 +88,18 @@ final class NavigationTests: XCTestCase {
         XCTAssertEqual(store.selectedSessionId, ids[0])
     }
 
+    /// An old notification for a closed session must not blank the window.
+    func testSelectingAClosedSessionKeepsTheCurrentOne() throws {
+        let p = try addProjects(["alpha"])[0]
+        for _ in 0..<2 { try store.createSession(projectId: p, model: nil, prompt: nil) }
+        let ids = store.orderedSessions.map(\.id)
+        store.closeSession(ids[0]!)
+        store.selectedSessionId = ids[1]
+        store.selectSession(id: ids[0]!)
+        XCTAssertEqual(store.selectedSessionId, ids[1])
+        XCTAssertNotNil(store.selectedSession)
+    }
+
     func testSessionsSurviveStoreRestart() throws {
         let p = try addProjects(["alpha"])[0]
         try store.createSession(projectId: p, model: "haiku", prompt: nil)

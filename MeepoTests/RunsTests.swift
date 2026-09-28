@@ -126,6 +126,20 @@ final class RunsTests: XCTestCase {
         XCTAssertEqual(runs.map(\.outcome), [.noReply, .done])
     }
 
+    /// Only the submit that repeats an expansion joins it: a different request sent right away is its own.
+    func testASecondRequestSentRightAwayIsARequestOfItsOwn() {
+        let runs = Runs.from([event("UserPromptSubmit", "fix the login bug in api/", 0),
+                              event("UserPromptSubmit", "fix the login bug in web/", 3),
+                              event("PostToolUse", "Edit: /repo/web/login.ts", 10), event("Stop", "Fixed.", 20)])
+        XCTAssertEqual(runs.map(\.request), ["fix the login bug in api/", "fix the login bug in web/"])
+        XCTAssertEqual(runs.map(\.outcome), [.noReply, .done])
+        XCTAssertEqual(runs[1].files, ["/repo/web/login.ts"])
+        // The real 2026-09-25 sequence: /simplify cut off by "продолжай" 4.6 s later.
+        let real = Runs.from([event("UserPromptExpansion", "/simplify", 100), event("UserPromptSubmit", "/simplify", 100.03),
+                              event("UserPromptSubmit", "продолжай", 104.6), event("Stop", "Done.", 200)])
+        XCTAssertEqual(real.map(\.request), ["/simplify", "продолжай"])
+    }
+
     /// A reply that failed, or a session closed mid-request, ends the request there — it doesn't read "working…"
     /// and count hours for days.
     func testAFailedReplyOrAClosedSessionEndsTheRequest() {

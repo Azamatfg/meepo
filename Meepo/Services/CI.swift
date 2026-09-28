@@ -9,7 +9,8 @@ struct CIRun: Decodable, Equatable, Identifiable {
     let status: String
     let conclusion: String?
     let createdAt: Date
-    let attempt: Int
+    /// GitLab has no attempt number; `GitLabCI.runs` counts retried job copies instead.
+    var attempt: Int
     let url: String
     /// What started it: push, pull_request, workflow_run, workflow_dispatch, schedule.
     var event: String?
@@ -28,6 +29,11 @@ struct CIRun: Decodable, Equatable, Identifiable {
         workflowName.range(of: #"(?i)deploy|release|publish|push|\bcd\b"#, options: .regularExpression) != nil
     }
     var key: String { "\(workflowName)|\(headBranch)" }
+    /// Started by a PR or merge request, which may come from a fork: its branch, name and log aren't the user's.
+    var isPullRequest: Bool {
+        guard let event else { return false }
+        return event.hasPrefix("pull_request") || ["merge_request_event", "external_pull_request_event"].contains(event)
+    }
     /// Failed before running the code (no CI minutes, no runner…): rerunning or fixing code won't help.
     var isInfraFailure: Bool {
         failed && ["ci_quota_exceeded", "no_matching_runner", "runner_system_failure", "runner_unsupported",
@@ -39,9 +45,12 @@ struct CIRun: Decodable, Equatable, Identifiable {
 /// CI behind an interface: GitHub Actions via `gh` first; GitLab CI etc. can implement the same (SPEC module 9).
 protocol CIProvider: Sendable {
     func handles(_ project: Project) -> Bool
-    func runs(in path: String) async -> [CIRun]
+    /// Nil when the CLI failed or its output didn't decode (offline, logged out): not the same as no runs.
+    func runs(in path: String) async -> [CIRun]?
     func failedLog(_ run: CIRun, in path: String) async -> String
     func rerunFailed(_ run: CIRun, in path: String) async -> Bool
+    /// A PR run from a branch of this repo, not a fork: its branch, name and log are the user's own.
+    func isOwnPullRequest(_ run: CIRun, in path: String) async -> Bool
     /// How a fix session opens its review request: a PR on GitHub, a merge request on GitLab.
     var reviewRequest: String { get }
     /// The default branch's latest commit as a chain of steps; `runs` are this poll's `runs(in:)`.
@@ -134,10 +143,10 @@ struct GitHubActions: CIProvider {
 
     var reviewRequest: String { "a PR into %@ with `gh pr create`" }
 
-    func runs(in path: String) async -> [CIRun] {
+    func runs(in path: String) async -> [CIRun]? {
         let fields = "databaseId,workflowName,headBranch,headSha,status,conclusion,createdAt,startedAt,updatedAt,attempt,url,event"
-        guard let data = await CLI.run(gh, ["run", "list", "-L", "30", "--json", fields], in: path) else { return [] }
-        return (try? Self.decoder.decode([CIRun].self, from: data)) ?? []
+        guard let data = await CLI.run(gh, ["run", "list", "-L", "30", "--json", fields], in: path) else { return nil }
+        return try? Self.decoder.decode([CIRun].self, from: data)
     }
 
     func failedLog(_ run: CIRun, in path: String) async -> String {
@@ -147,6 +156,13 @@ struct GitHubActions: CIProvider {
 
     func rerunFailed(_ run: CIRun, in path: String) async -> Bool {
         await CLI.run(gh, ["run", "rerun", String(run.databaseId), "--failed"], in: path) != nil
+    }
+
+    func isOwnPullRequest(_ run: CIRun, in path: String) async -> Bool {
+        let same = ".head_repository.full_name == .repository.full_name"
+        guard let data = await CLI.run(gh, ["api", "repos/{owner}/{repo}/actions/runs/\(run.databaseId)", "--jq", same], in: path)
+        else { return false }
+        return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) == "true"
     }
 
     func pipeline(runs: [CIRun], in path: String) async -> Pipeline? {
@@ -177,9 +193,11 @@ struct GitHubActions: CIProvider {
         }
         let deploys = workflows.filter { $0.name.range(of: #"(?i)deploy|release|\bcd\b"#, options: .regularExpression) != nil }
         var steps = latest.values.sorted { $0.createdAt < $1.createdAt }.map { run in
-            Pipeline.Step(name: run.workflowName, state: state(of: run), url: run.url,
-                          trigger: deploys.first { $0.name == run.workflowName }?.path,
-                          started: run.startedAt ?? run.createdAt, finished: run.isRunning ? nil : run.updatedAt)
+            let state = Self.state(of: run)
+            // A run waiting for environment approval is approved on GitHub; Run would only queue another deploy.
+            return Pipeline.Step(name: run.workflowName, state: state, url: run.url,
+                                 trigger: state == .manual ? nil : deploys.first { $0.name == run.workflowName }?.path,
+                                 started: run.startedAt ?? run.createdAt, finished: run.isRunning ? nil : run.updatedAt)
         }
         for deploy in deploys where latest[deploy.name] == nil {
             steps.append(Pipeline.Step(name: deploy.name, state: .manual, trigger: deploy.path))
@@ -230,17 +248,18 @@ struct GitLabCI: CIProvider {
 
     var reviewRequest: String { "a merge request into %@ with `glab mr create --target-branch %@`" }
 
-    func runs(in path: String) async -> [CIRun] {
+    func runs(in path: String) async -> [CIRun]? {
         guard let data = await api(["projects/:fullpath/pipelines?per_page=30"], in: path),
-              let pipelines = try? Self.decoder.decode([APIPipeline].self, from: data) else { return [] }
+              let pipelines = try? Self.decoder.decode([APIPipeline].self, from: data) else { return nil }
         var runs = pipelines.map(\.run)
-        // Only the newest pipeline per branch is shown and acted on; ask why those failed.
+        // Only the newest pipeline per branch is shown and acted on; ask why those failed and how often they ran.
         var seen: Set<String> = []
         for index in runs.indices where seen.insert(runs[index].headBranch).inserted && runs[index].failed {
-            if let jobs = await api(["projects/:fullpath/pipelines/\(runs[index].databaseId)/jobs?scope[]=failed"], in: path),
-               let failed = try? Self.decoder.decode([APIJob].self, from: jobs) {
-                runs[index].failureReason = failed.lazy.compactMap(\.failure_reason).first
-            }
+            // Without its jobs the attempt would fall back to 1 and the same failure would look new on the next poll.
+            guard let data = await api(["projects/:fullpath/pipelines/\(runs[index].databaseId)/jobs?include_retried=true&per_page=100"], in: path),
+                  let jobs = try? Self.decoder.decode([APIJob].self, from: data) else { return nil }
+            runs[index].attempt = Self.attempt(jobs)
+            runs[index].failureReason = Self.failureReason(jobs)
         }
         return runs
     }
@@ -262,6 +281,9 @@ struct GitLabCI: CIProvider {
     func rerunFailed(_ run: CIRun, in path: String) async -> Bool {
         await api(["-X", "POST", "projects/:fullpath/pipelines/\(run.databaseId)/retry"], in: path) != nil
     }
+
+    /// An MR pipeline runs on refs/merge-requests/N/head, which a fix session can't check out.
+    func isOwnPullRequest(_ run: CIRun, in path: String) async -> Bool { false }
 
     func pipeline(runs: [CIRun], in path: String) async -> Pipeline? {
         guard let projectData = await api(["projects/:fullpath"], in: path),
@@ -298,6 +320,19 @@ struct GitLabCI: CIProvider {
                                  trigger: manual.map { String($0.id) }, started: jobs.compactMap(\.started_at).min(),
                                  finished: ends.contains { $0 == nil } ? nil : ends.compactMap { $0 }.max())
         }
+    }
+
+    /// A retried pipeline keeps its id; each retry clones the failed jobs it reruns (skipped ones rerun in place),
+    /// so every retry adds at least one copy. A `retry:` rule in .gitlab-ci.yml adds copies too, so a first failure
+    /// may already count as a second attempt.
+    static func attempt(_ jobs: [APIJob]) -> Int {
+        1 + jobs.count - Set(jobs.map(\.name)).count
+    }
+
+    /// Why it failed, from each job's latest copy only (retried copies are stale).
+    static func failureReason(_ jobs: [APIJob]) -> String? {
+        Dictionary(grouping: jobs, by: \.name).values.compactMap { $0.max { $0.id < $1.id } }
+            .filter { $0.status == "failed" }.sorted { $0.id > $1.id }.lazy.compactMap(\.failure_reason).first
     }
 
     struct APIProject: Decodable { let default_branch: String? }
@@ -405,11 +440,12 @@ enum CIAction: Equatable {
 enum CIGuard {
     static let maxFixAttempts = 3
 
-    static func action(for run: CIRun, fixAttempts: Int, autofix: Bool) -> CIAction {
+    static func action(for run: CIRun, fixAttempts: Int, autofix: Bool, ownPullRequest: Bool = false) -> CIAction {
         guard run.failed else { return .none }
         if run.isInfraFailure { return .reportInfra }
         if run.isDeploy { return .reportDeploy }
-        guard autofix else { return .none }
+        // A PR from a fork: never rerun it with the user's credentials or hand its text to an agent.
+        guard autofix, !run.isPullRequest || ownPullRequest else { return .none }
         if run.attempt < 2 { return .rerun }                  // flaky? try once more first
         return fixAttempts < maxFixAttempts ? .fix : .giveUp
     }

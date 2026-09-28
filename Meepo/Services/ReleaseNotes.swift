@@ -4,9 +4,6 @@ import Foundation
 /// user's voice from their sample posts. Written by a headless `claude -p` outside any session; the user
 /// copies the text wherever it goes, so there are no bots or tokens.
 enum ReleaseNotes {
-    /// The user's sample posts, one style for every project.
-    static var styleURL: URL { MeepoHome.url.appending(path: "release-style.md") }
-
     /// Subjects and bodies after the last note's sha; nil when there is nothing new.
     /// A first note, or a sha lost to a rewritten history, takes the last 20 commits.
     static func commits(after sha: String?, in path: String) -> String? {

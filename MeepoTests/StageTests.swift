@@ -221,6 +221,36 @@ final class StageFlowTests: XCTestCase {
         XCTAssertEqual(store.selectedSessionId, fresh.id)
     }
 
+    /// RELAY while Claude asks something types nothing, and mid-turn the next Stop would be the running turn's: neither
+    /// arms the relay, so that turn's ordinary reply doesn't close the session as a "handoff".
+    func testARelayThatWasntTypedDoesntCloseTheSession() {
+        let old = session
+        send("PermissionRequest", tool: "Bash", target: "ls")
+        store.relay(old.id!)
+        XCTAssertFalse(store.relayingSessionIds.contains(old.id!), "nothing typed: RELAY stays clickable")
+        XCTAssertNotNil(store.confirmation)
+        send("PostToolUse", tool: "Bash", target: "ls")
+        send("Stop", reply: "Listed the files.")
+        XCTAssertTrue(store.sessions.contains { $0.id == old.id }, "an ordinary reply is no handoff")
+
+        send("UserPromptSubmit", prompt: "go on")
+        store.relay(old.id!)
+        XCTAssertFalse(store.relayingSessionIds.contains(old.id!), "Claude is still working")
+        XCTAssertEqual(store.confirmation?.alternative?.title, "Relay anyway")
+        send("Stop", reply: "Went on.")
+        XCTAssertTrue(store.sessions.contains { $0.id == old.id })
+    }
+
+    /// With PLAN hidden, an ordinary reply in a stage-less session is not a plan to hand off.
+    func testNoPlanToCodeWithoutAPlanStage() {
+        store.stages.removeAll { $0.command == "plan" }
+        send("UserPromptSubmit", prompt: "fix the typo")
+        send("Stop", reply: "Fixed.")
+        XCTAssertNil(session.stage)
+        XCTAssertEqual(session.status, .waitingInput)
+        XCTAssertFalse(store.canStartImplementation(session))
+    }
+
     func testShipReminderWhenCodeChangedAfterQA() async throws {
         send("PostToolUse", tool: "Edit", target: "/a.swift")
         XCTAssertTrue(store.codeChangedSinceQA(session.id!))

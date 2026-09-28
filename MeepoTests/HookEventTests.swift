@@ -50,6 +50,22 @@ final class HookPayloadTests: XCTestCase {
         XCTAssertEqual(Attention.from(.thinking, to: .error), .error)
         XCTAssertNil(Attention.from(.waitingInput, to: .thinking))
     }
+
+    /// Compaction (auto: mid-turn, before a model call) says nothing about the turn; other SessionStarts mean ready.
+    func testCompactionLeavesTheStatusAlone() throws {
+        let compacted = try XCTUnwrap(HookPayload(json: Data(#"{"hook_event_name":"SessionStart","session_id":"s","source":"compact"}"#.utf8)))
+        XCTAssertNil(compacted.status)
+        XCTAssertNil(HookPayload(event: "PreCompact", claudeSessionId: "s").status)
+        let manual = try XCTUnwrap(HookPayload(json: Data(#"{"hook_event_name":"PreCompact","session_id":"s","trigger":"manual"}"#.utf8)))
+        XCTAssertEqual(manual.status, .thinking, "a /compact is work of its own, outside any turn")
+        XCTAssertEqual(HookPayload(event: "SessionStart", claudeSessionId: "s", source: "startup").status, .idle)
+    }
+
+    func testASubagentsEventSaysWhichAgent() throws {
+        let json = #"{"session_id":"s","hook_event_name":"PostToolUse","agent_id":"a1","tool_name":"Read","tool_input":{"file_path":"/x"}}"#
+        XCTAssertEqual(try XCTUnwrap(HookPayload(json: Data(json.utf8))).agentId, "a1")
+        XCTAssertNil(try XCTUnwrap(HookPayload(json: Data(#"{"session_id":"s","hook_event_name":"Stop"}"#.utf8))).agentId)
+    }
 }
 
 final class HTTPRequestTests: XCTestCase {
@@ -74,6 +90,12 @@ final class HTTPRequestTests: XCTestCase {
         var noSession = ok
         noSession.headers["x-meepo-session"] = nil
         XCTAssertEqual(EventServer.route(noSession, token: "t").status, 400)
+    }
+
+    func testNegativeContentLengthIsTreatedAsEmpty() throws {
+        let request = try XCTUnwrap(HTTPRequest.parse(Data("POST /event HTTP/1.1\r\nContent-Length: -1\r\n\r\n".utf8)))
+        XCTAssertEqual(request.body, Data())
+        XCTAssertEqual(EventServer.route(request, token: "t").status, 401)
     }
 }
 
@@ -268,6 +290,21 @@ final class HookHandlingTests: XCTestCase {
         XCTAssertEqual(store.sessions[0].claudeSessionId, "new-id-after-clear")
     }
 
+    /// A `claude -p` the agent runs (Bash, a git hook, a skill's script) inherits MEEPO_SESSION_ID: its events
+    /// aren't the session's — not its conversation to resume, not its turn ending.
+    func testANestedClaudeRunIsNotTheSession() {
+        let own = store.sessions[0].claudeSessionId
+        store.handleHookEvent(event("UserPromptSubmit"), sessionId: sessionId)
+        store.handleHookEvent(HookPayload(event: "SessionStart", claudeSessionId: "nested", source: "startup"), sessionId: sessionId)
+        XCTAssertEqual(store.sessions[0].claudeSessionId, own, "the next start resumes the user's conversation")
+        XCTAssertEqual(store.sessions[0].status, .thinking)
+        XCTAssertNil(store.handleHookEvent(event("Stop", "nested"), sessionId: sessionId), "no false Done")
+        store.handleHookEvent(event("SessionEnd", "nested"), sessionId: sessionId)
+        XCTAssertEqual(store.sessions[0].status, .thinking)
+        store.handleHookEvent(HookPayload(event: "SessionStart", claudeSessionId: "after-clear", source: "clear"), sessionId: sessionId)
+        XCTAssertEqual(store.sessions[0].claudeSessionId, "after-clear", "/clear does move it to a new conversation")
+    }
+
     func testFeedShowsSelectedSessionNewestFirst() {
         store.handleHookEvent(event("UserPromptSubmit"), sessionId: sessionId)
         store.handleHookEvent(event("PermissionDenied"), sessionId: sessionId)
@@ -308,7 +345,7 @@ final class NotifyGuardTests: XCTestCase {
         XCTAssertEqual(changed, 1)
         let diff = zip(projectSettings.split(separator: "\n"), guarded.split(separator: "\n")).filter { $0 != $1 }
         XCTAssertEqual(diff.count, 1)
-        XCTAssertTrue(diff[0].1.contains(#"[ -n \"$MEEPO_SESSION_ID\" ] || \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/notify-macos.sh"#))
+        XCTAssertTrue(diff[0].1.contains(#"[ -n \"$MEEPO_SESSION_ID\" ] && exit 0; \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/notify-macos.sh"#))
         XCTAssertEqual(NotifyGuard.guarded(guarded).1, 0) // idempotent
         XCTAssertEqual(NotifyGuard.unguarded(guarded).0, projectSettings) // byte-for-byte restore
     }
@@ -357,6 +394,58 @@ final class NotifyGuardTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
         try run([:])
         XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+    }
+
+    /// `input=$(cat); terminal-notifier …`: the whole command stays silent inside Meepo, not just its first part.
+    func testACompoundHookIsSilentAsAWhole() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: "guard-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let files = ["a", "b", "c"].map { dir.appending(path: $0) }
+        let command = NotifyGuard.prefix + "touch '\(files[0].path)' && touch '\(files[1].path)'; touch '\(files[2].path)'"
+        func run(_ env: [String: String]) throws {
+            let p = Process()
+            p.executableURL = URL(filePath: "/bin/sh") // what Claude Code runs a command hook with on macOS
+            p.arguments = ["-c", command]
+            p.environment = env
+            try p.run()
+            p.waitUntilExit()
+            XCTAssertEqual(p.terminationStatus, 0)
+        }
+        try run(["MEEPO_SESSION_ID": "3"])
+        XCTAssertEqual(files.filter { FileManager.default.fileExists(atPath: $0.path) }, [])
+        try run([:])
+        XCTAssertEqual(files.filter { FileManager.default.fileExists(atPath: $0.path) }, files)
+    }
+
+    /// A file guarded by an older Meepo (`… || cmd`) gets today's guard, and either one comes off byte for byte.
+    func testAnOlderGuardIsReplacedAndTakenBack() {
+        let old = projectSettings.replacingOccurrences(of: #""\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/notify-macos.sh""#,
+                                                       with: #""[ -n \"$MEEPO_SESSION_ID\" ] || \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/notify-macos.sh""#)
+        XCTAssertNotEqual(old, projectSettings)
+        let (guarded, changed) = NotifyGuard.guarded(old)
+        XCTAssertEqual(changed, 1)
+        XCTAssertEqual(guarded, NotifyGuard.guarded(projectSettings).0)
+        XCTAssertEqual(NotifyGuard.unguarded(old).0, projectSettings)
+        XCTAssertEqual(NotifyGuard.unguarded(guarded).0, projectSettings)
+    }
+
+    /// Exec form (`args`) runs `command` without a shell: guarding it would leave a missing executable.
+    func testAnExecFormHookIsNeverGuardedAndAnEarlierGuardComesOff() {
+        let text = """
+        {"hooks":{"Notification":[{"hooks":[{"type":"command","command":"/opt/homebrew/bin/terminal-notifier","args":["-message","hi"]},{"type":"command","command":"n.sh"}]}]}}
+        """
+        let (guarded, changed) = NotifyGuard.guarded(text)
+        XCTAssertEqual(changed, 1)
+        XCTAssertTrue(guarded.contains(#""command":"/opt/homebrew/bin/terminal-notifier""#))
+        XCTAssertTrue(guarded.contains(#""command":"[ -n \"$MEEPO_SESSION_ID\" ] && exit 0; n.sh""#))
+
+        let broken = """
+        {"hooks":{"Notification":[{"hooks":[{"type":"command","command":"[ -n \\"$MEEPO_SESSION_ID\\" ] || /opt/homebrew/bin/terminal-notifier","args":["-message","hi"]}]}]}}
+        """
+        let healed = #"{"hooks":{"Notification":[{"hooks":[{"type":"command","command":"/opt/homebrew/bin/terminal-notifier","args":["-message","hi"]}]}]}}"#
+        XCTAssertEqual(NotifyGuard.guarded(broken).1, 1)
+        XCTAssertEqual(NotifyGuard.guarded(broken).0, healed)
+        XCTAssertEqual(NotifyGuard.unguarded(broken).0, healed)
     }
 }
 

@@ -32,6 +32,17 @@ final class MarkdownTextTests: XCTestCase {
         XCTAssertNil(MarkdownText.rich("[x](file:///etc/passwd)").attribute(.link, at: 0, effectiveRange: nil))
     }
 
+    /// SHARE and plain-text paste get no link attribute: the address goes after the words, once per link.
+    func testPlainTextKeepsWebLinkAddresses() {
+        XCTAssertEqual(MarkdownText.plain("Get it [here **now**](https://example.com/app), see <https://a.b/c>"),
+                       "Get it here now (https://example.com/app), see https://a.b/c")
+        XCTAssertEqual(MarkdownText.plain("[x](file:///etc/passwd)"), "x", "an unsafe link's target never leaves meepo")
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("meepo-test-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        MarkdownText.copy("[here](https://example.com)", to: pasteboard)
+        XCTAssertEqual(pasteboard.string(forType: .string), "here (https://example.com)")
+    }
+
     /// RTF and HTML keep only real fonts; a presentation intent alone reaches Telegram or LinkedIn as plain text.
     func testRichTextHasABoldFont() {
         let rich = MarkdownText.rich("**Kaspi** payments")

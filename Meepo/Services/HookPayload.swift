@@ -20,6 +20,10 @@ struct HookPayload: Equatable {
     /// Stop only: background work still running (Claude Code's `background_tasks`, 2.1.28x). A Stop with
     /// some isn't "done" — the session carries on when they finish.
     var backgroundTasks = 0
+    /// The subagent the event comes from (Claude Code's `agent_id`); nil = the main conversation.
+    var agentId: String?
+    /// PreCompact only: "manual" (/compact) or "auto" (mid-turn, before a model call).
+    var trigger: String?
 
     init(event: String, claudeSessionId: String, source: String? = nil, notificationType: String? = nil,
          message: String? = nil, prompt: String? = nil, toolName: String? = nil, toolTarget: String? = nil,
@@ -44,6 +48,8 @@ struct HookPayload: Equatable {
         let question = (input?["questions"] as? [[String: Any]])?.first?["question"] as? String
         let written = [input?["new_string"], input?["content"]].compactMap { $0 as? String }
             + ((input?["edits"] as? [[String: Any]]) ?? []).compactMap { $0["new_string"] as? String }
+        let replaced = [input?["old_string"]].compactMap { $0 as? String }
+            + ((input?["edits"] as? [[String: Any]]) ?? []).compactMap { $0["old_string"] as? String }
         let path = input?["file_path"] as? String
         self.init(
             event: event,
@@ -58,18 +64,29 @@ struct HookPayload: Equatable {
             lastAssistantMessage: obj["last_assistant_message"] as? String,
             commandName: obj["command_name"] as? String
         )
-        if event == "PostToolUse", let path { todoLines = Self.todoLines(in: written, file: path) }
+        if event == "PostToolUse", let path { todoLines = Self.todoLines(in: written, replacing: replaced, file: path) }
         backgroundTasks = (obj["background_tasks"] as? [Any])?.count ?? 0
+        agentId = obj["agent_id"] as? String
+        trigger = obj["trigger"] as? String
     }
 
     /// Same rule as the common todo-tracker hook: markers in code files only (not docs, not task lists).
-    static func todoLines(in texts: [String], file: String) -> [String] {
+    static func todoLines(in texts: [String], replacing old: [String] = [], file: String) -> [String] {
         let code: Set = ["go", "ts", "tsx", "js", "jsx", "py", "dart", "swift", "kt", "kts", "rs", "java", "rb", "php",
                          "c", "h", "cc", "cpp", "hpp", "m", "mm", "cs", "vue", "svelte", "sql", "sh", "scala", "ex", "exs"]
         guard code.contains(URL(filePath: file).pathExtension.lowercased()) else { return [] }
-        return texts.flatMap { $0.split(separator: "\n") }
-            .filter { $0.range(of: #"\b(TODO|FIXME|HACK|XXX)\b"#, options: .regularExpression) != nil }
-            .map { $0.trimmingCharacters(in: .whitespaces) }
+        func marked(_ texts: [String]) -> [String] {
+            texts.flatMap { $0.split(separator: "\n") }
+                .filter { $0.range(of: #"\b(TODO|FIXME|HACK|XXX)\b"#, options: .regularExpression) != nil }
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+        }
+        // A marker the edit only carried along (context in both old and new text) was there before the agent.
+        var before = marked(old)
+        return marked(texts).filter { line in
+            guard let index = before.firstIndex(of: line) else { return true }
+            before.remove(at: index)
+            return false
+        }
     }
 
     /// Claude asks the user a multiple-choice question: it arrives as a permission request for this tool.
@@ -78,8 +95,7 @@ struct HookPayload: Equatable {
     /// Status the event puts the session in; nil when the event says nothing about it.
     var status: SessionStatus? {
         switch event {
-        case "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
-             "SubagentStart", "SubagentStop", "PreCompact", "PostCompact":
+        case "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "SubagentStart", "SubagentStop":
             .thinking
         case "PermissionRequest":
             isQuestion ? .waitingInput : .waitingPermission
@@ -91,7 +107,11 @@ struct HookPayload: Equatable {
             }
         case "Stop": backgroundTasks > 0 ? .thinking : .waitingInput
         case "StopFailure": .error
-        case "SessionStart", "SessionEnd": .idle
+        // A /compact runs outside any turn (no UserPromptSubmit, no Stop), so it's work of its own until its
+        // SessionStart; auto-compaction is part of a turn and says nothing about it.
+        case "PreCompact": trigger == "manual" ? .thinking : nil
+        case "SessionStart": source == "compact" ? nil : .idle
+        case "SessionEnd": .idle
         default: nil
         }
     }

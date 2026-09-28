@@ -5,8 +5,9 @@ import SwiftUI
 /// and on top what isn't sent yet. Explain for users says it in the product's words, on click.
 struct WhatChangedPanel: View {
     @Environment(AppStore.self) private var store
-    /// Units shown open; the newest one until the user picks.
-    @State private var open: Set<String>?
+    /// Units shown open in that folder; the newest one until the user picks. Tagged with the folder because the
+    /// reset below isn't in the tree while a new folder shows "Reading git…".
+    @State private var open: (folder: String, units: Set<String>)?
 
     var body: some View {
         if let session = store.selectedSession, let folder = store.workdir(of: session) {
@@ -16,7 +17,8 @@ struct WhatChangedPanel: View {
                     return (repo: repo, units: Array(Work.units(repo, runs: runs).prefix(12)))
                 }
                 let focused = store.focusedUnit?.folder == folder ? store.focusedUnit?.unit : nil
-                let shown = open ?? Set([focused ?? blocks.first?.units.first?.id].compactMap { $0 })
+                let picked: Set<String>? = open?.folder == folder ? open?.units : nil
+                let shown = picked ?? Set([focused ?? blocks.first?.units.first?.id].compactMap { $0 })
                 VStack(alignment: .leading, spacing: 12) {
                     if blocks.allSatisfy({ $0.units.isEmpty }) {
                         Text("Nothing yet. Ask Claude for something — what you send shows up here, each push with the requests that led to it.")
@@ -35,12 +37,14 @@ struct WhatChangedPanel: View {
                                       summary: folderWork.summaries[unit.key], isOpen: shown.contains(unit.id)) {
                                 var next = shown
                                 if next.contains(unit.id) { next.remove(unit.id) } else { next.insert(unit.id) }
-                                open = next
+                                open = (folder: folder, units: next)
                             }
                         }
                     }
                 }
-                .onChange(of: store.focusedUnit) { if let unit = store.focusedUnit, unit.folder == folder { open = [unit.unit] } }
+                .onChange(of: store.focusedUnit) {
+                    if let unit = store.focusedUnit, unit.folder == folder { open = (folder: folder, units: [unit.unit]) }
+                }
                 .onChange(of: folder) { open = nil }
             } else {
                 Text("Reading git…").font(.caption).foregroundStyle(Tokens.textDim)

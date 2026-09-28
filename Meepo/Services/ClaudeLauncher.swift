@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Builds the command line for a `claude` session. Flags verified against `claude --help` (v2.1.280).
 enum ClaudeLauncher {
@@ -94,7 +95,9 @@ enum ClaudeLauncher {
         if let remoteControl { args += ["--remote-control", remoteControl] }
         if let model, !model.isEmpty { args += ["--model", model] }
         if let effort, !effort.isEmpty, effort != ultracode { args += ["--effort", effort] }
-        if !resume, let prompt, !prompt.isEmpty { args.append(prompt) }
+        // claude reads any argument starting with "-" as an option ("- add login…" → unknown option):
+        // `--` makes the prompt its [prompt] operand. Stays last — anything after `--` is prompt, not options.
+        if !resume, let prompt, !prompt.isEmpty { args += ["--", prompt] }
         return args
     }
 
@@ -132,6 +135,9 @@ enum ClaudeLauncher {
     /// Asks the login shell once (~0.6 s with nvm) so every session can exec claude directly.
     /// Blocking; call off the main thread. Nil if the shell fails, has no `claude`, or hangs past `timeout`
     /// (a ~/.zshrc waiting for input would otherwise leave every session an empty terminal forever).
+    /// At `timeout` the shell's process group gets TERM (ends a stuck command, the shell carries on), then KILL
+    /// 2 s later: interactive shells ignore TERM. The read ends at the last marker, not at EOF, which a job
+    /// ~/.zshrc started in the background would hold off for as long as it runs.
     static func resolveLoginEnvironment(shell: String = defaultShell, timeout: TimeInterval = 15) -> LoginEnvironment? {
         let process = Process()
         process.executableURL = URL(filePath: shell)
@@ -143,9 +149,31 @@ enum ClaudeLauncher {
         let out = Pipe()
         process.standardOutput = out
         do { try process.run() } catch { return nil }
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if process.isRunning { process.terminate() } }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        process.waitForExit()
+        // Process gives the shell its own group (pgid == pid), so -pid also reaches what ~/.zshrc started.
+        let pid = process.processIdentifier
+        let reading = OSAllocatedUnfairLock(initialState: true) // no signals once done: the pid may be reused
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+            guard reading.withLock({ $0 }) else { return }
+            kill(-pid, SIGTERM)
+            DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+                guard reading.withLock({ $0 }) else { return }
+                kill(-pid, SIGKILL)
+                kill(pid, SIGKILL)
+            }
+        }
+        let handle = out.fileHandleForReading
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 65_536)
+        // POSIX read returns what has arrived; FileHandle.read(upToCount:) waits for the full count or EOF.
+        while String(decoding: data, as: UTF8.self).components(separatedBy: loginMarker).count < 4 {
+            let n = read(handle.fileDescriptor, &buffer, buffer.count)
+            if n < 0, errno == EINTR { continue }
+            guard n > 0 else { break }
+            data.append(contentsOf: buffer[..<n])
+        }
+        reading.withLock { $0 = false }
+        try? handle.close()
+        // No waitForExit: a hanging ~/.zlogout would block after a good read; Foundation reaps the shell.
         return parseLoginEnvironment(String(decoding: data, as: UTF8.self))
     }
 

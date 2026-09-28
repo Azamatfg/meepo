@@ -7,6 +7,8 @@ struct MeepoApp: App {
     @NSApplicationDelegateAdaptor(QuitHandler.self) private var quitHandler
     private let hotkeys: HotkeyMonitor
     private let services: LiveServices?
+    /// Launch work runs once per process: the window can be closed and reopened from the menu bar.
+    @State private var isLaunched = false
     /// Unit tests host the app: keep them off the real database and away from real sessions.
     private let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
@@ -43,7 +45,8 @@ struct MeepoApp: App {
         try? FileManager.default.removeItem(at: home)
         let settings = home.appending(path: ".claude/settings.json")
         try? FileManager.default.createDirectory(at: settings.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? FileManager.default.copyItem(at: BridgeInstaller().settingsURL, to: settings)
+        // The file, not a dotfiles symlink: writes follow links (BridgeInstaller.write) and would reach the real one.
+        try? FileManager.default.copyItem(at: BridgeInstaller().settingsURL.resolvingSymlinksInPath(), to: settings)
         return BridgeInstaller(settingsURL: settings, meepoHome: home.appending(path: ".meepo"))
     }
 
@@ -57,10 +60,14 @@ struct MeepoApp: App {
                 }
                 .onChange(of: store.screenshotHotKey) { services?.bindScreenshotHotKey(store.screenshotHotKey, store: store) }
                 .task {
+                    // A reopened window runs this again; the loops below outlive the window and must not double.
+                    guard !isLaunched else { return }
+                    isLaunched = true
                     if Demo.isOn { await store.loadDemo(); return }
                     guard let services else { return }
                     // Asking in App.init is too early: macOS answers "not allowed" before launch finishes.
-                    await services.requestNotificationPermission(store: store)
+                    // Not awaited: the first launch's prompt would hold back finding claude until it's answered.
+                    Task { await services.requestNotificationPermission(store: store) }
                     services.bindScreenshotHotKey(store.screenshotHotKey, store: store)
                     await store.restoreSessions()
                     Task { // off the launch path: transcripts and git for every folder take a moment
@@ -104,12 +111,15 @@ struct MeepoApp: App {
                             try? await Task.sleep(for: .seconds(store.isCIRunning ? 15 : 60))
                         }
                     }
-                    // JSONL is appended continuously; Stop events also trigger a refresh.
-                    while !Task.isCancelled {
-                        await store.refreshUsage()
-                        store.refreshVoice() // /voice typed in a session changes ~/.claude/settings.json
-                        store.publishWidgetSnapshot()
-                        try? await Task.sleep(for: .seconds(10))
+                    // JSONL is appended continuously; Stop events also trigger a refresh. Not tied to the window:
+                    // the widget and the menu bar keep counting while it's closed.
+                    Task {
+                        while !Task.isCancelled {
+                            await store.refreshUsage()
+                            store.refreshVoice() // /voice typed in a session changes ~/.claude/settings.json
+                            store.publishWidgetSnapshot()
+                            try? await Task.sleep(for: .seconds(10))
+                        }
                     }
                 }
         }
@@ -204,7 +214,7 @@ final class LiveServices {
         store.refreshBridge()
         store.onCINotice = { [weak self] title, body in self?.notifier.postText(title, body) }
         notifier.onOpen = { [weak store] id in
-            store?.selectedSessionId = id
+            store?.selectSession(id: id)
             NSApp.activate(ignoringOtherApps: true)
             NSApp.windows.first { $0.canBecomeMain }?.makeKeyAndOrderFront(nil)
         }
@@ -222,12 +232,16 @@ final class LiveServices {
                 self?.notifier.post(attention, session: session, project: store.project(for: session),
                                     summary: payload.summary)
             }
-            server.onFailure = { [weak store] message in store?.bridgeError = message }
+            server.onFailure = { [weak store] message in
+                store?.bridgeError = message
+                store?.isEventServerDown = true
+            }
             server.reply = { [weak store] sessionId, body in store?.hookReply(sessionId: sessionId, body: body) }
             try server.start()
             self.server = server
         } catch {
             store.bridgeError = error.localizedDescription
+            store.isEventServerDown = true
         }
     }
 }
@@ -241,12 +255,14 @@ final class QuitHandler: NSObject, NSApplicationDelegate {
         MainActor.assumeIsolated {
             guard let store, !store.shouldQuit() else { return .terminateNow }
             NSApp.activate(ignoringOtherApps: true)
-            // A sheet (Stats, Tools, Automations…) would cover the question drawn in the window: ask as macOS does.
-            if NSApp.windows.contains(where: { $0.attachedSheet != nil }), let question = store.confirmation {
+            let window = NSApp.windows.first { $0.canBecomeMain } // nil: closed (menu bar only) or minimized
+            // No window, or a sheet (Stats, Tools, Automations…) over it: the question drawn there can't be seen,
+            // so ask as macOS does.
+            if window == nil || NSApp.windows.contains(where: { $0.attachedSheet != nil }), let question = store.confirmation {
                 store.confirmation = nil
                 return Self.ask(question) ? .terminateNow : .terminateCancel
             }
-            NSApp.windows.first { $0.canBecomeMain }?.makeKeyAndOrderFront(nil) // where the question is
+            window?.makeKeyAndOrderFront(nil) // where the question is
             return .terminateCancel
         }
     }
@@ -274,7 +290,8 @@ final class QuitHandler: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
-            guard let store else { return }
+            guard let store else { return } // set only in a real run: Demo and tests never write the widget file
+            store.publishQuitWidgetSnapshot()
             let updated = store.installStagedUpdate()
             if store.relaunchAfterQuit, updated { Updater.relaunch(Bundle.main.bundleURL) }
         }

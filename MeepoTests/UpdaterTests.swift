@@ -28,6 +28,13 @@ final class UpdaterVersionTests: XCTestCase {
         XCTAssertNil(Updater.pick(releases, channel: .stable, current: v("0.1.3")))      // nothing newer
         XCTAssertNil(Updater.pick(releases, channel: .beta, current: v("0.1.4-beta")))   // drafts and zip-less skipped
     }
+
+    /// "Stable — releases only": a beta downloaded before the switch isn't installed at quit.
+    func testStableChannelDropsAStagedBeta() {
+        XCTAssertFalse(Updater.keepsStaged("0.6.0-beta.1", on: .stable))
+        XCTAssertTrue(Updater.keepsStaged("0.6.0-beta.1", on: .beta))
+        XCTAssertTrue(Updater.keepsStaged("0.6.0", on: .stable))
+    }
 }
 
 final class UpdaterSafetyTests: XCTestCase {

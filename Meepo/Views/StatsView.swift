@@ -92,7 +92,8 @@ private struct UsageTable: View {
                 if rows.isEmpty {
                     GridRow { Text("No usage yet").foregroundStyle(Tokens.textDim).gridCellColumns(6) }
                 }
-                ForEach(rows, id: \.name) { row in
+                // By position: two projects can share a name (or be called "Other").
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                     GridRow {
                         Text(row.name).foregroundStyle(Tokens.text).lineLimit(1)
                         ForEach([row.totals.input, row.totals.output, row.totals.cacheWrite, row.totals.cacheRead], id: \.self) {

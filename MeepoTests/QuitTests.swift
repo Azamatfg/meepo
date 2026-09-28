@@ -38,6 +38,21 @@ final class QuitTests: XCTestCase {
         XCTAssertNil(store.confirmation)
     }
 
+    /// The agents die with Meepo: the widget's last numbers say none runs or waits. Only the pure snapshot here —
+    /// writing it would replace the real widget file (the test host is the real app).
+    func testTheWidgetsLastSnapshotHasNoSessions() {
+        store.handleHookEvent(HookPayload(event: "PermissionRequest", claudeSessionId: session.claudeSessionId,
+                                          toolName: "Bash", toolTarget: "ls"), sessionId: session.id!)
+        XCTAssertEqual(store.waitingCount, 1)
+        XCTAssertEqual(store.currentWidgetSnapshot().waitingSessions, 1)
+        let last = store.currentWidgetSnapshot(quitting: true)
+        XCTAssertEqual(last.activeSessions, 0)
+        XCTAssertEqual(last.waitingSessions, 0)
+        XCTAssertFalse(last.isStale())
+        XCTAssertTrue(WidgetSnapshot(activeSessions: 3, waitingSessions: 1, updatedAt: .now.addingTimeInterval(-3601)).isStale(),
+                      "a file an hour old: Meepo crashed or was force-quit")
+    }
+
     func testAWorkingAgentIsAskedAbout() {
         working()
         XCTAssertFalse(store.shouldQuit(), "a turn in progress would be cut off")
@@ -54,6 +69,46 @@ final class QuitTests: XCTestCase {
         XCTAssertEqual(quits, 0)
         store.handleHookEvent(HookPayload(event: "Stop", claudeSessionId: session.claudeSessionId), sessionId: session.id!)
         XCTAssertEqual(quits, 1)
+    }
+
+    /// The agent finished while the question was still open: no later event comes to check, so the click quits.
+    func testQuitWhenTheyFinishQuitsIfTheyAlreadyHave() async {
+        working()
+        _ = store.shouldQuit()
+        store.handleHookEvent(HookPayload(event: "Stop", claudeSessionId: session.claudeSessionId), sessionId: session.id!)
+        let quit = expectation(description: "quits")
+        store.terminate = { quit.fulfill() }
+        store.confirmation?.alternative?.perform()
+        await fulfillment(of: [quit], timeout: 1)
+        XCTAssertFalse(store.quitWhenIdle)
+    }
+
+    /// Auto-compaction (PreCompact, then SessionStart "compact") happens mid-turn: it isn't the end of the turn.
+    func testCompactionMidTurnDoesntQuit() {
+        working()
+        _ = store.shouldQuit()
+        store.confirmation?.alternative?.perform()
+        store.handleHookEvent(HookPayload(event: "PreCompact", claudeSessionId: session.claudeSessionId), sessionId: session.id!)
+        store.handleHookEvent(HookPayload(event: "SessionStart", claudeSessionId: session.claudeSessionId, source: "compact"),
+                              sessionId: session.id!)
+        XCTAssertEqual(quits, 0)
+        XCTAssertEqual(session.status, .thinking)
+        store.handleHookEvent(HookPayload(event: "Stop", claudeSessionId: session.claudeSessionId), sessionId: session.id!)
+        XCTAssertEqual(quits, 1)
+    }
+
+    /// A /compact runs between turns (no UserPromptSubmit, no Stop): from its PreCompact to its SessionStart it's work.
+    func testManualCompactionIsWorkUntilItEnds() {
+        working()
+        store.handleHookEvent(HookPayload(event: "Stop", claudeSessionId: session.claudeSessionId), sessionId: session.id!)
+        var compact = HookPayload(event: "PreCompact", claudeSessionId: session.claudeSessionId)
+        compact.trigger = "manual"
+        store.handleHookEvent(compact, sessionId: session.id!)
+        XCTAssertFalse(store.shouldQuit(), "quitting would cut the compaction off")
+        store.handleHookEvent(HookPayload(event: "SessionStart", claudeSessionId: session.claudeSessionId, source: "compact"),
+                              sessionId: session.id!)
+        XCTAssertEqual(session.status, .idle)
+        XCTAssertTrue(store.shouldQuit())
     }
 
     func testCancellingARestartForgetsIt() {

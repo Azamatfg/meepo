@@ -68,7 +68,7 @@ brew trust azamatfg/meepo     # newer Homebrew asks you to trust third-party tap
 brew install --cask meepo
 ```
 
-`meepo` opens it from any terminal; `meepo .` adds the current folder with a session in it.
+`meepo` opens it from any terminal; `meepo .` opens a session in the current folder (a folder that is not a project yet is added after you confirm).
 
 meepo updates itself: new versions download in the background, and the status bar offers a restart (or it installs when you quit). `meepo update` checks right away. Updates install only if they are signed by the same developer and notarized by Apple.
 
@@ -96,7 +96,7 @@ meepo is the control panel on your Mac. On your phone, use the Claude app throug
 - meepo talks to Claude Code through hooks and a statusline, posted to a server on `127.0.0.1` only, with a local token.
 - It stores no API keys or passwords; GitHub, GitLab and Claude use their own CLIs and logins.
 - `claude -p` runs only when you click (Explain, drafts, release notes) — one short call, never with tools or your hooks.
-- A button never answers for you: while Claude asks for a permission or asks a question, meepo types nothing that ends in Enter.
+- A button never answers for you: while Claude asks for a permission or asks a question, meepo types nothing that ends in Enter unless you choose Send anyway.
 - Push, pull and deploy happen on your click with a confirmation; meepo never force-pushes. Quitting while an agent works asks first.
 - Every change meepo makes to your files is backed up and can be undone (≡ → Tools → Changes); team files under git are never edited.
 

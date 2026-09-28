@@ -47,7 +47,7 @@ enum Runs {
             case "UserPromptSubmit", "UserPromptExpansion":
                 guard let request = typed(event.summary ?? "") else { continue }
                 // "/qa" arrives as an expansion, then a submit of the same request, moments apart: one run.
-                if event.name == "UserPromptSubmit", let current = open[id], current.files.isEmpty,
+                if event.name == "UserPromptSubmit", let current = open[id], current.request == request, current.files.isEmpty,
                    event.createdAt.timeIntervalSince(current.startedAt) < 5 { continue }
                 if var current = open.removeValue(forKey: id) { // the next message came first: it ends here
                     current.endedAt = event.createdAt

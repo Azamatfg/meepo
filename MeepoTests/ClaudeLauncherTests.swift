@@ -6,7 +6,14 @@ final class ClaudeLauncherTests: XCTestCase {
 
     func testNewSessionPinsIdAndPassesModelAndPrompt() {
         let args = ClaudeLauncher.claudeArguments(sessionId: id, resume: false, model: "opus", prompt: "fix login")
-        XCTAssertEqual(args, ["--session-id", id, "--model", "opus", "fix login"])
+        XCTAssertEqual(args, ["--session-id", id, "--model", "opus", "--", "fix login"])
+    }
+
+    func testPromptStartingWithDashIsNotReadAsAnOption() {
+        let args = ClaudeLauncher.claudeArguments(sessionId: id, resume: false, model: nil, prompt: "- add login\n- write tests")
+        XCTAssertEqual(Array(args.suffix(2)), ["--", "- add login\n- write tests"])
+        XCTAssertFalse(ClaudeLauncher.claudeArguments(sessionId: id, resume: true, model: nil, prompt: "-x").contains("--"))
+        XCTAssertFalse(ClaudeLauncher.claudeArguments(sessionId: id, resume: false, model: nil, prompt: nil).contains("--"))
     }
 
     func testResumeNeverResendsInitialPrompt() {
@@ -79,6 +86,40 @@ final class LoginTimeoutTests: XCTestCase {
         let start = Date.now
         XCTAssertNil(ClaudeLauncher.resolveLoginEnvironment(shell: shell.path, timeout: 1))
         XCTAssertLessThan(Date.now.timeIntervalSince(start), 5)
+    }
+
+    private func script(_ body: String) throws -> String {
+        let shell = FileManager.default.temporaryDirectory.appending(path: "login-\(UUID().uuidString).sh")
+        try body.write(to: shell, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shell.path)
+        return shell.path
+    }
+
+    private let markers = "printf '__MEEPO_ENV__/bin/sh\\n__MEEPO_ENV__PATH=/usr/bin\\0__MEEPO_ENV__'\n"
+
+    /// Interactive zsh/bash ignore TERM, like this shell does.
+    func testShellIgnoringTermStillGivesUp() throws {
+        let shell = try script("#!/bin/sh\ntrap '' TERM\nsleep 10\n")
+        let start = Date.now
+        XCTAssertNil(ClaudeLauncher.resolveLoginEnvironment(shell: shell, timeout: 1))
+        XCTAssertLessThan(Date.now.timeIntervalSince(start), 6)
+    }
+
+    /// A job ~/.zshrc started in the background keeps stdout open after the shell is done.
+    func testBackgroundJobHoldingStdoutDoesNotBlock() throws {
+        let shell = try script("#!/bin/sh\nsleep 10 &\n" + markers)
+        let start = Date.now
+        XCTAssertEqual(ClaudeLauncher.resolveLoginEnvironment(shell: shell, timeout: 10)?.claudePath, "/bin/sh")
+        XCTAssertLessThan(Date.now.timeIntervalSince(start), 3)
+    }
+
+    /// TERM ends the one stuck command and the shell goes on to answer: not KILL right away (it comes 2 s later).
+    /// 2 s, not 1: on a busy machine the shell may not have set its trap within a second, and TERM would end it.
+    func testStuckCommandIsEndedAndTheShellStillAnswers() throws {
+        let shell = try script("#!/bin/sh\ntrap 'true' TERM\nsleep 10\n" + markers)
+        let start = Date.now
+        XCTAssertEqual(ClaudeLauncher.resolveLoginEnvironment(shell: shell, timeout: 2)?.claudePath, "/bin/sh")
+        XCTAssertLessThan(Date.now.timeIntervalSince(start), 4)
     }
 }
 

@@ -220,7 +220,12 @@ struct FileViewer: View {
 
     /// Too big or binary files get a message instead of an editor.
     nonisolated static func load(_ file: String, as path: String) -> MonacoDiffView.Content {
-        guard let data = FileManager.default.contents(atPath: file) else {
+        guard let handle = FileHandle(forReadingAtPath: file) else {
+            return MonacoDiffView.Content(path: path, message: "Can't read this file.")
+        }
+        defer { try? handle.close() }
+        // One byte past the limit tells it's too big without reading the rest (a 3 GB video stays on disk).
+        guard let data = try? handle.read(upToCount: 5_000_001) ?? Data() else {
             return MonacoDiffView.Content(path: path, message: "Can't read this file.")
         }
         if data.count > 5_000_000 { return MonacoDiffView.Content(path: path, message: "Over 5 MB — not shown.") }

@@ -77,4 +77,22 @@ final class AppDatabaseTests: XCTestCase {
             try s2.insert(db)
         })
     }
+
+    /// ~/.meepo holds prompts, replies and commands: owner-only, and a folder older versions made 0755 gets fixed.
+    func testMeepoHomeIsOwnerOnly() throws {
+        let home = FileManager.default.temporaryDirectory.appending(path: "home-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let existing = home.appending(path: ".meepo"), fresh = home.appending(path: "fresh/.meepo")
+        try FileManager.default.createDirectory(at: existing, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o755])
+        try MeepoHome.prepare(existing)
+        try MeepoHome.prepare(fresh)
+        _ = try MeepoHome.token(in: existing)
+        func mode(_ url: URL) throws -> Int {
+            try XCTUnwrap(FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber).intValue & 0o777
+        }
+        XCTAssertEqual(try mode(existing), 0o700)
+        XCTAssertEqual(try mode(fresh), 0o700)
+        XCTAssertEqual(try mode(existing.appending(path: "token")), 0o600)
+    }
 }

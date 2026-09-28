@@ -13,6 +13,12 @@ final class AgentTodoParsingTests: XCTestCase {
         let docs = #"{"session_id":"s","hook_event_name":"PostToolUse","tool_name":"Write","tool_input":{"file_path":"/a/PLAN.md","content":"- [ ] TODO: write docs"}}"#
         XCTAssertEqual(HookPayload(json: Data(docs.utf8))?.todoLines, []) // task lists in docs aren't code debt
     }
+
+    /// An Edit repeats the lines around the change: a TODO in both old and new text was there before.
+    func testATodoTheEditOnlyCarriedAlongIsNotNew() {
+        let edit = #"{"session_id":"s","hook_event_name":"PostToolUse","tool_name":"Edit","tool_input":{"file_path":"/a/api.go","old_string":"  // TODO: handle timeout\nx := 1","new_string":"  // TODO: handle timeout\nx := 2\n// FIXME: new one"}}"#
+        XCTAssertEqual(HookPayload(json: Data(edit.utf8))?.todoLines, ["// FIXME: new one"])
+    }
 }
 
 @MainActor
@@ -73,6 +79,62 @@ final class MorningEveningTests: XCTestCase {
         XCTAssertTrue(prompt.contains("- /tmp/shot.png") && prompt.contains("- https://issue/42"))
     }
 
+    /// Worktrees need git: a plain folder's parallel sessions share it rather than get a --worktree claude can't start.
+    func testPlainFolderTasksGetNoWorktree() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "notes-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try store.addProject(at: folder)
+        let notes = try XCTUnwrap(store.projects.first { $0.name == folder.lastPathComponent })
+        let intro = try XCTUnwrap(store.addTask("Write the intro", projectId: notes.id))
+        let outline = try XCTUnwrap(store.addTask("Fix the outline", projectId: notes.id))
+        try store.launchMorning([intro.id!, outline.id!])
+
+        let sessions = store.sessions.filter { $0.projectId == notes.id }
+        XCTAssertEqual(sessions.count, 2)
+        XCTAssertEqual(sessions.compactMap(\.worktreeName), [])
+        XCTAssertFalse(sessions.contains { $0.branch?.hasPrefix("worktree-") == true })
+    }
+
+    /// Task text without Latin letters still gives every worktree its own name, across launches too.
+    func testNonLatinTasksGetDistinctWorktreesAcrossLaunches() throws {
+        try store.createSession(projectId: app.id!, model: nil, prompt: nil)
+        let first = try XCTUnwrap(store.addTask("Починить вход", projectId: app.id))
+        let second = try XCTUnwrap(store.addTask("Починить вход", projectId: app.id))
+        try store.launchMorning([first.id!, second.id!])
+        let third = try XCTUnwrap(store.addTask("Исправить экспорт", projectId: app.id))
+        try store.launchMorning([third.id!])
+
+        XCTAssertEqual(store.sessions.compactMap(\.worktreeName).sorted(), ["task", "task-2", "task-3"])
+    }
+
+    /// Closing a launched session clears the task's link in the database; the next edit must still save.
+    func testTaskEditSavesAfterItsSessionIsClosed() throws {
+        let task = try XCTUnwrap(store.addTask("Fix login redirect", projectId: app.id))
+        try store.launchMorning([task.id!])
+        let sessionId = try XCTUnwrap(store.tasks.first { $0.id == task.id }?.sessionId)
+        store.closeSession(sessionId)
+
+        var edited = try XCTUnwrap(store.tasks.first { $0.id == task.id })
+        XCTAssertNil(edited.sessionId)
+        edited.isDone = true
+        edited.attachments.append("https://issue/42")
+        store.updateTask(edited) // re-reads the tasks from the database
+        let saved = try XCTUnwrap(store.tasks.first { $0.id == task.id })
+        XCTAssertTrue(saved.isDone)
+        XCTAssertEqual(saved.attachments, ["https://issue/42"])
+    }
+
+    /// A removed project's tasks become unsorted: the morning launch skips them and still starts the rest.
+    func testMorningSkipsTasksOfARemovedProject() throws {
+        let orphan = try XCTUnwrap(store.addTask("Refund webhook", projectId: api.id))
+        let kept = try XCTUnwrap(store.addTask("Add CSV export", projectId: app.id))
+        store.removeProject(api.id!)
+        XCTAssertNil(try XCTUnwrap(store.tasks.first { $0.id == orphan.id }).projectId)
+
+        XCTAssertNoThrow(try store.launchMorning([orphan.id!, kept.id!]))
+        XCTAssertEqual(store.sessions.count, 1)
+    }
+
     /// §10: the user's own setup decides names; a sync stage bound to /wrap still yields the next steps.
     func testNextStepsFollowTheConfiguredSyncCommand() throws {
         let index = try XCTUnwrap(store.stages.firstIndex { $0.name == "sync" })
@@ -106,6 +168,17 @@ final class MorningEveningTests: XCTestCase {
         XCTAssertTrue(text.contains("Stages: plan → sync"))
         XCTAssertTrue(text.contains("☐ Polish UI"))
     }
+
+    /// Writing the same file twice doesn't list its TODO twice.
+    func testARewrittenFileListsItsTodoOnce() throws {
+        try store.createSession(projectId: app.id!, model: nil, prompt: nil)
+        let session = store.sessions[0]
+        let write = #"{"session_id":"s","hook_event_name":"PostToolUse","tool_name":"Write","tool_input":{"file_path":"/w/a.ts","content":"// TODO: retry\nexport {}"}}"#
+        for _ in 0..<2 { store.handleHookEvent(try XCTUnwrap(HookPayload(json: Data(write.utf8))), sessionId: session.id!) }
+
+        let day = try XCTUnwrap(store.daySummary().first { $0.project.id == app.id })
+        XCTAssertEqual(day.todos.map(\.line), ["// TODO: retry"])
+    }
 }
 
 @MainActor
@@ -115,8 +188,8 @@ final class TaskAttachmentTests: XCTestCase {
         let db = try DatabaseQueue()
         try AppDatabase.migrator.migrate(db)
         let store = makeIsolatedStore(db: db)
-        try FileManager.default.createDirectory(at: TaskItem.attachmentsDir, withIntermediateDirectories: true)
-        let shot = TaskItem.attachmentsDir.appending(path: "test-\(UUID().uuidString).png")
+        try FileManager.default.createDirectory(at: store.attachmentsDir, withIntermediateDirectories: true)
+        let shot = store.attachmentsDir.appending(path: "test-\(UUID().uuidString).png")
         let userFile = FileManager.default.temporaryDirectory.appending(path: "mine-\(UUID().uuidString).txt")
         try Data("x".utf8).write(to: shot)
         try Data("x".utf8).write(to: userFile)

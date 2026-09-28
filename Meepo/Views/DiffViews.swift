@@ -146,6 +146,7 @@ struct DiffViewer: View {
         guard let source = sources.first(where: { $0.id == selected }) else { return }
         changeCount = 0
         let (old, new) = await Task.detached { source.load() }.value
+        guard !Task.isCancelled else { return }   // another file was picked meanwhile: its own load shows it
         if Self.isBinary(old ?? Data()) || Self.isBinary(new ?? Data()) {
             content = MonacoDiffView.Content(path: selected, message: "Binary file — not shown.")
             return

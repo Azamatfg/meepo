@@ -213,6 +213,8 @@ private struct ExperiencedSetup: View {
     @Environment(AppStore.self) private var store
     let back: () -> Void
     let finish: (OnboardingView.Path, Bool, Int64?) throws -> Void
+    /// Step 3's list: Open meepo imports what's still checked there.
+    @State private var picks = ImportPicks()
 
     private static let optional = [("gh", "GitHub CI and pull requests", "brew install gh && gh auth login"),
                                    ("glab", "GitLab CI", "brew install glab && glab auth login")]
@@ -227,7 +229,7 @@ private struct ExperiencedSetup: View {
                     Step(number: 3, title: "Your projects", isDone: !store.projects.isEmpty) {
                         Text("Folders you've worked in with Claude Code. Pick the ones to bring in; conversations can continue where they stopped.")
                             .foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
-                        ImportList {}.frame(minHeight: 220)
+                        ImportList(picks: $picks) {}.frame(minHeight: 220)
                         Text("In a teammate's repo for the first time? Run /team-onboarding in a session there: Claude Code writes a guide from how the team works.")
                             .font(.caption).foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
                     }
@@ -246,7 +248,8 @@ private struct ExperiencedSetup: View {
             }
             HStack {
                 Spacer()
-                Button("Open meepo") { try? finish(.experienced, false, nil) }.buttonStyle(PixelButtonStyle(large: true, isPrimary: true))
+                Button(picks.picked.isEmpty ? "Open meepo" : "Open meepo with \(picks.picked.count) project\(picks.picked.count == 1 ? "" : "s")") { store.importPicked(&picks); try? finish(.experienced, false, nil) }
+                    .buttonStyle(PixelButtonStyle(large: true, isPrimary: true))
             }
         }
         .padding(24)

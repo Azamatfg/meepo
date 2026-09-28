@@ -106,4 +106,29 @@ final class ShipReportTests: XCTestCase {
         XCTAssertEqual(store.lastShipReport(projectId, after: nil), "Shipped: 3 commits, pushed")
         XCTAssertNil(store.lastShipReport(projectId, after: .now))       // already covered by a newer note
     }
+
+    /// Another session of the project answering while /ship runs is not the ship report.
+    func testReportComesFromTheSessionThatShipped() async throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        let repo = try makeTempRepo()
+        try git(["commit", "-q", "--allow-empty", "-m", "init"], in: repo)
+        try store.addProject(at: repo)
+        let projectId = store.projects[0].id!
+        try store.createSession(projectId: projectId, model: nil, prompt: nil)
+        let shipping = try XCTUnwrap(store.selectedSession)
+        try store.createSession(projectId: projectId, model: nil, prompt: nil)
+        let other = try XCTUnwrap(store.selectedSession)
+        func send(_ event: String, in session: Session, prompt: String? = nil, command: String? = nil, reply: String? = nil) async throws {
+            store.handleHookEvent(HookPayload(event: event, claudeSessionId: session.claudeSessionId, prompt: prompt,
+                                              lastAssistantMessage: reply, commandName: command), sessionId: session.id!)
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        try await send("UserPromptExpansion", in: shipping, prompt: "/ship", command: "ship")
+        try await send("Stop", in: other, reply: "Added the experimental login form")
+        try await send("Stop", in: shipping, reply: "Pushed 3 commits, tests green")
+        XCTAssertEqual(store.lastShipReport(projectId, after: nil), "Pushed 3 commits, tests green")
+    }
 }

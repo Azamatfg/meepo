@@ -20,7 +20,8 @@ struct HTTPRequest: Equatable {
             guard let colon = line.firstIndex(of: ":") else { continue }
             headers[line[..<colon].lowercased()] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
         }
-        let length = Int(headers["content-length"] ?? "0") ?? 0
+        // Clamped: a negative length would trap in prefix() before the token is even checked.
+        let length = max(0, Int(headers["content-length"] ?? "0") ?? 0)
         let body = data[end.upperBound...]
         guard body.count >= length else { return nil }
         return HTTPRequest(method: String(requestLine[0]), path: String(requestLine[1]),

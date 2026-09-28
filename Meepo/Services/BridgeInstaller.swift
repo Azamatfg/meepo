@@ -56,8 +56,11 @@ struct BridgeInstaller {
       exit 0
     fi
     TOKEN=$(cat "$HOME/.meepo/token" 2>/dev/null) || exit 0
-    # Meepo's reply goes to stdout: for UserPromptSubmit it is context for Claude (e.g. teammates' new commits).
-    curl -s -f -m 2 -X POST "http://127.0.0.1:${MEEPO_PORT:-47800}/event" \\
+    IN=$(cat)
+    # The reply goes to stdout only for UserPromptSubmit, as context for Claude (e.g. teammates' new commits):
+    # other events' output could approve or rewrite tool calls, whoever answers on the port.
+    case "$IN" in *'"hook_event_name":"UserPromptSubmit"'*|*'"hook_event_name": "UserPromptSubmit"'*) ;; *) exec >/dev/null ;; esac
+    printf '%s' "$IN" | curl -s -f -m 2 -X POST "http://127.0.0.1:${MEEPO_PORT:-47800}/event" \\
       -H "Content-Type: application/json" -H "X-Meepo-Token: $TOKEN" -H "X-Meepo-Session: $MEEPO_SESSION_ID" \\
       --data-binary @- 2>/dev/null
     exit 0

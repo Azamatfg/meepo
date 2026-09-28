@@ -79,6 +79,16 @@ final class RecipesTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(String.self, from: Data(value.utf8)), "Runs Fix lint: run npm test # all of it")
     }
 
+    /// The description reads back as written: no "\/ship" in the tooltip, the file or the preview.
+    func testDescriptionRoundTripsSlashesAndQuotes() {
+        let skill = Recipes.skill(name: "simplify-ship", steps: [.command("simplify"), .command("ship")])
+        XCTAssertFalse(skill.contains(#"\/"#))
+        XCTAssertEqual(CommandCatalog.description(in: skill), "Runs /simplify, then /ship")
+        XCTAssertEqual(CommandCatalog.description(in: Recipes.command(name: "x", instructions: "Check src/app builds")), "Check src/app builds")
+        XCTAssertEqual(CommandCatalog.description(in: Recipes.command(name: "x", instructions: "Say \"hi\"")), "Say \"hi\"")
+        XCTAssertEqual(CommandCatalog.description(in: "---\ndescription: \"Runs \\/ship\"\n---\n"), "Runs /ship", "a meepo 0.5 button")
+    }
+
     /// "New command…": Claude may start it (no disable-model-invocation), or a workflow using it as a step would
     /// stop at "cannot be used with Skill tool due to disable-model-invocation".
     func testNewCommandIsOneClaudeCanStart() {
@@ -202,6 +212,17 @@ final class WorkflowStoreTests: XCTestCase {
         let suggestion = Noticing.Suggestion(kind: .chain(["simplify", "ship"]), count: 5)
         try store.makeButton(from: suggestion)
         XCTAssertEqual(store.skillButtons, ["simplify-ship"])
+    }
+
+    /// At launch no usage scan has read the commands yet: noticing must still know the user's own /ship.
+    func testSuggestionsKnowTheUsersCommandsAtLaunch() async throws {
+        let skill = home.appending(path: ".claude/skills/ship/SKILL.md")
+        try FileManager.default.createDirectory(at: skill.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "Build, test, push.".write(to: skill, atomically: true, encoding: .utf8)
+        XCTAssertTrue(store.commandsByProject.isEmpty)
+        await store.refreshSuggestions() // reads the real ~/.claude/history.jsonl: assert nothing on what it notices
+        let commands = try XCTUnwrap(store.commandsByProject[store.projects[0].id!])
+        XCTAssertTrue(commands.contains { $0.name == "ship" })
     }
 
     func testNewCommandIsAPersonalSkillAndAStep() throws {

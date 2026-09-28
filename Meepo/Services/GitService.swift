@@ -49,6 +49,9 @@ enum GitService {
               let exclude = run(["rev-parse", "--git-path", "info/exclude"], in: path) else { return }
         let url = exclude.hasPrefix("/") ? URL(filePath: exclude) : URL(filePath: path).appending(path: exclude)
         let current = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        // check-ignore never reports a tracked file, so it can't tell the line is already there.
+        guard !current.split(whereSeparator: \.isNewline).contains(where: { $0.trimmingCharacters(in: .whitespaces) == pattern })
+        else { return }
         let line = (current.isEmpty || current.hasSuffix("\n") ? "" : "\n") + pattern + "\n"
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let backup = try? ChangeLog.backup(url, folder: "git-exclude", backups: backups)
@@ -65,10 +68,25 @@ enum GitService {
         return nil
     }
 
+    /// Claude Code locks the worktree it runs in and doesn't unlock it when killed, so git would refuse to
+    /// remove it: releases such a lock once its claude is gone. The user's own locks and live claudes' stay.
+    static func unlockIfClaudeGone(_ worktree: String, in path: String) {
+        guard let file = run(["rev-parse", "--git-path", "locked"], in: worktree) else { return }
+        let url = file.hasPrefix("/") ? URL(filePath: file) : URL(filePath: worktree).appending(path: file)
+        guard let reason = try? String(contentsOf: url, encoding: .utf8), let pid = claudeLockPid(reason), pid > 1,
+              kill(pid, 0) == -1, errno == ESRCH else { return }
+        _ = succeeds(["worktree", "unlock", worktree], in: path)
+    }
+
+    /// "claude session login (pid 62446 start …)" → 62446 (the reason Claude Code 2.1.281 writes).
+    static func claudeLockPid(_ reason: String) -> pid_t? {
+        reason.firstMatch(of: #/^claude (?:agent|session) .+ \(pid (\d+)/#).flatMap { pid_t($0.1) }
+    }
+
     /// "abc1234 subject" of today's commits on all local branches (worktrees included), newest first.
     static func commits(since start: Date, in path: String, limit: Int = 30) -> [String] {
         let since = ISO8601DateFormatter().string(from: start)
-        return run(["log", "--all", "--no-merges", "--since=\(since)", "--format=%h %s", "-n", String(limit)], in: path)?
+        return run(["log", "--branches", "--no-merges", "--since=\(since)", "--format=%h %s", "-n", String(limit)], in: path)?
             .split(separator: "\n").map(String.init) ?? []
     }
 
@@ -131,8 +149,9 @@ enum GitService {
         run(args, in: path)
     }
 
+    /// Polled every 10 s in the background; no optional locks, so it never takes index.lock while Claude commits.
     static func hasUncommittedChanges(in path: String) -> Bool {
-        run(["status", "--porcelain"], in: path) != nil
+        run(["--no-optional-locks", "status", "--porcelain"], in: path) != nil
     }
 
     private static func succeeds(_ args: [String], in path: String) -> Bool {

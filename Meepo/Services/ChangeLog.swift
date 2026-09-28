@@ -56,12 +56,14 @@ enum ChangeLog {
             record("Restore: \(entry.action)", file: file, backup: trashed as URL?, backups: backups)
             return
         }
+        // A backup that's gone (the Trash emptied) must fail before the current file is taken away.
+        guard let saved = entry.backup.map({ URL(filePath: $0) }), fm.fileExists(atPath: saved.path) else {
+            throw CocoaError(.fileReadNoSuchFile, userInfo: [NSFilePathErrorKey: entry.backup ?? entry.file])
+        }
         let current = try backup(file, folder: "restored", backups: backups)
         if fm.fileExists(atPath: file.path) { try fm.removeItem(at: file) }
-        if let saved = entry.backup {
-            try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try fm.copyItem(at: URL(filePath: saved), to: file)
-        }
+        try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.copyItem(at: saved, to: file)
         record("Restore: \(entry.action)", file: file, backup: current, backups: backups)
     }
 

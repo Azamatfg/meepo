@@ -4,6 +4,7 @@ import SwiftUI
 /// with its latest conversation to continue in Meepo (`--resume`).
 struct ImportView: View {
     @Environment(\.dismiss) private var dismiss
+    @State private var picks = ImportPicks()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -13,7 +14,7 @@ struct ImportView: View {
                 Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
             }
             .buttonStyle(PixelButtonStyle())
-            ImportList { dismiss() }
+            ImportList(picks: $picks) { dismiss() }
         }
         .padding(16)
         .frame(width: 760, height: 600)
@@ -23,25 +24,30 @@ struct ImportView: View {
     }
 }
 
-/// Also the last step of onboarding.
+/// The folders on offer and which of them (and of their conversations) are picked.
+struct ImportPicks {
+    var folders: [ClaudeImport.Folder]?
+    var picked: Set<String> = []
+    var resumed: Set<String> = []
+}
+
+/// Also step 3 of onboarding, whose Open meepo imports the same picks: the caller keeps them.
 struct ImportList: View {
     @Environment(AppStore.self) private var store
+    @Binding var picks: ImportPicks
     let onDone: () -> Void
-    @State private var folders: [ClaudeImport.Folder]?
-    @State private var picked: Set<String> = []
-    @State private var resumed: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
-                    if let folders, folders.isEmpty {
+                    if let folders = picks.folders, folders.isEmpty {
                         Text("Every folder Claude Code has worked in is already in meepo.").foregroundStyle(Tokens.textDim)
-                    } else if folders == nil {
+                    } else if picks.folders == nil {
                         Text("Reading Claude Code's history…").foregroundStyle(Tokens.textDim)
                     }
-                    ForEach(folders ?? []) { folder in
-                        RowView(folder: folder, isPicked: bind(folder.id, in: $picked), isResumed: bind(folder.id, in: $resumed))
+                    ForEach(picks.folders ?? []) { folder in
+                        RowView(folder: folder, isPicked: bind(folder.id, in: $picks.picked), isResumed: bind(folder.id, in: $picks.resumed))
                     }
                 }
                 .padding(6)
@@ -52,19 +58,20 @@ struct ImportList: View {
                 Text("Folders Claude Code worked in — from any editor or terminal. A conversation continues where it stopped.")
                     .font(.caption).foregroundStyle(Tokens.textDim)
                 Spacer()
-                Button("IMPORT \(picked.count)") { importPicked() }
+                Button("IMPORT \(picks.picked.count)") { store.importPicked(&picks); onDone() }
                     .buttonStyle(PixelButtonStyle())
-                    .disabled(picked.isEmpty)
+                    .disabled(picks.picked.isEmpty)
             }
         }
         .task {
+            guard picks.folders == nil else { return } // read once: picks made since stay
             let skip = Set(store.projects.map(\.path))
             let found = await Task.detached { ClaudeImport.folders(skip: skip) }.value
-            folders = found
+            picks.folders = found
             // Pre-pick what was used in the last two weeks.
             let recent = found.filter { ($0.lastUsed ?? .distantPast) > .now.addingTimeInterval(-14 * 86_400) }
-            picked = Set(recent.map(\.id))
-            resumed = Set(recent.filter { $0.session != nil }.map(\.id))
+            picks.picked = Set(recent.map(\.id))
+            picks.resumed = Set(recent.filter { $0.session != nil }.map(\.id))
         }
     }
 
@@ -72,20 +79,31 @@ struct ImportList: View {
         Binding(get: { set.wrappedValue.contains(id) },
                 set: { if $0 { set.wrappedValue.insert(id) } else { set.wrappedValue.remove(id) } })
     }
+}
 
-    private func importPicked() {
-        for folder in folders ?? [] where picked.contains(folder.id) {
+extension AppStore {
+    /// Adds the picked folders, continuing the picked conversations, and takes what's in meepo now off the list:
+    /// IMPORT, then onboarding's Open meepo, adds nothing twice.
+    func importPicked(_ picks: inout ImportPicks) {
+        var done: Set<String> = []
+        for folder in picks.folders ?? [] where picks.picked.contains(folder.id) {
             do {
-                try store.addProject(at: URL(filePath: folder.path))
+                try addProject(at: URL(filePath: folder.path))
+            } catch AddProjectError.alreadyAdded {
+                done.insert(folder.id) // already in meepo, with its sessions: not an error, and no second resume
+                continue
             } catch {
-                store.bridgeError = error.localizedDescription
+                bridgeError = error.localizedDescription
                 continue
             }
-            guard resumed.contains(folder.id), let session = folder.session,
-                  let projectId = store.projects.first(where: { $0.path == folder.path })?.id else { continue }
-            try? store.createSession(projectId: projectId, model: nil, prompt: nil, resuming: session.id)
+            done.insert(folder.id)
+            guard picks.resumed.contains(folder.id), let session = folder.session,
+                  let projectId = projects.first(where: { $0.path == folder.path })?.id else { continue }
+            try? createSession(projectId: projectId, model: nil, prompt: nil, resuming: session.id)
         }
-        onDone()
+        picks.folders?.removeAll { done.contains($0.id) }
+        picks.picked.subtract(done)
+        picks.resumed.subtract(done)
     }
 }
 

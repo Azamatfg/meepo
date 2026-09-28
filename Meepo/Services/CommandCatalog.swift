@@ -98,6 +98,9 @@ enum CommandCatalog {
             while let line = lines.first, !line.hasPrefix("---") {
                 if line.hasPrefix("description:") {
                     let value = line.dropFirst("description:".count).trimmingCharacters(in: .whitespaces)
+                    // A double-quoted value may carry escapes (`\"`, and `\/` from meepo 0.5's buttons).
+                    if value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\""),
+                       let decoded = try? JSONDecoder().decode(String.self, from: Data(value.utf8)) { return decoded }
                     return value.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
                 }
                 lines = lines.dropFirst()

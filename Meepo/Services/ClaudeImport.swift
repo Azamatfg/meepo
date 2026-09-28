@@ -21,7 +21,8 @@ enum ClaudeImport {
         var used: [String: Date?] = [:]
         if let data = try? Data(contentsOf: config),
            let projects = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["projects"] as? [String: Any] {
-            for path in projects.keys { used[path] = used[path] ?? nil }
+            // `used[path] = nil` (or `?? nil`) would remove the key: store "no date" as a value.
+            for path in projects.keys { used.updateValue(nil, forKey: path) }
         }
         let dirs = (try? FileManager.default.contentsOfDirectory(at: claudeHome.appending(path: "projects"),
                                                                 includingPropertiesForKeys: nil)) ?? []

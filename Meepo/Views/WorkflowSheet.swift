@@ -20,6 +20,8 @@ struct WorkflowSheet: View {
     @State private var isNewCommand = false
     /// skillOverrides from ~/.claude/settings.json, read once: "only you" there keeps a command out of the steps.
     @State private var overrides: [String: String] = [:]
+    /// The user's own skills and commands plus Claude Code's: the steps when no project is open.
+    @State private var ownCommands = CommandCatalog.builtIns
 
     private var suggestedName: String { Recipes.suggestedName(for: steps) }
     private var slug: String { ClaudeLauncher.worktreeSlug(name.isEmpty ? suggestedName : name) }
@@ -64,8 +66,8 @@ struct WorkflowSheet: View {
         .padding(22)
         .frame(width: 720, height: 640)
         .paperSheet()
-        .onAppear { overrides = store.skillOverrides() }
-        .sheet(isPresented: $isNewCommand) { NewCommandSheet { steps.append(.command($0)) } }
+        .onAppear { overrides = store.skillOverrides(); readOwnCommands() }
+        .sheet(isPresented: $isNewCommand) { NewCommandSheet { steps.append(.command($0)); readOwnCommands() } }
     }
 
     private var buttonForm: some View {
@@ -77,7 +79,8 @@ struct WorkflowSheet: View {
                 Text("→ /\(slug)").font(Fonts.mono(12)).foregroundStyle(Tokens.textDim)
             }
             // Only Claude Code's own names here: one of yours may be this very button, removed earlier — Save pins it again.
-            if !slug.isEmpty, let problem = Recipes.nameProblem(slug, taken: []) {
+            // The untouched sheet shows the example; once there's a name or a step, the reason Save is off.
+            if !name.isEmpty || !steps.isEmpty, let problem = Recipes.nameProblem(slug, taken: []) {
                 Text(problem).font(.caption).foregroundStyle(Tokens.danger)
             } else {
                 let shown = "/" + (slug.isEmpty ? "tidy-and-ship" : slug)
@@ -133,8 +136,13 @@ struct WorkflowSheet: View {
     }
 
     private var commands: [SlashCommand] {
-        Recipes.stepChoices(project.flatMap { store.commandsByProject[$0.id!] } ?? CommandCatalog.builtIns,
+        Recipes.stepChoices(project.flatMap { store.commandsByProject[$0.id!] } ?? ownCommands,
                             buttons: store.skillButtons, overrides: overrides)
+    }
+
+    /// ~/.claude as the "project": its .claude/ doesn't exist, so this is the user's own plus the built-ins.
+    private func readOwnCommands() {
+        ownCommands = CommandCatalog.commands(projectPath: store.claudeHome.path, home: store.claudeHome.deletingLastPathComponent())
     }
 
     private var target: String {
@@ -192,7 +200,7 @@ private struct NewCommandSheet: View {
                 TextField("check-staging", text: $name).textFieldStyle(.roundedBorder).frame(width: 240)
                 Text("→ /\(slug.isEmpty ? "…" : slug)").font(Fonts.mono(12)).foregroundStyle(Tokens.textDim)
             }
-            if let problem, !slug.isEmpty {
+            if let problem, !name.isEmpty {
                 Text(problem).font(.caption).foregroundStyle(Tokens.danger)
             } else {
                 Text("Saving makes /\(slug.isEmpty ? "check-staging" : slug) — a command of yours in every project and any terminal. Claude may start it too when it fits, which is what lets it be a step. Undo it in ≡ → Tools → Changes.")

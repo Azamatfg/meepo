@@ -218,7 +218,7 @@ private struct SessionTab: View {
 
     /// Closes right away when claude is between turns; asks first while it works or waits on you mid-turn.
     private func close() {
-        guard store.look(of: session).ring != .idle else { return store.closeSession(session.id!) }
+        guard store.isMidTurn(session.id!) else { return store.closeSession(session.id!) }
         store.confirmation = PixelConfirmation(
             title: "Close this session in the middle of a turn?",
             message: "claude stops mid-turn. Files and commits stay; the conversation stays in Claude Code (claude --resume).",

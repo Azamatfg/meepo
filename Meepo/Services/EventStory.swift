@@ -29,20 +29,21 @@ enum EventStory {
     /// Newest first, like the feed. A tool's start is dropped once the same call has ended.
     static func lines(_ events: [HookEvent]) -> [Line] {
         var result: [Line] = []
-        var open: [String: Int] = [:]
+        // The same call can be open twice (parallel helpers, a denied call retried): an end closes the newest.
+        var open: [String: [Int]] = [:]
         for event in events.sorted(by: { ($0.createdAt, $0.id ?? 0) < ($1.createdAt, $1.id ?? 0) }) {
             let key = event.summary ?? ""
-            if ["PostToolUse", "PostToolUseFailure"].contains(event.name), let index = open.removeValue(forKey: key) {
+            if ["PostToolUse", "PostToolUseFailure"].contains(event.name), let index = open[key]?.popLast() {
                 result.remove(at: index)
-                open = open.mapValues { $0 > index ? $0 - 1 : $0 }
+                open = open.mapValues { $0.map { $0 > index ? $0 - 1 : $0 } }
             }
             if ["Stop", "StopFailure", "SessionEnd"].contains(event.name) {
                 // The turn is over: a call that never reported its end (stopped, denied) isn't running any more.
-                for index in open.values { result[index] = result[index].finished }
+                for index in open.values.joined() { result[index] = result[index].finished }
                 open = [:]
             }
             guard let line = line(for: event) else { continue }
-            if event.name == "PreToolUse" { open[key] = result.count }
+            if event.name == "PreToolUse" { open[key, default: []].append(result.count) }
             result.append(line)
         }
         return result.reversed()
@@ -58,8 +59,9 @@ enum EventStory {
         switch event.name {
         case "PreToolUse", "PostToolUse", "PostToolUseFailure":
             let (tool, target) = split(summary ?? "")
-            // A question's summary is the question itself — no "Tool: " in front.
-            guard tool.wholeMatch(of: #/[A-Za-z0-9_]+/#) != nil else {
+            // A question's summary is the question itself — no "Tool: " in front. MCP names may carry hyphens
+            // ("mcp__claude-in-chrome__navigate").
+            guard tool.hasPrefix("mcp__") || tool.wholeMatch(of: #/[A-Za-z0-9_]+/#) != nil else {
                 return make("questionmark.bubble", "Asked you: " + quote(summary), needsYou: event.name == "PreToolUse")
             }
             let phrase = toolPhrase(tool, target)

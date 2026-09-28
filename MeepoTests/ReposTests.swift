@@ -56,4 +56,19 @@ final class LinkedProjectsTests: XCTestCase {
         try store.replaceSession(session.id!)
         XCTAssertEqual(store.sessions.last?.extraDirs, [other.path], "a fresh session keeps where it also works")
     }
+
+    /// A read the user switched away from (MainView cancels it) must not land over the new session's repos.
+    func testCancelledReadLeavesTheReposAlone() async throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        try store.addProject(at: try makeTempRepo())
+        try store.createSession(projectId: store.projects[0].id!, model: nil, prompt: nil)
+        let session = store.sessions[0]
+
+        let read = Task { await store.refreshSourceControls(for: session) }
+        read.cancel()
+        await read.value
+        XCTAssertEqual(store.sessionRepos, [])
+    }
 }

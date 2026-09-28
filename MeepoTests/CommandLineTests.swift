@@ -47,7 +47,14 @@ final class MeepoCommandTests: XCTestCase {
 
 @MainActor
 final class OpenFromCommandLineTests: XCTestCase {
-    /// `meepo backend` inside a repo: the repo becomes the project and a session opens; again → the same session.
+    private func openURL(_ path: String) -> URL {
+        var components = URLComponents(string: "meepo://open")!
+        components.queryItems = [URLQueryItem(name: "path", value: path)]
+        return components.url!
+    }
+
+    /// `meepo backend` inside a repo: once confirmed, the repo becomes the project and a session opens;
+    /// again → the same session, without asking.
     func testFolderBecomesProjectWithASession() throws {
         let db = try DatabaseQueue()
         try AppDatabase.migrator.migrate(db)
@@ -56,15 +63,43 @@ final class OpenFromCommandLineTests: XCTestCase {
         try git(["commit", "-q", "--allow-empty", "-m", "init"], in: repo)
         let sub = repo.appending(path: "backend")
         try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
-        var components = URLComponents(string: "meepo://open")!
-        components.queryItems = [URLQueryItem(name: "path", value: sub.path)]
 
-        store.openFromCommandLine(components.url!)
+        store.openFromCommandLine(openURL(sub.path))
+        XCTAssertEqual(store.projects.count, 0)                        // any app can open the URL: ask first
+        XCTAssertEqual(store.sessions.count, 0)
+        XCTAssertNotNil(store.confirmation)
+        store.confirmation?.perform()
+        store.confirmation = nil                                        // the card's button does this
         XCTAssertEqual(store.projects.map(\.path), [repo.path])
         XCTAssertEqual(store.sessions.count, 1)
         XCTAssertEqual(store.selectedSessionId, store.sessions[0].id)
 
-        store.openFromCommandLine(components.url!)
+        store.openFromCommandLine(openURL(sub.path))
+        XCTAssertNil(store.confirmation)                                // a known project opens right away
         XCTAssertEqual(store.sessions.count, 1)                         // no duplicate session
+    }
+
+    /// A card already open (another folder, an update notice) stays; the new folder isn't dropped without a word.
+    func testAFolderWhileAQuestionIsOpenSaysSo() throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        store.confirmation = PixelConfirmation(title: "UPDATE FAILED", action: "OK", isDestructive: false) {}
+        store.openFromCommandLine(openURL(try makeTempRepo().path))
+        XCTAssertTrue(store.projects.isEmpty)
+        XCTAssertNotNil(store.bridgeError)
+        XCTAssertEqual(store.confirmation?.title, "UPDATE FAILED")
+    }
+
+    func testMissingOrRelativeFolderIsIgnored() throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        for path in ["/nowhere/at/all", "rel/dir"] {
+            store.openFromCommandLine(openURL(path))
+            XCTAssertEqual(store.projects.count, 0, path)
+            XCTAssertEqual(store.sessions.count, 0, path)
+            XCTAssertNil(store.confirmation, path)
+        }
     }
 }

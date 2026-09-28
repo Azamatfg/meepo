@@ -25,7 +25,7 @@ struct Entry: TimelineEntry {
 /// Meepo reloads the timeline when the numbers change; the 15-minute refresh is only a fallback.
 struct Provider: TimelineProvider {
     func placeholder(in context: Context) -> Entry {
-        Entry(date: .now, snapshot: WidgetSnapshot(tokensToday: 1_240_000, activeSessions: 3, waitingSessions: 1))
+        Entry(date: .now, snapshot: WidgetSnapshot(tokensToday: 1_240_000, activeSessions: 3, waitingSessions: 1, updatedAt: .now))
     }
 
     func getSnapshot(in context: Context, completion: @escaping (Entry) -> Void) {
@@ -52,29 +52,33 @@ struct MeepoWidgetView: View {
                 sessions
             }
             Spacer(minLength: 0)
-            if snapshot.updatedAt < .now.addingTimeInterval(-3600) {
+            if snapshot.isStale() {
                 Text("Meepo isn't running").font(.caption2).foregroundStyle(Tokens.textDim)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
+    /// A stale file (Meepo crashed or was force-quit) or yesterday's total says nothing about now.
     private var tokens: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(TokenFormat.short(snapshot.tokensToday)).font(Fonts.mono(22)).foregroundStyle(Tokens.screen)
+        let known = !snapshot.isStale() && Calendar.current.isDateInToday(snapshot.updatedAt)
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(known ? TokenFormat.short(snapshot.tokensToday) : "–").font(Fonts.mono(22)).foregroundStyle(Tokens.screen)
             Text("tokens today").font(.caption2).foregroundStyle(Tokens.textDim)
         }
     }
 
     private var sessions: some View {
-        HStack(spacing: 12) {
+        let stale = snapshot.isStale()
+        return HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 0) {
-                Text("\(snapshot.activeSessions)").font(Fonts.mono(18)).foregroundStyle(Tokens.selection)
+                Text(stale ? "–" : String(snapshot.activeSessions)).font(Fonts.mono(18))
+                    .foregroundStyle(stale ? Tokens.textDim : Tokens.selection)
                 Text("running").font(.caption2).foregroundStyle(Tokens.textDim)
             }
             VStack(alignment: .leading, spacing: 0) {
-                Text("\(snapshot.waitingSessions)").font(Fonts.mono(18))
-                    .foregroundStyle(snapshot.waitingSessions > 0 ? Tokens.alert : Tokens.textDim)
+                Text(stale ? "–" : String(snapshot.waitingSessions)).font(Fonts.mono(18))
+                    .foregroundStyle(!stale && snapshot.waitingSessions > 0 ? Tokens.alert : Tokens.textDim)
                 Text("waiting").font(.caption2).foregroundStyle(Tokens.textDim)
             }
         }

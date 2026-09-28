@@ -23,9 +23,15 @@ enum MarkdownText {
         return result
     }
 
-    /// The text without its markup, lines kept.
+    /// The text without its markup, lines kept; a web link keeps its address after its words ("here (https://…)").
     static func plain(_ markdown: String) -> String {
-        String(attributed(markdown).characters)
+        let text = attributed(markdown)
+        // Runs by link only: bold inside one link must not repeat its address.
+        return text.runs[\.link].map { link, range in
+            let words = String(text[range].characters)
+            guard let link, words != link.absoluteString else { return words }
+            return "\(words) (\(link.absoluteString))"
+        }.joined()
     }
 
     /// Bold and italic as real fonts: RTF and HTML drop a presentation intent, so the pasteboard needs these.

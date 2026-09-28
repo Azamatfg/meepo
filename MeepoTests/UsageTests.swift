@@ -124,6 +124,9 @@ final class UsageScannerTests: XCTestCase {
         XCTAssertEqual(TokenFormat.short(812), "812")
         XCTAssertEqual(TokenFormat.short(3_450), "3.5K")
         XCTAssertEqual(TokenFormat.short(345_000), "345K")
+        XCTAssertEqual(TokenFormat.short(999_499), "999K")
+        XCTAssertEqual(TokenFormat.short(999_500), "1.00M", "never 1000K")
+        XCTAssertEqual(TokenFormat.short(999_999), "1.00M")
         XCTAssertEqual(TokenFormat.short(1_234_567), "1.23M")
         XCTAssertEqual(TokenFormat.short(54_000_000), "54.0M")
         // B from where M would round to 1000.0M, as Claude Code's /stats does.
@@ -164,6 +167,59 @@ final class UsageStatsTests: XCTestCase {
         XCTAssertEqual(all.byModel.map(\.name), ["claude-opus-5", "claude-opus-5-5"])
         XCTAssertEqual(all.byProject.map(\.name), ["Other"])
         XCTAssertEqual(try XCTUnwrap(store.usageHistoryStart()).timeIntervalSince1970, old.timeIntervalSince1970, accuracy: 0.01)
+    }
+
+    /// A plain folder at its real path (/var is /private/var), so it matches what addProject stores.
+    private func tempFolder(_ path: String) throws -> URL {
+        let tmp = FileManager.default.temporaryDirectory.appending(path: "meepo-test-\(UUID().uuidString)/\(path)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        return URL(filePath: String(cString: realpath(tmp.path, nil)))
+    }
+
+    private func response(_ id: String, cwd: String, tokens: Int) -> UsageRecord {
+        UsageRecord(messageId: id, claudeSessionId: "s", cwd: cwd, model: "claude-opus-5-5", createdAt: .now, isSidechain: false,
+                    inputTokens: 0, outputTokens: tokens, cacheCreationTokens: 0, cacheReadTokens: 0)
+    }
+
+    /// A repo inside a project folder keeps its tokens, although the folder's name sorts first.
+    func testNestedRepoKeepsItsOwnTokens() throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        let parent = try tempFolder("a-parent") // no git
+        let child = parent.appending(path: "zz-child")
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+        try git(["init", "-q", "-b", "trunk"], in: child)
+        try store.addProject(at: parent)
+        try store.addProject(at: child)
+        let usage = response("n1", cwd: child.path + "/src", tokens: 700)
+        try db.write { try usage.insert($0) }
+
+        XCTAssertEqual(store.usageStats(since: Calendar.current.startOfDay(for: .now)).byProject.map(\.name), ["zz-child"])
+        let days = store.daySummary(commits: [:])
+        XCTAssertEqual(days.map(\.project.path), [child.path])
+        XCTAssertEqual(days.first?.tokens, 700)
+    }
+
+    /// Two projects named "api": each keeps its own tokens, the idle one stays out of the day.
+    func testSameNamedProjectsStayApart() throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        let first = try tempFolder("x/api"), second = try tempFolder("y/api")
+        try git(["init", "-q", "-b", "trunk"], in: first)
+        try git(["init", "-q", "-b", "trunk"], in: second)
+        try store.addProject(at: first)
+        try store.addProject(at: second)
+        let usage = response("a1", cwd: first.path, tokens: 500)
+        try db.write { try usage.insert($0) }
+
+        let days = store.daySummary(commits: [:])
+        XCTAssertEqual(days.map(\.project.path), [first.path])
+        XCTAssertEqual(days.first?.tokens, 500)
+        let stats = store.usageStats(since: Calendar.current.startOfDay(for: .now))
+        XCTAssertEqual(stats.byProject.count, 1)
+        XCTAssertEqual(stats.byProject.first?.totals.total, 500)
     }
 }
 

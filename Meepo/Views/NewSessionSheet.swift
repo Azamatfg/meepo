@@ -135,17 +135,22 @@ struct NewSessionSheet: View {
         .preferredColorScheme(.light)
         .onAppear { projectId = store.newSessionProjectId }
         .task(id: projectId) {
+            past = []   // the previous project's conversations must not stay clickable while this one loads
             guard let path = store.projects.first(where: { $0.id == projectId })?.path else {
-                past = []
                 isGit = false
                 useWorktree = false
                 return
             }
-            isGit = await Task.detached { GitService.output(["rev-parse", "--is-inside-work-tree"], in: path) == "true" }.value
+            // Detached work outlives a project switch: its result is dropped once this task is cancelled.
+            let git = await Task.detached { GitService.output(["rev-parse", "--is-inside-work-tree"], in: path) == "true" }.value
+            guard !Task.isCancelled else { return }
+            isGit = git
             // SPEC module 5: a second session in the same project defaults to its own worktree.
-            useWorktree = isGit && store.sessions.contains { $0.projectId == projectId }
+            useWorktree = git && store.sessions.contains { $0.projectId == projectId }
+            let found = await Task.detached { ClaudeImport.claudeSessions(for: path) }.value
+            guard !Task.isCancelled else { return }
             let open = Set(store.sessions.map(\.claudeSessionId))
-            past = await Task.detached { ClaudeImport.claudeSessions(for: path) }.value.filter { !open.contains($0.id) }
+            past = found.filter { !open.contains($0.id) }
         }
     }
 

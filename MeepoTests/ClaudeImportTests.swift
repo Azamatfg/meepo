@@ -27,22 +27,26 @@ final class ClaudeImportTests: XCTestCase {
         let added = try makeTempRepo()
         let home = tmp.appending(path: "home").path
         try FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
+        let configOnly = tmp.appending(path: "old-project")         // in Claude Code's list, no transcript left
+        try FileManager.default.createDirectory(at: configOnly, withIntermediateDirectories: true)
 
         try transcript(cwd: terminalRepo.path, id: "s-root", age: 60, title: "Refactor billing")
         try transcript(cwd: sub.path, id: "s-sub", age: 30)
         try transcript(cwd: notes.path, id: "s-notes", age: 3_600)
         try transcript(cwd: terminalRepo.path + "/.claude/worktrees/feat", id: "s-wt", age: 10)
         let config = tmp.appending(path: ".claude.json")
-        try write(#"{"projects":{"\#(added.path)":{},"\#(home)":{},"/nowhere/gone":{},"/private/tmp/scratch":{}}}"#, to: config)
+        try write(#"{"projects":{"\#(added.path)":{},"\#(home)":{},"/nowhere/gone":{},"/private/tmp/scratch":{},"\#(configOnly.path)":{}}}"#, to: config)
 
         let folders = ClaudeImport.folders(claudeHome: tmp.appending(path: ".claude"), config: config,
                                            skip: [added.path], home: home, scratch: ["/private/tmp/"])  // tests live in /private/var
-        guard folders.count == 2 else { return XCTFail("\(folders.map(\.path))") }
-        XCTAssertEqual(folders.map(\.path), [terminalRepo.path, notes.path])   // newest first; sub → its repo
-        XCTAssertEqual(folders.map(\.isGit), [true, false])
+        guard folders.count == 3 else { return XCTFail("\(folders.map(\.path))") }
+        XCTAssertEqual(folders.map(\.path), [terminalRepo.path, notes.path, configOnly.path])   // newest first; sub → its repo
+        XCTAssertEqual(folders.map(\.isGit), [true, false, false])
         XCTAssertEqual(folders[0].session?.title, "Refactor billing")          // only a root conversation resumes
         XCTAssertEqual(folders[0].session?.id, "s-root")
         XCTAssertNotNil(folders[0].lastUsed)
+        XCTAssertNil(folders[2].lastUsed)                                       // undated: last
+        XCTAssertNil(folders[2].session)
     }
 
     /// NEW SESSION lists the folder's conversations newest first, like `claude --resume`.

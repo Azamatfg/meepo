@@ -52,6 +52,36 @@ final class EventStoryTests: XCTestCase {
         XCTAssertTrue(asked.needsYou)
     }
 
+    func testAnMCPToolWithAHyphenIsAToolNotAQuestion() {
+        let running = EventStory.line(for: event(1, "PreToolUse", "mcp__claude-in-chrome__navigate: https://example.com", at: 0))!
+        XCTAssertEqual(running.title, "Used mcp__claude-in-chrome__navigate…")
+        XCTAssertFalse(running.needsYou)
+        XCTAssertTrue(running.isRunning)
+        let done = EventStory.line(for: event(2, "PostToolUse", "mcp__plugin_my-plugin_db__query", at: 1))!
+        XCTAssertEqual(done.title, "Used mcp__plugin_my-plugin_db__query")
+    }
+
+    func testTheSameCallTwiceEndsTwice() {
+        let parallel = EventStory.lines([
+            event(1, "PreToolUse", "Read: /r/README.md", at: 0),
+            event(2, "PreToolUse", "Read: /r/README.md", at: 1),
+            event(3, "PostToolUse", "Read: /r/README.md", at: 2),
+            event(4, "PostToolUse", "Read: /r/README.md", at: 3),
+        ])
+        XCTAssertEqual(parallel.map(\.title), ["Read README.md", "Read README.md"], "two helpers read the same file")
+        XCTAssertEqual(parallel.map(\.isRunning), [false, false])
+
+        let retried = EventStory.lines([
+            event(1, "PreToolUse", "Bash: git push", at: 0),
+            event(2, "UserPromptSubmit", "push it", at: 5),
+            event(3, "PreToolUse", "Bash: git push", at: 6),
+            event(4, "PostToolUse", "Bash: git push", at: 7),
+            event(5, "Stop", "Pushed.", at: 8),
+        ])
+        XCTAssertFalse(retried.contains(where: \.isRunning), "the denied call ends with the turn")
+        XCTAssertEqual(retried.filter { $0.title == "Ran git push" }.count, 2)
+    }
+
     /// The next request ends the one before it: that one has no reply of its own (Esc, or a message sent while
     /// Claude worked — the hook can't tell which), and it doesn't keep counting.
     func testARequestTheNextOneCutOffEndsWhereTheNextBegins() {

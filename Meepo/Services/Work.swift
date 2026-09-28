@@ -2,8 +2,8 @@ import Foundation
 
 /// Units of work, read from git: each push the user made (the upstream's reflog records it as "update by push"),
 /// and what isn't sent yet — each with the requests that led to it. A push is a fact about a folder, not a
-/// session, so every session working there adds its requests. Without an upstream a commit is the unit; without
-/// git, only the requests are.
+/// session, so every session working there adds its requests. Without an upstream a commit no remote has is the
+/// unit; without git, only the requests are.
 enum Work {
     struct Commit: Equatable, Identifiable {
         let sha: String
@@ -55,7 +55,7 @@ enum Work {
         var unsent: [Commit] = []
         /// The last week's pushes, oldest first.
         var sends: [Send] = []
-        /// Without an upstream: the last week's commits, oldest first — each one a unit.
+        /// Without an upstream: the last week's commits no remote has yet, oldest first — each one a unit.
         var commits: [Commit] = []
         var id: String { path }
 
@@ -276,7 +276,9 @@ enum Work {
             repo.unsent = commits([ref + "..HEAD"], in: path)
             repo.sends = sends(of: ref, since: since, in: path)
         } else if repo.head != nil {
-            repo.commits = commits(["--since=\(ISO8601DateFormatter().string(from: since))", "HEAD"], in: path).reversed()
+            // Not what a remote already has: a worktree branch starts from origin/main with no upstream.
+            repo.commits = commits(["--since=\(ISO8601DateFormatter().string(from: since))", "HEAD", "--not", "--remotes"],
+                                   in: path).reversed()
         }
         return repo
     }

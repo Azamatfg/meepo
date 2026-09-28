@@ -84,9 +84,16 @@ final class AutoSyncStoreTests: XCTestCase {
         return (store, store.sessions[0])
     }
 
+    /// Statuses come from hooks: with the bridge on, Claude answered and waits for the user.
+    private func betweenTurns(_ store: AppStore, _ session: Session) {
+        store.installBridge()
+        store.handleHookEvent(HookPayload(event: "Stop", claudeSessionId: session.claudeSessionId), sessionId: session.id!)
+    }
+
     func testCleanFolderIsPulledAndTheAgentHearsOnce() async throws {
         let team = try Team()
         let (store, session) = try store(for: team)
+        betweenTurns(store, session)
         try team.teammateCommits("api.py", "def f(): pass\n", "add api endpoint")
 
         await store.autoSync(only: [session])
@@ -122,6 +129,49 @@ final class AutoSyncStoreTests: XCTestCase {
         let stashes = try XCTUnwrap(GitService.outputAllowingFailure(["stash", "list"], in: team.mine.path))
         XCTAssertTrue(stashes.isEmpty)
     }
+
+    /// A turn that started after the sessions were read (while git fetch ran): nothing is pulled under the agent.
+    func testAgentMidTurnIsNotPulledUnder() async throws {
+        let team = try Team()
+        let (store, session) = try store(for: team)
+        betweenTurns(store, session)
+        let copy = try XCTUnwrap(store.sessions.first)                                  // read while between turns
+        try team.teammateCommits("api.py", "x\n", "teammate work")
+        store.handleHookEvent(HookPayload(event: "UserPromptSubmit", claudeSessionId: session.claudeSessionId, prompt: "go"),
+                              sessionId: session.id!)
+        let before = GitService.headCommit(in: team.mine.path)
+
+        await store.autoSync(only: [copy])
+        XCTAssertEqual(GitService.headCommit(in: team.mine.path), before)
+        XCTAssertTrue(store.pendingPulls.contains(team.mine.path))
+    }
+
+    /// Without the hook bridge a working agent looks idle: meepo only fetches, never pulls.
+    func testWithoutHooksNothingIsPulled() async throws {
+        let team = try Team()
+        let (store, session) = try store(for: team)
+        try team.teammateCommits("api.py", "x\n", "teammate work")
+
+        await store.autoSync(only: [session])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: team.mine.appending(path: "api.py").path))
+        XCTAssertTrue(store.pendingPulls.contains(team.mine.path))
+    }
+
+    /// A pull that can't go through (the user's commit conflicts) is said once, not every 5 minutes.
+    func testFailedPullIsReportedOnce() async throws {
+        let team = try Team()
+        let (store, session) = try store(for: team)
+        betweenTurns(store, session)
+        try team.teammateCommits("shared.txt", "theirs\n", "teammate edit")
+        try "mine\n".write(to: team.mine.appending(path: "shared.txt"), atomically: true, encoding: .utf8)
+        try git(["commit", "-q", "-am", "my edit"], in: team.mine)
+        var titles: [String] = []
+        store.onCINotice = { title, _ in titles.append(title) }
+
+        await store.autoSync(only: [session])
+        await store.autoSync(only: [session])
+        XCTAssertEqual(titles, ["Pull stopped"])
+    }
 }
 
 /// The real bridge script talking to the real server: Meepo's reply comes out on stdout, which Claude reads.
@@ -155,6 +205,42 @@ final class BridgeReplyTests: XCTestCase {
             return String(decoding: data, as: UTF8.self)
         }.value
         XCTAssertEqual(out, "[Meepo] Teammates pushed 1 new commit")
+    }
+
+    /// Whoever answers on the port (another app holding it, say) can't approve a tool call through the bridge.
+    func testOnlyUserPromptSubmitRepliesReachClaude() async throws {
+        let home = FileManager.default.temporaryDirectory.appending(path: "bh-\(UUID().uuidString)")
+        let installer = BridgeInstaller(settingsURL: home.appending(path: "settings.json"), meepoHome: home.appending(path: ".meepo"))
+        try installer.writeScript()
+        let token = try MeepoHome.token(in: home.appending(path: ".meepo"))
+        let port = UInt16.random(in: 49_000...59_000)
+        let server = EventServer(token: token) { _, _ in }
+        var answered = false
+        server.reply = { _, _ in
+            answered = true
+            return #"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}"#
+        }
+        try server.start(port: port)
+        defer { server.stop() }
+        try await Task.sleep(for: .milliseconds(200))
+
+        let out = try await Task.detached { () throws -> String in
+            let process = Process()
+            process.executableURL = URL(filePath: "/bin/bash")
+            process.arguments = [installer.scriptURL.path]
+            process.environment = ["HOME": home.path, "MEEPO_SESSION_ID": "7", "MEEPO_PORT": String(port), "PATH": "/usr/bin:/bin"]
+            let input = Pipe(), output = Pipe()
+            process.standardInput = input
+            process.standardOutput = output
+            try process.run()
+            input.fileHandleForWriting.write(Data(#"{"session_id":"s","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"rm -rf x"}}"#.utf8))
+            try input.fileHandleForWriting.close()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return String(decoding: data, as: UTF8.self)
+        }.value
+        XCTAssertTrue(answered, "the PreToolUse never reached the server")
+        XCTAssertEqual(out, "")
     }
 
     func testEmptyReplyIs204WithNoBody() {

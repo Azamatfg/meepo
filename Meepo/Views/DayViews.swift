@@ -133,8 +133,8 @@ private struct TaskRow: View {
     }
 
     private func addScreenshot() async {
-        let file = TaskItem.attachmentsDir.appending(path: "\(UUID().uuidString).png")
-        try? FileManager.default.createDirectory(at: TaskItem.attachmentsDir, withIntermediateDirectories: true)
+        let file = store.attachmentsDir.appending(path: "\(UUID().uuidString).png")
+        try? FileManager.default.createDirectory(at: store.attachmentsDir, withIntermediateDirectories: true)
         guard await ScreenshotFlow.capture(to: file) else { return }
         var t = task
         t.attachments.append(file.path)

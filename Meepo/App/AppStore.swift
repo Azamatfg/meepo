@@ -53,6 +53,9 @@ final class AppStore {
     private(set) var isBridgeInstalled = false
     /// Last bridge/event-server problem to show the user.
     var bridgeError: String?
+    /// The event server failed (e.g. its port is taken) and never retries: sessions started from now on get no
+    /// bridge, whose events would reach nobody but whoever holds the port. Set on failure, never awaited at start.
+    var isEventServerDown = false
     /// False when macOS refuses Meepo's notifications (turned off in System Settings).
     var notificationsAllowed = true
 
@@ -113,6 +116,7 @@ final class AppStore {
         runningSessionIds.remove(id)
         exitedSessionIds.insert(id)
         holds[id] = nil
+        quitIfIdle() // the last working claude may die without a hook
     }
 
     /// Resolves the login shell environment once, then brings every saved session back
@@ -224,22 +228,25 @@ final class AppStore {
     }
 
     /// The running sessions still in the other mode. `now`: between turns — ready, Claude's answer was the last
-    /// word (Stop, or StopFailure: an API error ended the turn), or claude only just (re)started and has sat
-    /// waiting since (SessionStart, then an idle-prompt Notification) — so a restart continues the same conversation
+    /// word (Stop, or StopFailure: an API error ended the turn), or claude only just (re)started — each maybe
+    /// followed by an idle-prompt Notification ("waiting for you") — so a restart continues the same conversation
     /// and cuts nothing off. `later`: mid-turn, or waiting on a permission or on a question Claude asked
     /// (AskUserQuestion, which also reads "waiting for you"). Idle counts only when hooks told us so (`hooks`: the
     /// bridge is installed): without them every session stays idle, even mid-turn.
     static func guidedRestart(_ sessions: [TurnState], guided: Bool, hooks: Bool) -> (now: [Int64], later: [Int64]) {
         let other = sessions.filter { $0.runsGuided != guided }
-        let isFree = { (s: TurnState) in
-            switch s.status {
-            case .idle: hooks && ["SessionStart", "SessionEnd", "Stop", "StopFailure"].contains(s.lastEvent ?? "")
-            case .waitingInput: s.lastEvent == "Stop" || s.lastEvent == "SessionStart"
-            case .error: s.lastEvent == "StopFailure"
-            default: false
-            }
-        }
+        let isFree = { (s: TurnState) in Self.isBetweenTurns(status: s.status, lastEvent: s.lastEvent, hooks: hooks) }
         return (other.filter(isFree).map(\.id), other.filter { !isFree($0) }.map(\.id))
+    }
+
+    /// Between turns, by `guidedRestart`'s rule; also when auto-sync may pull under a session.
+    static func isBetweenTurns(status: SessionStatus, lastEvent: String?, hooks: Bool) -> Bool {
+        switch status {
+        case .idle: hooks && ["SessionStart", "SessionEnd", "Stop", "StopFailure"].contains(lastEvent ?? "")
+        case .waitingInput: ["Stop", "StopFailure", "SessionStart"].contains(lastEvent ?? "")
+        case .error: lastEvent == "StopFailure"
+        default: false
+        }
     }
 
     private var turnStates: [TurnState] {
@@ -450,7 +457,8 @@ final class AppStore {
     /// The folder's requests (every session working there) and their explanations, from the database.
     func reloadRuns(_ folder: String) {
         let ids = sessions.filter { workdir(of: $0) == folder }.compactMap(\.id)
-        guard !ids.isEmpty else { return }
+        // No session left here: its runs point at closed sessions (and IN () would be no SQL).
+        guard !ids.isEmpty else { if work[folder]?.runs.isEmpty == false { work[folder]?.runs = [] }; return }
         let marks = ids.map { _ in "?" }.joined(separator: ",")
         let (events, summaries) = (try? db.read { db -> ([HookEvent], [String: ProductSummary]) in
             // Only what a run is made of: requests, answers, its end, and file edits (not every read and command).
@@ -562,6 +570,7 @@ final class AppStore {
 
     /// Reads history.jsonl off the main thread and finds chains and repeated requests.
     func refreshSuggestions() async {
+        if commandsByProject.isEmpty { refreshProjects() } // at launch the usage scan hasn't read the commands yet
         let known = Set(commandsByProject.values.flatMap { $0.map(\.name) } + CommandCatalog.builtIns.map(\.name))
         suggestions = await Task.detached {
             let text = (try? String(contentsOf: Automations.historyFile, encoding: .utf8)) ?? ""
@@ -878,7 +887,7 @@ final class AppStore {
             title: working == 1 ? "An agent is still working" : "\(working) agents are still working",
             message: "Quitting now stops them mid-turn. Their conversations come back when meepo opens (claude --resume), but the unfinished turn is lost.",
             action: "Quit now",
-            alternative: ("Quit when they finish", { [weak self] in self?.quitWhenIdle = true }),
+            alternative: ("Quit when they finish", { [weak self] in self?.quitWhenTheyFinish() }),
             onCancel: { [weak self] in self?.relaunchAfterQuit = false }
         ) { [weak self] in
             self?.isQuitConfirmed = true
@@ -892,10 +901,24 @@ final class AppStore {
         relaunchAfterQuit = false
     }
 
+    /// They may have finished while the question was open: no later event would check again.
+    /// Not a direct terminate: on the NSAlert path this runs inside applicationShouldTerminate.
+    private func quitWhenTheyFinish() {
+        quitWhenIdle = true
+        Task { self.quitIfIdle() } // main actor, after the current quit answer returns
+    }
+
+    /// Quits (or restarts) once nobody is mid-turn, if the user chose "Quit when they finish".
+    private func quitIfIdle() {
+        guard quitWhenIdle, workingSessionIds.isEmpty else { return }
+        quitWhenIdle = false
+        isQuitConfirmed = true
+        terminate()
+    }
+
     /// Resumed sessions don't pick an interrupted turn up by themselves; this asks claude to.
     func continueInterrupted(_ sessionId: Int64) {
-        interruptedSessionIds.remove(sessionId)
-        type("continue\r", into: sessionId)
+        type("continue\r", into: sessionId) { [weak self] in _ = self?.interruptedSessionIds.remove(sessionId) }
     }
 
     // MARK: Crash reports (local only)
@@ -915,19 +938,27 @@ final class AppStore {
         lastCrashReport = nil
     }
 
+    /// Claude Code session ids of `claude` runs nested in a Meepo session: their events aren't the session's.
+    private var nestedClaudeIds: Set<String> = []
+
     /// Applies a hook event to its session; returns what (if anything) the user should be told.
     @discardableResult
     func handleHookEvent(_ payload: HookPayload, sessionId: Int64) -> Attention? {
+        // A `claude -p` run from inside the session (Bash tool, git hook, skill script) inherits MEEPO_SESSION_ID and
+        // reports as this session. Meepo's own claude only says "startup" with the id it was started with.
+        if payload.event == "SessionStart", payload.source == "startup",
+           let own = sessions.first(where: { $0.id == sessionId })?.claudeSessionId, payload.claudeSessionId != own {
+            nestedClaudeIds.insert(payload.claudeSessionId)
+        }
+        if nestedClaudeIds.contains(payload.claudeSessionId) {
+            if payload.event == "SessionEnd" { nestedClaudeIds.remove(payload.claudeSessionId) }
+            return nil
+        }
         interruptedSessionIds.remove(sessionId)
         if payload.event == "UserPromptSubmit" { holds[sessionId] = nil } // what was said reached claude
-        defer {
-            if quitWhenIdle, workingSessionIds.isEmpty {
-                quitWhenIdle = false
-                isQuitConfirmed = true
-                terminate()
-            }
-        }
+        defer { quitIfIdle() }
         guard var session = sessions.first(where: { $0.id == sessionId }) else { return nil }
+        noteAsks(payload, sessionId: sessionId)
         let old = session.status
         // `/clear` starts a new conversation in the same process; resume that one after a restart.
         if payload.event == "SessionStart", payload.claudeSessionId != session.claudeSessionId {
@@ -942,8 +973,11 @@ final class AppStore {
         // A Notification is a delayed echo (~6 s) of a prompt already reported by PermissionRequest;
         // it must not turn a question (waiting for input) into a permission request.
         let isEcho = payload.event == "Notification" && (old == .waitingInput || old == .waitingPermission)
-        if let status = payload.status, !isEcho { session.status = status }
-        if payload.status != nil, payload.event != "Notification" { lastTurnEvents[sessionId] = payload.event }
+        // The SessionStart that ends a /compact (its PreCompact was the last word) means ready again.
+        let endsCompact = payload.event == "SessionStart" && payload.source == "compact" && lastTurnEvents[sessionId] == "PreCompact"
+        let status: SessionStatus? = endsCompact ? .idle : payload.status
+        if let status, !isEcho { session.status = status }
+        if status != nil, payload.event != "Notification" { lastTurnEvents[sessionId] = payload.event }
         session.lastActiveAt = .now
         var event = HookEvent(sessionId: sessionId, name: payload.event, summary: payload.summary,
                               isFailure: payload.isFailure, createdAt: .now)
@@ -1041,6 +1075,8 @@ final class AppStore {
     struct UsageStats {
         var total = UsageTotals()
         var byProject: [(name: String, totals: UsageTotals)] = []
+        /// The same totals keyed by project path: two projects can share a folder name.
+        var byProjectPath: [String: UsageTotals] = [:]
         var byModel: [(name: String, totals: UsageTotals)] = []
     }
 
@@ -1150,7 +1186,10 @@ final class AppStore {
 
     /// Betas by default while Meepo itself is a beta, stable afterwards.
     var updateChannel: Updater.Channel {
-        didSet { defaults.set(updateChannel.rawValue, forKey: Self.channelKey) }
+        didSet {
+            defaults.set(updateChannel.rawValue, forKey: Self.channelKey)
+            dropStagedPrerelease()
+        }
     }
 
     /// At launch, every few hours, and on `meepo update`: find, download and verify a newer release.
@@ -1160,6 +1199,15 @@ final class AppStore {
             return
         }
         guard autoUpdate || userInitiated else { return }
+        // One check at a time: two would unpack into the same updates/<tag> folder. No await before `.checking`.
+        switch updateState {
+        case .checking, .downloading:
+            if userInitiated { notice("ALREADY CHECKING", "meepo is looking for a new version right now.") }
+            return
+        default: break
+        }
+        // The channel may have moved to stable while this check ran (or before it): no beta stays staged.
+        defer { dropStagedPrerelease() }
         // One already downloaded: still look for a newer one (a day of releases shouldn't stop at the first).
         var baseline = current
         if case let .ready(staged, _) = updateState, let version = Updater.Version(staged) { baseline = version }
@@ -1218,6 +1266,14 @@ final class AppStore {
         }
     }
 
+    /// A beta staged before the user picked the stable channel is deleted, not installed at quit.
+    private func dropStagedPrerelease() {
+        guard case let .ready(version, _) = updateState, !Updater.keepsStaged(version, on: updateChannel) else { return }
+        if let staged = stagedUpdate { try? FileManager.default.removeItem(at: staged.deletingLastPathComponent()) }
+        stagedUpdate = nil
+        updateState = .idle
+    }
+
     private func notice(_ title: String, _ message: String) {
         confirmation = PixelConfirmation(title: title, message: message, action: "OK", cancel: nil, isDestructive: false) {}
     }
@@ -1226,11 +1282,23 @@ final class AppStore {
     /// All Claude Code tokens on this Mac today, for the menu bar; refreshed with the widget's numbers so both agree.
     private(set) var usageToday = 0
 
+    /// The widget's numbers now. Quitting: the agents die with Meepo, so none runs or waits any more.
+    func currentWidgetSnapshot(quitting: Bool = false) -> WidgetSnapshot {
+        WidgetSnapshot(tokensToday: usageStats(since: Calendar.current.startOfDay(for: .now)).total.total,
+                       activeSessions: quitting ? 0 : runningSessionIds.count, waitingSessions: quitting ? 0 : waitingCount,
+                       updatedAt: .now)
+    }
+
+    /// At quit: the widget stops showing sessions at once, not an hour later.
+    func publishQuitWidgetSnapshot() {
+        try? currentWidgetSnapshot(quitting: true).write()
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+
     /// Hands the desktop widget its numbers; reloads it only when they change (WidgetKit budgets reloads).
     func publishWidgetSnapshot() {
-        usageToday = usageStats(since: Calendar.current.startOfDay(for: .now)).total.total
-        let next = WidgetSnapshot(tokensToday: usageToday,
-                                  activeSessions: runningSessionIds.count, waitingSessions: waitingCount, updatedAt: .now)
+        let next = currentWidgetSnapshot()
+        usageToday = next.tokensToday
         var previous = widgetSnapshot
         previous.updatedAt = next.updatedAt
         // Unchanged numbers still refresh the file hourly, so the widget can tell Meepo is alive.
@@ -1276,14 +1344,21 @@ final class AppStore {
             let byModel = try Row.fetchAll(db, sql: "SELECT model, \(sums) FROM usageRecord WHERE createdAt >= ? AND model NOT LIKE '<%' GROUP BY model",
                                            arguments: [start])
             stats.byModel = byModel.map { (name: $0["model"] as String, totals: totals($0)) }
-            var byProject: [String: UsageTotals] = [:]
+            var byPath: [String: UsageTotals] = [:]
+            var other: UsageTotals?
             for row in try Row.fetchAll(db, sql: "SELECT cwd, \(sums) FROM usageRecord WHERE createdAt >= ? AND model NOT LIKE '<%' GROUP BY cwd",
                                         arguments: [start]) {
                 let cwd: String = row["cwd"]
-                let name = projects.first { cwd == $0.path || cwd.hasPrefix($0.path + "/") }?.name ?? "Other"
-                byProject[name] = add(byProject[name] ?? UsageTotals(), totals(row))
+                // The deepest project holding the folder, so a repo inside a project folder keeps its own tokens.
+                if let owner = projects.filter({ cwd == $0.path || cwd.hasPrefix($0.path + "/") }).max(by: { $0.path.count < $1.path.count }) {
+                    byPath[owner.path] = add(byPath[owner.path] ?? UsageTotals(), totals(row))
+                } else {
+                    other = add(other ?? UsageTotals(), totals(row))
+                }
             }
-            stats.byProject = byProject.map { (name: $0.key, totals: $0.value) }
+            stats.byProjectPath = byPath
+            stats.byProject = projects.compactMap { project in byPath[project.path].map { (name: project.name, totals: $0) } }
+            if let other { stats.byProject.append((name: "Other", totals: other)) }
         }
         stats.byModel.sort { $0.totals.total > $1.totals.total }
         stats.byProject.sort { $0.totals.total > $1.totals.total }
@@ -1416,6 +1491,7 @@ final class AppStore {
         let repos = await Task.detached {
             Repos.find(in: folder) + extra.flatMap { dir in Repos.find(in: dir).map { Repo(name: $0.name, path: $0.path, isLinked: true) } }
         }.value
+        guard !Task.isCancelled else { return } // another session was selected meanwhile (MainView's .task(id:))
         if repos != sessionRepos { sessionRepos = repos }
         for repo in repos { await refreshSourceControl(repo.path) }
     }
@@ -1609,24 +1685,74 @@ final class AppStore {
         return stages[index + 1].name
     }
 
-    /// Types text into a session's terminal ("\r" = Enter). A line ending in Enter waits while Claude is asking
+    /// Types text into a session's terminal ("\r" = Enter). A line ending in Enter waits while Claude may be asking
     /// something (a permission, or a question with choices): that Enter would pick the highlighted answer for the
-    /// user. False when it wasn't typed.
+    /// user. No hook says the user answered No or pressed Esc, so the user can send it anyway. False when it wasn't
+    /// typed now; `onSent` runs once it is.
     @discardableResult
-    func type(_ text: String, into sessionId: Int64) -> Bool {
+    func type(_ text: String, into sessionId: Int64, onSent: (() -> Void)? = nil) -> Bool {
         if text.hasSuffix("\r"), isAwaitingAnswer(sessionId) {
             let name = sessions.first { $0.id == sessionId }.map(displayName(of:)) ?? "this session"
-            bridgeError = "Claude is asking you something in \(name) — answer it first, then click again."
+            // Send anyway isn't the main action: an Enter meant for the question in the terminal would press it.
+            confirmation = PixelConfirmation(
+                title: "Claude may be asking you something",
+                message: "In \(name) a permission or a question may be on screen: Enter would pick its highlighted answer, so answer it first. Already answered it, or pressed Esc? Send anyway.",
+                action: "OK",
+                alternative: ("Send anyway", { [weak self] in
+                    self?.press(text, into: sessionId)
+                    onSent?()
+                }),
+                cancel: nil, isDestructive: false
+            ) {}
             return false
         }
-        if let keySink { keySink(text, sessionId) } else { terminals.send(text, to: sessionId) }
+        press(text, into: sessionId)
+        onSent?()
         return true
+    }
+
+    private func press(_ text: String, into sessionId: Int64) {
+        if let keySink { keySink(text, sessionId) } else { terminals.send(text, to: sessionId) }
     }
 
     /// Claude waits on the user's answer, not on a new request: a permission prompt, or AskUserQuestion (which comes
     /// in as a PermissionRequest too).
     func isAwaitingAnswer(_ sessionId: Int64) -> Bool {
-        sessions.first { $0.id == sessionId }?.status == .waitingPermission || lastTurnEvents[sessionId] == "PermissionRequest"
+        sessions.first { $0.id == sessionId }?.status == .waitingPermission || openAsks[sessionId]?.isEmpty == false
+    }
+
+    /// claude is in a turn: working, or waiting on the user's answer inside it (a permission, AskUserQuestion).
+    /// A finished turn (Stop, StopFailure), an idle claude and an exited one are between turns.
+    func isMidTurn(_ sessionId: Int64) -> Bool {
+        workingSessionIds.contains(sessionId) || (!exitedSessionIds.contains(sessionId) && isAwaitingAnswer(sessionId))
+    }
+
+    /// Per session, the prompts on screen by the agent that asked ("" = the main conversation): the asked call,
+    /// "tool|target". Background subagents keep working while one waits; their events must not close it.
+    private var openAsks: [Int64: [String: String]] = [:]
+
+    /// Only the asked call running or the end of the turn closes a prompt: the asker's other calls from the same
+    /// message (parallel Reads, WebFetches) keep starting while its prompt is on screen.
+    private func noteAsks(_ payload: HookPayload, sessionId: Int64) {
+        let agent = payload.agentId ?? "", call = "\(payload.toolName ?? "")|\(payload.toolTarget ?? "")"
+        switch payload.event {
+        case "PermissionRequest":
+            openAsks[sessionId, default: [:]][agent] = call
+        case "PostToolUse", "PostToolUseFailure": // the approved call ran
+            if openAsks[sessionId]?[agent] == call { openAsks[sessionId]?[agent] = nil }
+        case "Stop": // background_tasks counts the helpers, which may still be asking
+            if payload.backgroundTasks > 0 { openAsks[sessionId]?[""] = nil } else { openAsks[sessionId] = nil }
+        // A turn Claude Code started (a helper's report, a timer) or an API error ends only that agent's wait:
+        // background helpers may still be asking.
+        case "UserPromptSubmit" where Runs.claudeCodeTag(payload.prompt ?? "") != nil, "StopFailure":
+            openAsks[sessionId]?[agent] = nil
+        case "UserPromptSubmit", "SessionEnd":
+            openAsks[sessionId] = nil
+        case "SessionStart" where payload.source != "compact": // compaction happens mid-turn
+            openAsks[sessionId] = nil
+        default:
+            break
+        }
     }
 
     /// Code was edited after the last QA stage ran in this session (reminder before ship).
@@ -1650,7 +1776,9 @@ final class AppStore {
 
     /// The plan is ready when the plan stage's reply is in and the session waits for the user.
     func canStartImplementation(_ session: Session) -> Bool {
-        session.stage == stages.first(where: { $0.command == "plan" })?.name && session.status == .waitingInput
+        // No plan stage (hidden): no plan — else nil == nil would offer it to every stage-less session.
+        guard let plan = stages.first(where: { $0.command == "plan" })?.name else { return false }
+        return session.stage == plan && session.status == .waitingInput
     }
 
     /// Plan → code: a fresh session on the code stage's model, with the plan as its first message.
@@ -1668,15 +1796,28 @@ final class AppStore {
     /// Relay: `/sync` (or a handoff request) in the old session; its reply seeds a fresh session in the
     /// same project, and the old one closes (SPEC module 4 "эстафета"). Finishes on that reply's Stop event.
     func relay(_ sessionId: Int64) {
-        guard let session = sessions.first(where: { $0.id == sessionId }) else { return }
-        relayingSessionIds.insert(sessionId)
+        guard let session = sessions.first(where: { $0.id == sessionId }), !exitedSessionIds.contains(sessionId) else { return }
         let sync = stages.first { $0.name == "sync" }?.command
-        if let sync, (commandsByProject[session.projectId] ?? []).contains(where: { $0.name == sync }) {
-            type("/\(sync)\r", into: sessionId)
+        let text = if let sync, (commandsByProject[session.projectId] ?? []).contains(where: { $0.name == sync }) {
+            "/\(sync)\r"
         } else {
-            type("Summarize for a fresh session taking over: the task, what is done, what is next, key files and decisions.\r",
-                 into: sessionId)
+            "Summarize for a fresh session taking over: the task, what is done, what is next, key files and decisions.\r"
         }
+        // Armed only once it's typed: a request that waits on Claude's question leaves RELAY clickable.
+        let arm: () -> Void = { [weak self] in _ = self?.relayingSessionIds.insert(sessionId) }
+        // The next Stop finishes the relay: mid-turn it would be the running turn's, not this request's reply.
+        // Esc ends a turn without a Stop, so "working" may be stale: the user can relay anyway.
+        guard session.status != .thinking else {
+            confirmation = PixelConfirmation(
+                title: "Claude may still be working",
+                message: "In \(displayName(of: session)) a turn may still be running: its reply would end the relay before the sync runs. Pressed Esc, or it's done? Relay anyway.",
+                action: "OK",
+                alternative: ("Relay anyway", { [weak self] in _ = self?.type(text, into: sessionId, onSent: arm) }),
+                cancel: nil, isDestructive: false
+            ) {}
+            return
+        }
+        type(text, into: sessionId, onSent: arm)
     }
 
     private func finishRelay(_ sessionId: Int64, summary: String?) {
@@ -1726,8 +1867,8 @@ final class AppStore {
 
     /// Copies a command file into one project, or into `~/.claude/commands` for every project.
     /// Never overwrites: an existing file there wins. The user picks both source and target.
-    func copyCommand(_ command: String, from source: Project, toProject target: Project?,
-                     home: URL = FileManager.default.homeDirectoryForCurrentUser) {
+    func copyCommand(_ command: String, from source: Project, toProject target: Project?, home: URL? = nil) {
+        let home = home ?? claudeHome.deletingLastPathComponent() // where refreshProjects reads them (demo's own)
         let relative = "commands/\(command.replacingOccurrences(of: ":", with: "/")).md"
         let from = URL(filePath: source.path).appending(path: ".claude/\(relative)")
         let to = (target.map { URL(filePath: $0.path).appending(path: ".claude") } ?? home.appending(path: ".claude"))
@@ -1764,11 +1905,19 @@ final class AppStore {
     private var notedUpstream: [String: String] = [:]
     /// Folders waiting for a clean tree to pull.
     private(set) var pendingPulls: Set<String> = []
+    /// Upstream tip a folder's auto-pull failed on, so "Pull stopped" is said once, not every pass.
+    private var failedPullTips: [String: String] = [:]
+    /// The loop and app activation both sync: two pulls in one repo would trip over each other.
+    private var isAutoSyncing = false
 
     /// Fetches every running session's folder; teammates' new commits are pulled with --rebase when the tree is
     /// clean and the agent is between turns, and the agent hears about them on its next prompt. Never pushes.
+    /// Without the hook bridge nobody knows whether an agent is mid-turn: it only fetches then, never pulls.
     /// `only`: the sessions to sync (tests); by default the running ones.
     func autoSync(only: [Session]? = nil) async {
+        guard !isAutoSyncing else { return }
+        isAutoSyncing = true
+        defer { isAutoSyncing = false }
         let live = only ?? sessions.filter { runningSessionIds.contains($0.id ?? -1) }
         let byFolder = Dictionary(grouping: live) { workdir(of: $0) ?? "" }
         for (path, folderSessions) in byFolder where !path.isEmpty {
@@ -1780,16 +1929,26 @@ final class AppStore {
             }.value
             guard let tip = fetched.tip, let upstream = fetched.status.upstream else {
                 pendingPulls.remove(path)
+                failedPullTips[path] = nil
                 continue
             }
-            let idle = folderSessions.allSatisfy { $0.status == .idle || $0.status == .waitingInput }
+            // Live statuses, read after the fetch (a turn may have started meanwhile); no await until the pull.
+            let idle = folderSessions.allSatisfy { copy in
+                guard let id = copy.id, let current = sessions.first(where: { $0.id == id }) else { return false }
+                return Self.isBetweenTurns(status: current.status, lastEvent: lastTurnEvents[id], hooks: isBridgeInstalled)
+            }
             var pulled = false
             if fetched.status.changes.isEmpty && idle {
                 if let error = await Task.detached(operation: { GitPanel.pullRebase(in: path) }).value {
-                    onCINotice?("Pull stopped", "\(URL(filePath: path).lastPathComponent): \(error.split(separator: "\n").first ?? "") — the folder is as it was")
+                    // Retried quietly on later passes; said again only when the upstream moves.
+                    if failedPullTips[path] != tip {
+                        onCINotice?("Pull stopped", "\(URL(filePath: path).lastPathComponent): \(error.split(separator: "\n").first ?? "") — the folder is as it was")
+                    }
+                    failedPullTips[path] = tip
                 } else {
                     pulled = true
                     pendingPulls.remove(path)
+                    failedPullTips[path] = nil
                 }
             } else {
                 pendingPulls.insert(path)
@@ -1806,9 +1965,11 @@ final class AppStore {
         for path in byFolder.keys where !path.isEmpty { await refreshWork(path) }
     }
 
-    /// The bridge's reply to a hook: the teammates note, handed over once, on the session's next prompt.
+    /// The bridge's reply to a hook: the teammates note, handed over once, on the session's next prompt
+    /// (not to a nested `claude -p` run from inside it).
     func hookReply(sessionId: Int64, body: Data) -> String? {
-        guard HookPayload(json: body)?.event == "UserPromptSubmit" else { return nil }
+        guard let payload = HookPayload(json: body), payload.event == "UserPromptSubmit",
+              !nestedClaudeIds.contains(payload.claudeSessionId) else { return nil }
         return teammateNotes.removeValue(forKey: sessionId)
     }
 
@@ -1828,7 +1989,8 @@ final class AppStore {
     }
     /// Run attempts already seen as failed, so each failure is handled once.
     private var handledFailures: Set<String> = []
-    private var isCIPrimed = false
+    /// Projects whose CI history is recorded; only their later failures are acted on.
+    private var primedCIProjectIds: Set<Int64> = []
     /// Injected in tests; otherwise GitHub Actions via `gh` and GitLab CI via `glab`, whichever is installed.
     var ciProviders: [any CIProvider] = []
     /// (title, body) for a macOS notification; set by the app.
@@ -1844,30 +2006,36 @@ final class AppStore {
         ciProviders.first { $0.handles(project) }
     }
 
-    /// Polls CI and acts on new failures. The first pass after launch only records history.
+    /// Polls CI and acts on new failures. A project's first successful pass only records history.
     func refreshCI() async {
         if ciProviders.isEmpty {
             ciProviders = [toolPath("gh").map { GitHubActions(gh: $0) }, toolPath("glab").map { GitLabCI(glab: $0) }].compactMap { $0 }
         }
         for project in projects {
             guard let projectId = project.id, let provider = ciProvider(for: project) else { continue }
-            let runs = await provider.runs(in: project.path).sorted { $0.createdAt > $1.createdAt }
-            pipelines[projectId] = await Pipeline.titled(await provider.pipeline(runs: runs, in: project.path), in: project.path)
+            let fetched = await provider.runs(in: project.path)
+            let runs = (fetched ?? []).sorted { $0.createdAt > $1.createdAt }
+            let pipeline = await Pipeline.titled(await provider.pipeline(runs: runs, in: project.path), in: project.path)
+            guard projects.contains(where: { $0.id == projectId }) else { continue }    // removed while gh ran
+            pipelines[projectId] = pipeline
             var latest: [String: CIRun] = [:]
             for run in runs where latest[run.key] == nil { latest[run.key] = run }
             ciRuns[projectId] = latest.values.sorted { $0.createdAt > $1.createdAt }
+            let isPrimed = primedCIProjectIds.contains(projectId)
             for run in latest.values {
                 let attemptsKey = "\(projectId)|\(run.key)"
                 if run.succeeded { fixAttempts[attemptsKey] = nil }
-                guard run.failed, handledFailures.insert("\(run.id)#\(run.attempt)").inserted, isCIPrimed else { continue }
+                guard run.failed, handledFailures.insert("\(run.id)#\(run.attempt)").inserted, isPrimed else { continue }
                 let label = "\(project.name) · \(run.headBranch)"
-                switch CIGuard.action(for: run, fixAttempts: fixAttempts[attemptsKey] ?? 0,
-                                      autofix: autofixProjectIds.contains(projectId)) {
+                let autofix = autofixProjectIds.contains(projectId)
+                var own = false
+                if autofix, run.isPullRequest { own = await provider.isOwnPullRequest(run, in: project.path) }
+                switch CIGuard.action(for: run, fixAttempts: fixAttempts[attemptsKey] ?? 0, autofix: autofix, ownPullRequest: own) {
                 case .rerun:
                     _ = await provider.rerunFailed(run, in: project.path)
                     onCINotice?("CI failed — rerunning once", "\(label): \(run.workflowName)")
                 case .fix:
-                    await startCIFix(run, in: project, provider: provider)
+                    await startCIFix(run, in: project, provider: provider, select: false)
                 case .giveUp:
                     onCINotice?("CI still failing — gave up", "\(label): \(run.workflowName) after \(CIGuard.maxFixAttempts) fixes")
                 case .reportInfra:
@@ -1879,9 +2047,10 @@ final class AppStore {
                     onCINotice?("CI failed", "\(label): \(run.workflowName) — FIX in the CI tab")
                 }
             }
+            // A failed fetch (offline, logged out) saw no history, so it can't prime.
+            if fetched != nil { primedCIProjectIds.insert(projectId) }
         }
         await refreshRepoCI()
-        isCIPrimed = true
     }
 
     /// CI of repos that aren't Meepo projects themselves: the ones inside a plain project folder and "Also work
@@ -1908,10 +2077,13 @@ final class AppStore {
             Set(folders.flatMap(Repos.find)).filter { !projectPaths.contains($0.path) }
                 .map { (repo: $0, remote: GitService.remoteURL(in: $0.path)) }
         }.value
+        // Repos no longer polled (session closed, project removed): a last "running" would keep polling fast.
+        let tracked = Set(repos.map { $0.repo.path })
+        for path in repoCI.keys where !tracked.contains(path) { repoCI[path] = nil }
         for (repo, remote) in repos {
             let stand = Project(name: repo.name, path: repo.path, remote: remote)
-            guard let provider = ciProvider(for: stand) else { continue }
-            let runs = await provider.runs(in: repo.path).sorted { $0.createdAt > $1.createdAt }
+            guard let provider = ciProvider(for: stand) else { repoCI[repo.path] = nil; continue }
+            let runs = (await provider.runs(in: repo.path) ?? []).sorted { $0.createdAt > $1.createdAt }
             var latest: [String: CIRun] = [:]
             for run in runs where latest[run.key] == nil { latest[run.key] = run }
             let pipeline = await Pipeline.titled(await provider.pipeline(runs: runs, in: repo.path), in: repo.path)
@@ -1929,13 +2101,15 @@ final class AppStore {
     }
 
     /// Fix session in its own worktree with the failed step's log and guardrails in its first prompt.
-    func startCIFix(_ run: CIRun, in project: Project, provider: (any CIProvider)? = nil) async {
+    /// `select`: false when autofix starts it, so the user's keystrokes don't land in it.
+    func startCIFix(_ run: CIRun, in project: Project, provider: (any CIProvider)? = nil, select: Bool = true) async {
         guard let provider = provider ?? ciProvider(for: project), let projectId = project.id else { return }
         let log = await provider.failedLog(run, in: project.path)
         fixAttempts["\(projectId)|\(run.key)", default: 0] += 1
         let name = "ci-fix-\(ClaudeLauncher.worktreeSlug(run.headBranch))-\(run.databaseId % 100_000)"
         do {
-            try createSession(projectId: projectId, model: nil, prompt: CIGuard.fixPrompt(run, log: log, reviewRequest: provider.reviewRequest), worktree: name)
+            try createSession(projectId: projectId, model: nil, prompt: CIGuard.fixPrompt(run, log: log, reviewRequest: provider.reviewRequest),
+                              worktree: name, select: select)
             onCINotice?("Fixing CI", "\(project.name) · \(run.headBranch): \(run.workflowName) — new session \(name)")
         } catch {
             bridgeError = error.localizedDescription
@@ -2057,6 +2231,9 @@ final class AppStore {
         releaseNotes = (try? db.read { try ReleaseNote.order(Column("createdAt").desc).fetchAll($0) }) ?? []
     }
 
+    /// The user's sample posts, one style for every project (demo mode has its own).
+    var releaseStyleURL: URL { bridge.meepoHome.appending(path: "release-style.md") }
+
     /// Drafts a note about the commits since the project's last note, in the style of the user's samples.
     func writeReleaseNote(for project: Project) async {
         guard let projectId = project.id, !writingNotes.contains(projectId) else { return }
@@ -2067,7 +2244,7 @@ final class AppStore {
             bridgeError = "No new commits in \(project.name) since the last note"
             return
         }
-        let style = (try? String(contentsOf: ReleaseNotes.styleURL, encoding: .utf8)) ?? ""
+        let style = (try? String(contentsOf: releaseStyleURL, encoding: .utf8)) ?? ""
         let prompt = ReleaseNotes.prompt(project: project.name, commits: commits,
                                          shipReport: lastShipReport(projectId, after: last?.createdAt), style: style)
         writingNotes.insert(projectId)
@@ -2095,14 +2272,17 @@ final class AppStore {
     /// What Claude answered to the project's latest ship command (the first Stop after it), if newer than `date`.
     func lastShipReport(_ projectId: Int64, after date: Date?) -> String? {
         let ship = stages.first { $0.name == "ship" }?.command ?? "ship"
-        return try? db.read { db in
-            try String.fetchOne(db, sql: """
-                SELECT e.summary FROM hookEvent e JOIN session s ON s.id = e.sessionId
-                WHERE s.projectId = ? AND e.name = 'Stop' AND e.createdAt > ? AND e.createdAt > (
-                    SELECT MAX(e2.createdAt) FROM hookEvent e2 JOIN session s2 ON s2.id = e2.sessionId
-                    WHERE s2.projectId = ? AND e2.name = 'UserPromptExpansion' AND e2.summary LIKE ?)
-                ORDER BY e.createdAt LIMIT 1
-                """, arguments: [projectId, date ?? .distantPast, projectId, "/\(ship)%"])
+        return try? db.read { db -> String? in
+            guard let row = try Row.fetchOne(db, sql: """
+                SELECT e.sessionId, e.createdAt FROM hookEvent e JOIN session s ON s.id = e.sessionId
+                WHERE s.projectId = ? AND e.name = 'UserPromptExpansion' AND e.summary LIKE ?
+                ORDER BY e.createdAt DESC LIMIT 1
+                """, arguments: [projectId, "/\(ship)%"]) else { return nil }
+            // The Stop of the session that ran it: another session's reply meanwhile is no ship report.
+            return try String.fetchOne(db, sql: """
+                SELECT summary FROM hookEvent WHERE sessionId = ? AND name = 'Stop' AND createdAt > ? AND createdAt > ?
+                ORDER BY createdAt LIMIT 1
+                """, arguments: [row["sessionId"] as Int64, row["createdAt"] as Date, date ?? .distantPast])
         }
     }
 
@@ -2131,8 +2311,11 @@ final class AppStore {
         reloadTasks()
     }
 
+    /// Screenshots taken for tasks; they belong to the task and go when it is deleted (demo mode has its own).
+    var attachmentsDir: URL { bridge.meepoHome.appending(path: "attachments") }
+
     func deleteTask(_ id: Int64) {
-        let owned = tasks.first { $0.id == id }?.attachments.filter { $0.hasPrefix(TaskItem.attachmentsDir.path + "/") } ?? []
+        let owned = tasks.first { $0.id == id }?.attachments.filter { $0.hasPrefix(attachmentsDir.path + "/") } ?? []
         for file in owned { try? FileManager.default.removeItem(atPath: file) }
         _ = try? db.write { try TaskItem.deleteOne($0, id: id) }
         reloadTasks()
@@ -2163,11 +2346,15 @@ final class AppStore {
         var busy = Set(sessions.map(\.projectId))
         var worktreeNames = Set(sessions.compactMap(\.worktreeName))
         for id in taskIds {
-            guard var task = tasks.first(where: { $0.id == id }), let projectId = task.projectId else { continue }
+            guard var task = tasks.first(where: { $0.id == id }), let projectId = task.projectId,
+                  let project = projects.first(where: { $0.id == projectId }) else { continue }
             var worktree: String?
-            if busy.contains(projectId) {
-                let base = ClaudeLauncher.worktreeSlug(task.text.split(separator: " ").prefix(4).joined(separator: " "))
-                var name = base.isEmpty ? "task" : base
+            // Worktrees need git: a plain folder's sessions share it.
+            if busy.contains(projectId), GitService.isRepository(project.path) {
+                // The base is already a slug, as createSession stores it, so later launches see the same names.
+                let slug = ClaudeLauncher.worktreeSlug(task.text.split(separator: " ").prefix(4).joined(separator: " "))
+                let base = slug.isEmpty ? "task" : slug
+                var name = base
                 var n = 2
                 while worktreeNames.contains(name) { name = "\(base)-\(n)"; n += 1 }
                 worktreeNames.insert(name)
@@ -2196,15 +2383,18 @@ final class AppStore {
     /// `commits`: each project's commits of the day by path, read off the main thread by the caller; nil = read here.
     func daySummary(now: Date = .now, commits: [String: [String]]? = nil) -> [ProjectDay] {
         let start = Calendar.current.startOfDay(for: now)
-        let tokens = Dictionary(usageStats(since: start).byProject.map { ($0.name, $0.totals.total) }, uniquingKeysWith: +)
+        let tokens = usageStats(since: start).byProjectPath
         let syncCommand = stages.first { $0.name == "sync" }?.command ?? "sync"
         return projects.compactMap { project in
             guard let projectId = project.id else { return nil }
             let sessionIds = sessions.filter { $0.projectId == projectId }.compactMap(\.id)
             let marks = sessionIds.map { _ in "?" }.joined(separator: ",")
             let (stages, nextSteps, todos) = (try? db.read { db -> ([String], String?, [AgentTodo]) in
+                // A file written again (a full Write) repeats the markers already in it: each one once.
+                var seen = Set<[String]>()
                 let todos = try AgentTodo.filter(Column("projectId") == projectId && Column("createdAt") >= start)
                     .order(Column("createdAt")).fetchAll(db)
+                    .filter { seen.insert([$0.file, $0.line]).inserted }
                 guard !sessionIds.isEmpty else { return ([], nil, todos) }
                 var args = StatementArguments(sessionIds)
                 args += [start]
@@ -2230,7 +2420,7 @@ final class AppStore {
                 project: project,
                 commits: commits?[project.path] ?? GitService.commits(since: start, in: project.path),
                 stages: stages,
-                tokens: tokens[project.name] ?? 0,
+                tokens: tokens[project.path]?.total ?? 0,
                 todos: todos,
                 nextSteps: nextSteps,
                 doneTasks: projectTasks.filter { $0.isDone && ($0.doneAt ?? .distantPast) >= start }.map(\.text),
@@ -2279,13 +2469,21 @@ final class AppStore {
         return session.worktreeName.map { ClaudeLauncher.worktreePath($0, projectPath: project.path) } ?? project.path
     }
 
+    /// Sessions whose claude is exiting for REMOVE WORKTREE: nothing may start it again meanwhile.
+    private var removingWorktreeIds: Set<Int64> = []
+
     /// After the feature is merged: remove the worktree and its branch, close the session.
-    func removeWorktree(of sessionId: Int64) {
+    func removeWorktree(of sessionId: Int64) async {
+        guard let before = sessions.first(where: { $0.id == sessionId }), before.worktreeName != nil,
+              project(for: before) != nil, removingWorktreeIds.insert(sessionId).inserted else { return }
+        await terminals.close(sessionId, killAfter: 5)?.value // claude keeps the worktree locked while it runs
+        removingWorktreeIds.remove(sessionId) // the rest runs without a suspension, so the error path may restart it
+        // Again: the session may have been closed while claude exited.
         guard let session = sessions.first(where: { $0.id == sessionId }), let name = session.worktreeName,
               let project = project(for: session) else { return }
-        terminals.close(sessionId) // claude keeps the worktree locked while it runs
-        if let error = GitService.removeWorktree(at: ClaudeLauncher.worktreePath(name, projectPath: project.path),
-                                                 branch: "worktree-\(name)", in: project.path) {
+        let path = ClaudeLauncher.worktreePath(name, projectPath: project.path)
+        GitService.unlockIfClaudeGone(path, in: project.path) // a killed claude leaves its lock behind
+        if let error = GitService.removeWorktree(at: path, branch: "worktree-\(name)", in: project.path) {
             bridgeError = error
             startTerminalIfNeeded(sessionId)
             return
@@ -2359,9 +2557,10 @@ final class AppStore {
 
     /// `worktree`: a feature name — the session runs in its own git worktree (`claude -w`), SPEC module 5.
     /// `resuming`: an existing Claude Code conversation (e.g. imported from an IDE); it opens with `--resume`.
+    /// `select`: false for background sessions (CI autofix) — it starts off-screen, the user stays where they are.
     func createSession(projectId: Int64, model: String?, prompt: String?, effort: String? = nil, stage: String? = nil,
                        worktree: String? = nil, resuming: String? = nil, name: String? = nil, extraDirs: [String] = [],
-                       agentId: String? = nil, folder: String? = nil) throws {
+                       agentId: String? = nil, folder: String? = nil, select: Bool = true) throws {
         guard let project = projects.first(where: { $0.id == projectId }) else { return }
         let worktreeName = worktree.map(ClaudeLauncher.worktreeSlug).flatMap { $0.isEmpty ? nil : $0 }
         if worktreeName != nil { GitService.ensureWorktreesIgnored(in: project.path, backups: backupsDir) }
@@ -2387,11 +2586,14 @@ final class AppStore {
         if agentId != nil { markAttached(session) }
         if let prompt, !prompt.isEmpty { initialPrompts[session.id!] = prompt }
         reload()
-        selectedSessionId = session.id
+        // Terminals start when a pane shows them; one nobody looks at has to be started here.
+        if select { selectedSessionId = session.id } else if let id = session.id { startTerminalIfNeeded(id) }
         if let folder = workdir(of: session), work[folder] == nil { Task { await refreshWork(folder) } }
     }
 
-    /// `meepo <folder>` (via meepo://open?path=…): the folder's project — added if new — with a session open in it.
+    /// `meepo <folder>` (via meepo://open?path=…): the folder's project with a session open in it. A folder that is
+    /// no project yet is added once the user confirms: any app or web page can open the URL, and git in a stranger's
+    /// folder can run its commands (core.fsmonitor).
     func openFromCommandLine(_ url: URL) {
         if url.scheme == "meepo", url.host() == "update" {             // `meepo update`, like `claude update`
             Task { await checkForUpdates(userInitiated: true) }
@@ -2400,7 +2602,24 @@ final class AppStore {
         guard url.scheme == "meepo", url.host() == "open",
               let path = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "path" })?.value
         else { return }
+        // Silently: the path is the caller's text, not something to show. The script already reports a missing folder.
+        var isDirectory: ObjCBool = false
+        guard path.hasPrefix("/"), FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue
+        else { return }
         let root = (try? GitService.repositoryRoot(of: path)) ?? URL(filePath: path).standardizedFileURL.path
+        if projects.contains(where: { $0.path == root }) { addAndOpen(path: path, root: root); return }
+        guard confirmation == nil else {             // never over another question, e.g. ⌘Q's "agents still working"
+            bridgeError = "Answer the open question first, then run meepo <folder> again."
+            return
+        }
+        confirmation = PixelConfirmation(
+            title: "Add \(URL(filePath: root).lastPathComponent)?",
+            message: "\(root)\n\nmeepo adds this folder as a project and opens a Claude session in it.",
+            action: "Add and open", isDestructive: false
+        ) { [weak self] in self?.addAndOpen(path: path, root: root) }
+    }
+
+    private func addAndOpen(path: String, root: String) {
         if !projects.contains(where: { $0.path == root }) {
             do { try addProject(at: URL(filePath: path)) } catch { bridgeError = error.localizedDescription; return }
         }
@@ -2460,15 +2679,19 @@ final class AppStore {
         ciRuns[id] = nil
         pipelines[id] = nil
         reload()
+        reloadTasks() // the delete set its tasks' projectId to NULL (see closeSession)
     }
 
     func closeSession(_ id: Int64) {
         let ordered = orderedSessions
+        let folder = sessions.first { $0.id == id }.flatMap(workdir(of:)) // while the session still has one
         terminals.close(id)
         runningSessionIds.remove(id)
         exitedSessionIds.remove(id)
         guidedSessionIds.remove(id)
         lastTurnEvents[id] = nil
+        openAsks[id] = nil
+        relayingSessionIds.remove(id)
         initialPrompts[id] = nil
         holds[id] = nil
         if let session = sessions.first(where: { $0.id == id }), session.agentId != nil { markAttached(session, false) }
@@ -2478,6 +2701,10 @@ final class AppStore {
             selectedSessionId = rest.isEmpty ? nil : rest[min(index, rest.count - 1)].id
         }
         reload()
+        // Its requests went with its events: Today must not open a session that is gone.
+        if let folder { reloadRuns(folder) }
+        // ON DELETE SET NULL cleared task.sessionId; a stale copy would fail the next updateTask on its foreign key.
+        reloadTasks()
     }
 
     // MARK: Terminals
@@ -2492,14 +2719,22 @@ final class AppStore {
     /// only if that resolution failed does claude go through the shell fallback.
     func startTerminalIfNeeded(_ sessionId: Int64) {
         guard isLoginResolved, let login = loginEnvironment, terminals.view(for: sessionId) == nil,
+              !removingWorktreeIds.contains(sessionId),
               let existing = sessions.first(where: { $0.id == sessionId }),
               let project = project(for: existing) else { return }
+        // SwiftTerm ignores a failed chdir: claude would start in Meepo's own folder (/). Keeps the queued prompt.
+        guard FileManager.default.fileExists(atPath: project.path) else {
+            terminals.showText("\(project.path) is missing: moved, renamed or on a drive that isn't connected.\r\nPut it back, then press Continue.\r\n", for: sessionId)
+            runningSessionIds.remove(sessionId) // as onExit: no claude runs for it
+            exitedSessionIds.insert(sessionId)
+            return
+        }
         if existing.portBase == nil { assignPortBase(sessionId) } // sessions from before module 5
         guard let session = sessions.first(where: { $0.id == sessionId }) else { return }
         terminals.start(session, projectPath: project.path, initialPrompt: initialPrompts.removeValue(forKey: sessionId),
                         login: login,
                         remoteControlName: remoteControlForNewSessions ? [project.name, session.branch].compactMap { $0 }.joined(separator: " · ") : nil,
-                        guided: guidedMode, attach: attachId(for: session))
+                        guided: guidedMode, attach: attachId(for: session), bridge: !isEventServerDown)
         runningSessionIds.insert(sessionId)
         if guidedMode { guidedSessionIds.insert(sessionId) } else { guidedSessionIds.remove(sessionId) }
     }
@@ -2508,6 +2743,7 @@ final class AppStore {
         holds[id] = nil
         terminals.close(id)
         exitedSessionIds.remove(id)
+        relayingSessionIds.remove(id) // the request died with the old claude: its next Stop is no handoff
         startTerminalIfNeeded(id)
     }
 
@@ -2526,6 +2762,12 @@ final class AppStore {
         let ordered = orderedSessions
         guard ordered.indices.contains(number - 1) else { return }
         selectedSessionId = ordered[number - 1].id
+    }
+
+    /// A notification's session. Its banner outlives it (relay, replace, ×): a closed one leaves the view as it is.
+    func selectSession(id: Int64) {
+        guard sessions.contains(where: { $0.id == id }) else { return }
+        selectedSessionId = id
     }
 
     /// Next session (after the current one, wrapping) that waits for the user.

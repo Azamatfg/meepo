@@ -1,7 +1,7 @@
 #!/bin/sh
 # meepo — the command-line door into Meepo (linked into PATH by the Homebrew cask).
 #   meepo           open Meepo
-#   meepo <folder>  add the folder as a project (if new) and open a Claude session in it; `meepo .` = here
+#   meepo <folder>  add the folder as a project (if new, after you confirm) and open a Claude session in it; `meepo .` = here
 #   meepo update    check for a new version now (a folder named "update": meepo ./update)
 if [ $# -eq 0 ]; then exec open -a Meepo; fi
 case "$1" in

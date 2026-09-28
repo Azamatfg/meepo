@@ -83,7 +83,9 @@ enum Recipes {
 
     /// A double-quoted YAML scalar (JSON's string escaping is valid YAML).
     static func yamlString(_ text: String) -> String {
-        (try? JSONEncoder().encode(text)).map { String(decoding: $0, as: UTF8.self) } ?? "\"\""
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .withoutEscapingSlashes // "/ship", not "\/ship"
+        return (try? encoder.encode(text)).map { String(decoding: $0, as: UTF8.self) } ?? "\"\""
     }
 
     /// The steps of a skill written by `skill(…)` — or of any skill that is a numbered list.

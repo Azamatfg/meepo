@@ -10,6 +10,9 @@ struct WidgetSnapshot: Codable, Equatable {
 
     static let appGroup = "ZKXQWVLBRG.com.azamatfg.meepo"
 
+    /// Meepo rewrites the file at least every 30 minutes; older means it isn't running (crashed, force-quit).
+    func isStale(at now: Date = .now) -> Bool { updatedAt < now.addingTimeInterval(-3600) }
+
     static var fileURL: URL? {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)?.appending(path: "widget.json")
     }

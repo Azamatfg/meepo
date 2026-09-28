@@ -20,6 +20,13 @@ final class WorktreeLaunchTests: XCTestCase {
         XCTAssertEqual(ClaudeLauncher.worktreeSlug("Login via Google!"), "login-via-google")
         XCTAssertEqual(ClaudeLauncher.worktreeSlug("  ??  "), "")
     }
+
+    func testReadsTheClaudeThatHoldsAWorktreeLock() {
+        XCTAssertEqual(GitService.claudeLockPid("claude session login (pid 123 start Sun Sep 27 15:33:36 2026)"), 123)
+        XCTAssertEqual(GitService.claudeLockPid("claude agent x (pid 7)"), 7)
+        XCTAssertNil(GitService.claudeLockPid("my own reason"))
+        XCTAssertNil(GitService.claudeLockPid(""))
+    }
 }
 
 final class PortsTests: XCTestCase {
@@ -75,7 +82,7 @@ final class ParallelFeaturesTests: XCTestCase {
         XCTAssertEqual(status.terminationStatus, 0)
     }
 
-    func testMergedWorktreeIsOfferedForRemovalAndRemoved() throws {
+    func testMergedWorktreeIsOfferedForRemovalAndRemoved() async throws {
         try store.createSession(projectId: store.projects[0].id!, model: nil, prompt: nil, worktree: "login")
         let session = store.sessions[0]
         let path = store.workdir(of: session)!
@@ -93,10 +100,46 @@ final class ParallelFeaturesTests: XCTestCase {
         store.refreshProjects()
         XCTAssertTrue(store.mergedWorktreeSessionIds.contains(session.id!))
 
-        store.removeWorktree(of: session.id!)
+        await store.removeWorktree(of: session.id!)
         XCTAssertFalse(FileManager.default.fileExists(atPath: path))
         XCTAssertNil(GitService.isMerged(branch: "worktree-login", startedAt: "", in: repo.path) ? "still there" : nil)
         XCTAssertTrue(store.sessions.isEmpty)
+    }
+
+    /// A worktree session whose branch is merged, as REMOVE WORKTREE finds it.
+    private func mergedWorktree() throws -> (session: Session, path: String) {
+        try store.createSession(projectId: store.projects[0].id!, model: nil, prompt: nil, worktree: "login")
+        let session = store.sessions[0]
+        let path = store.workdir(of: session)!
+        try git(["worktree", "add", "-q", "-b", "worktree-login", path], in: repo)
+        try git(["commit", "-q", "--allow-empty", "-m", "feature"], in: URL(filePath: path))
+        try git(["merge", "-q", "worktree-login"], in: repo)
+        return (session, path)
+    }
+
+    /// Claude Code locks its worktree and leaves the lock behind when it's killed.
+    func testRemovesWorktreeLeftLockedByAnExitedClaude() async throws {
+        let (session, path) = try mergedWorktree()
+        let exited = Process()
+        exited.executableURL = URL(filePath: "/usr/bin/true")
+        try exited.run()
+        exited.waitForExit()
+        try git(["worktree", "lock", "--reason", "claude session login (pid \(exited.processIdentifier) start Sun Sep 27 15:33:36 2026)", path], in: repo)
+
+        await store.removeWorktree(of: session.id!)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: path))
+        XCTAssertTrue(store.sessions.isEmpty)
+        XCTAssertNil(store.bridgeError)
+    }
+
+    func testKeepsWorktreeLockedByARunningClaude() async throws {
+        let (session, path) = try mergedWorktree()
+        try git(["worktree", "lock", "--reason", "claude session login (pid \(getpid()) start Sun Sep 27 15:33:36 2026)", path], in: repo)
+
+        await store.removeWorktree(of: session.id!)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path))
+        XCTAssertEqual(store.sessions.count, 1)
+        XCTAssertNotNil(store.bridgeError)
     }
 }
 

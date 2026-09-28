@@ -53,11 +53,11 @@ final class CILogTests: XCTestCase {
 }
 
 private func ciRun(_ id: Int64, workflow: String = "CI", branch: String = "feature", conclusion: String? = "failure",
-                 attempt: Int = 1, minutesAgo: Double = 0) -> CIRun {
+                 attempt: Int = 1, minutesAgo: Double = 0, event: String? = nil) -> CIRun {
     let json = """
         {"databaseId":\(id),"workflowName":"\(workflow)","headBranch":"\(branch)","headSha":"abc123","status":"completed",
          "conclusion":\(conclusion.map { "\"\($0)\"" } ?? "null"),"createdAt":"\(ISO8601DateFormatter().string(from: .now.addingTimeInterval(-minutesAgo * 60)))",
-         "attempt":\(attempt),"url":"https://github.com/o/r/actions/runs/\(id)"}
+         "attempt":\(attempt),"url":"https://github.com/o/r/actions/runs/\(id)"\(event.map { ",\"event\":\"\($0)\"" } ?? "")}
         """
     return try! GitHubActions.decoder.decode(CIRun.self, from: Data(json.utf8))
 }
@@ -72,6 +72,19 @@ final class CIGuardTests: XCTestCase {
         XCTAssertEqual(CIGuard.action(for: ciRun(1, workflow: "Build & Push"), fixAttempts: 0, autofix: true), .reportDeploy)
         XCTAssertTrue(ciRun(1, workflow: "Deploy to prod").isDeploy)
         XCTAssertFalse(ciRun(1, workflow: "CI").isDeploy)
+    }
+
+    /// A PR from a fork is only reported, never rerun with the user's rights or handed to an agent; one from a branch
+    /// of the repo itself is the user's own.
+    func testPullRequestRunsAreOnlyReported() {
+        for event in ["pull_request", "pull_request_target"] {
+            XCTAssertEqual(CIGuard.action(for: ciRun(1, event: event), fixAttempts: 0, autofix: true), .none)
+            XCTAssertEqual(CIGuard.action(for: ciRun(1, attempt: 2, event: event), fixAttempts: 0, autofix: true), .none)
+        }
+        XCTAssertTrue(ciRun(1, event: "merge_request_event").isPullRequest)          // GitLab's
+        XCTAssertEqual(CIGuard.action(for: ciRun(1, event: "push"), fixAttempts: 0, autofix: true), .rerun)
+        XCTAssertEqual(CIGuard.action(for: ciRun(1, event: "pull_request"), fixAttempts: 0, autofix: true, ownPullRequest: true), .rerun)
+        XCTAssertEqual(CIGuard.action(for: ciRun(1, attempt: 2, event: "pull_request"), fixAttempts: 0, autofix: true, ownPullRequest: true), .fix)
     }
 
     func testFixPromptCarriesContextAndGuardrails() {
@@ -92,13 +105,21 @@ final class CIGuardTests: XCTestCase {
 
 private final class FakeCI: CIProvider, @unchecked Sendable {
     var runs: [CIRun] = []
+    /// Per folder, where a test needs two repos apart; the rest see `runs`.
+    var runsByPath: [String: [CIRun]] = [:]
+    /// gh failing (no network, logged out).
+    var offline = false
+    var pipelines: [String: Pipeline] = [:]
     var reruns: [Int64] = []
+    /// PR runs come from a branch of the repo itself, not a fork.
+    var ownPullRequests = false
     func handles(_ project: Project) -> Bool { true }
-    func runs(in path: String) async -> [CIRun] { runs }
+    func runs(in path: String) async -> [CIRun]? { offline ? nil : runsByPath[path] ?? runs }
     func failedLog(_ run: CIRun, in path: String) async -> String { "KeyError: 'since'" }
     func rerunFailed(_ run: CIRun, in path: String) async -> Bool { reruns.append(run.id); return true }
+    func isOwnPullRequest(_ run: CIRun, in path: String) async -> Bool { ownPullRequests }
     var reviewRequest: String { GitHubActions(gh: "").reviewRequest }
-    func pipeline(runs: [CIRun], in path: String) async -> Pipeline? { nil }
+    func pipeline(runs: [CIRun], in path: String) async -> Pipeline? { pipelines[path] }
     func start(_ step: Pipeline.Step, of pipeline: Pipeline, in path: String) async -> String? { nil }
 }
 
@@ -177,6 +198,89 @@ final class CIWatcherTests: XCTestCase {
         await store.refreshCI()
         XCTAssertEqual(store.ciState(for: store.sessions[0])?.id, 21)
     }
+
+    /// A fork's PR is only reported, even with AUTOFIX; the user's own PR branch is rerun and fixed like a push.
+    func testPullRequestFailureIsOnlyReportedEvenWithAutofix() async {
+        await store.refreshCI()
+        store.autofixProjectIds = [projectId]
+        ci.runs = [ciRun(30, event: "pull_request"), ciRun(31, branch: "main", attempt: 2, event: "pull_request_target")]
+        await store.refreshCI()
+        XCTAssertTrue(ci.reruns.isEmpty && store.sessions.isEmpty)
+        XCTAssertEqual(notices, ["CI failed", "CI failed"])
+
+        ci.ownPullRequests = true
+        ci.runs = [ciRun(32, branch: "own", event: "pull_request")]
+        await store.refreshCI()
+        XCTAssertEqual(ci.reruns, [32])
+    }
+
+    /// Autofix works in the background: the user keeps their session, Home and the keyboard.
+    func testAutofixDoesNotTakeTheUserAwayFromTheirSession() async throws {
+        await store.refreshCI()
+        try store.createSession(projectId: projectId, model: nil, prompt: nil)
+        let mine = store.selectedSessionId
+        store.autofixProjectIds = [projectId]
+        ci.runs = [ciRun(2, attempt: 2)]
+        await store.refreshCI()
+        XCTAssertEqual(store.sessions.count, 2)
+        XCTAssertEqual(store.selectedSessionId, mine)
+        let fix = try XCTUnwrap(store.sessions.first { $0.id != mine })
+        XCTAssertNotNil(store.initialPrompts[fix.id!])                   // starts once login resolves (never in tests)
+
+        store.isHomeShown = true
+        ci.runs = [ciRun(3, branch: "other", attempt: 2)]
+        await store.refreshCI()
+        XCTAssertEqual(store.sessions.count, 3)
+        XCTAssertTrue(store.isHomeShown)
+
+        // FIX clicked by the user opens its session.
+        await store.startCIFix(ciRun(4, branch: "third", attempt: 2), in: store.projects[0])
+        XCTAssertEqual(store.sessions.count, 4)
+        XCTAssertEqual(store.selectedSessionId, store.sessions.first { $0.worktreeName == "ci-fix-third-4" }?.id)
+    }
+
+    /// gh failing at launch (no network yet, logged out) isn't "no runs": history is recorded by the first pass that works.
+    func testOfflineLaunchDoesNotActOnHistory() async {
+        store.autofixProjectIds = [projectId]
+        ci.offline = true
+        ci.runs = [ciRun(1, minutesAgo: 600), ciRun(2, branch: "old", attempt: 2, minutesAgo: 900)]
+        await store.refreshCI()
+        ci.offline = false
+        await store.refreshCI()
+        XCTAssertTrue(ci.reruns.isEmpty && notices.isEmpty && store.sessions.isEmpty)
+
+        ci.runs = [ciRun(3)]
+        await store.refreshCI()
+        XCTAssertEqual(ci.reruns, [3])
+    }
+
+    func testProjectAddedLaterStartsFromItsHistory() async throws {
+        await store.refreshCI()
+        let first = projectId
+        let repo = try makeTempRepo(remote: "git@github.com:me/other.git")
+        try git(["commit", "-q", "--allow-empty", "-m", "init"], in: repo)
+        try store.addProject(at: repo)
+        let added = try XCTUnwrap(store.projects.first { $0.id != first })
+        ci.runsByPath[added.path] = [ciRun(30, minutesAgo: 600)]
+        await store.refreshCI()
+        XCTAssertTrue(notices.isEmpty)
+    }
+
+    /// A repo no longer polled (its session closed mid-deploy) can't keep CI polled every 15 s for good.
+    func testClosedSessionsRepoNoLongerCountsAsRunning() async throws {
+        let other = try makeTempRepo(remote: "git@github.com:me/other.git")
+        try git(["commit", "-q", "--allow-empty", "-m", "init"], in: other)
+        ci.pipelines[other.path] = Pipeline(branch: "main", sha: "abc", steps: [.init(name: "Deploy", state: .running)])
+        try store.createSession(projectId: projectId, model: nil, prompt: nil, extraDirs: [other.path])
+        await store.refreshCI()
+        XCTAssertNotNil(store.repoCI[other.path])
+        XCTAssertTrue(store.isCIRunning)
+
+        store.closeSession(store.sessions[0].id!)
+        await store.refreshCI()
+        XCTAssertNil(store.repoCI[other.path])
+        XCTAssertFalse(store.isCIRunning)
+    }
 }
 
 final class PipelineTests: XCTestCase {
@@ -221,6 +325,19 @@ final class PipelineTests: XCTestCase {
         XCTAssertFalse(blocked.canStart(blocked.steps[2]))
     }
 
+    /// A deploy held by a protected environment is approved on GitHub: Run would only queue another deploy.
+    func testDeployWaitingForApprovalIsNotRunnable() throws {
+        let runs = [run(1, "CI", event: "push", sha: "s", minute: 0),
+                    run(2, "Build & Push", event: "workflow_run", sha: "s", minute: 5),
+                    run(3, "Deploy", event: "workflow_dispatch", sha: "s", conclusion: nil, status: "waiting", minute: 9)]
+        let pipeline = try XCTUnwrap(GitHubActions.pipeline(runs: runs, workflows: workflows, branch: "master"))
+        XCTAssertEqual(pipeline.steps.map(\.state), [.passed, .passed, .manual])
+        XCTAssertNil(pipeline.steps[2].trigger)
+        XCTAssertFalse(pipeline.canStart(pipeline.steps[2]))
+        XCTAssertEqual(pipeline.summary.text, "Deploy waits for someone's approval on the CI's site.")
+        XCTAssertTrue(pipeline.summary.needsYou)
+    }
+
     /// alva-backend's .gitlab-ci.yml: build → test (test + lint) → release → deploy (manual on master).
     func testGitLabStagesInOrderWithManualDeploy() {
         func job(_ id: Int64, _ name: String, _ stage: String, _ status: String, allowFailure: Bool = false) -> GitLabCI.APIJob {
@@ -246,6 +363,26 @@ final class PipelineTests: XCTestCase {
         XCTAssertEqual(CIGuard.action(for: quota, fixAttempts: 0, autofix: true), .reportInfra)
         quota.failureReason = "script_failure"
         XCTAssertEqual(CIGuard.action(for: quota, fixAttempts: 0, autofix: true), .fix)
+    }
+
+    /// A GitLab retry keeps the pipeline id: the retried jobs' copies make it a second attempt.
+    func testRetriedGitLabPipelineCountsAsSecondAttempt() {
+        func job(_ id: Int64, _ name: String, _ status: String, reason: String? = nil) -> GitLabCI.APIJob {
+            GitLabCI.APIJob(id: id, name: name, stage: "test", status: status, web_url: "j\(id)", allow_failure: false,
+                            failure_reason: reason)
+        }
+        XCTAssertEqual(GitLabCI.attempt([job(1, "build", "success"), job(2, "test", "failed")]), 1)
+        XCTAssertEqual(GitLabCI.attempt([job(2, "test", "failed"), job(5, "test", "failed")]), 2)
+        XCTAssertEqual(GitLabCI.attempt([job(2, "a", "failed"), job(5, "a", "success"), job(6, "b", "failed")]), 2)
+        // Retried again and b failed again: a third attempt, not the already-handled second one.
+        XCTAssertEqual(GitLabCI.attempt([job(2, "a", "failed"), job(5, "a", "success"), job(3, "b", "failed"), job(6, "b", "failed")]), 3)
+        // Only a job's latest copy says why: a's stale quota failure mustn't make b's real one "CI didn't run".
+        XCTAssertEqual(GitLabCI.failureReason([job(3, "a", "failed", reason: "ci_quota_exceeded"), job(5, "a", "success"),
+                                               job(2, "b", "failed", reason: "script_failure")]), "script_failure")
+        let retried = CIRun(databaseId: 7, workflowName: "Pipeline", headBranch: "feature", headSha: "s", status: "completed",
+                            conclusion: "failure", createdAt: .now,
+                            attempt: GitLabCI.attempt([job(2, "test", "failed"), job(5, "test", "failed")]), url: "u")
+        XCTAssertEqual(CIGuard.action(for: retried, fixAttempts: 0, autofix: true), .fix)    // not another rerun
     }
 
     func testGitLabPipelineDatesWithMilliseconds() throws {

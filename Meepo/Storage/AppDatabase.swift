@@ -5,7 +5,7 @@ enum AppDatabase {
     /// Opens `~/.meepo/meepo.sqlite`, creating it and applying migrations.
     static func openShared() throws -> DatabaseQueue {
         let dir = MeepoHome.url
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try MeepoHome.prepare(dir)
         let db = try DatabaseQueue(path: dir.appending(path: "meepo.sqlite").path)
         try migrator.migrate(db)
         return db
