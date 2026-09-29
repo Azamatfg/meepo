@@ -13,6 +13,7 @@ struct MainView: View {
     @State private var isNotesShown = false
     @State private var isImportShown = false
     @AppStorage("onboarded") private var isOnboarded = false
+    @State private var isFirstRunShown = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,7 +62,9 @@ struct MainView: View {
                 RenameSheet(session: session)
             }
         }
-        .sheet(isPresented: Binding(get: { !isOnboarded }, set: { if !$0 { isOnboarded = true } })) { OnboardingView(isFirstRun: true) }
+        .sheet(isPresented: $isFirstRunShown) { OnboardingView(isFirstRun: true) }
+        // Marked as seen once shown, not when closed: quitting with it open must not bring it back every launch.
+        .onAppear { if !isOnboarded { isOnboarded = true; isFirstRunShown = true } }
         .fileImporter(isPresented: $isPickingFolder, allowedContentTypes: [.folder]) { result in
             do {
                 try store.addProject(at: result.get())
@@ -158,6 +161,7 @@ private struct TitleBar: View {
                     } label: {
                         Image(systemName: "plus").font(.system(size: 13, weight: .semibold)).foregroundStyle(Tokens.textDim)
                             .frame(width: 30, height: 30)
+                            .contentShape(Rectangle()) // plain style: otherwise only the + itself takes the click
                     }
                     .menuStyle(.button)
                     .menuIndicator(.hidden)
@@ -472,6 +476,7 @@ private struct PanelBox: View {
                     Button("Hide") { store.editShell { $0.remove(panel) } }
                 } label: {
                     Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold)).frame(width: 22, height: 18)
+                        .contentShape(Rectangle()) // plain style: otherwise only the three dots take the click
                 }
                 .menuStyle(.button)
                 .menuIndicator(.hidden)
@@ -682,7 +687,8 @@ private struct TerminalPane: View {
             }
             Menu { SessionMenu(session: session) } label: {
                 Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold)).foregroundStyle(Tokens.textDim)
-                    .frame(width: 24, height: 20)
+                    .frame(width: 32, height: 28)
+                    .contentShape(Rectangle()) // plain style: otherwise only the three dots take the click
             }
             .menuStyle(.button)
             .menuIndicator(.hidden)

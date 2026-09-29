@@ -108,6 +108,8 @@ struct ExplorerSection: View {
             .overlay { if isSelected { RoundedRectangle(cornerRadius: 4).strokeBorder(Tokens.work) } }
         }
         .buttonStyle(.plain)
+        // Onto a session's terminal: its path is typed there, as from Finder (Claude reads ignored files this way too).
+        .onDrag { NSItemProvider(object: URL(filePath: root).appending(path: entry.path) as NSURL) }
         .help(entry.path)
         .contextMenu {
             // Built in body, so it can't see the clipboard: always on, and says so when there's nothing to paste.
@@ -149,7 +151,8 @@ struct ExplorerSection: View {
     /// Copies dropped or pasted files into `dir` (relative to the root), then shows that folder open with them
     /// in it. Each copy is logged in Tools → Changes (SPEC §8), where undoing it deletes it.
     private func copy(_ urls: [URL], into dir: String) -> Bool {
-        let files = urls.filter(\.isFileURL)
+        // The project's own files, dragged from this tree toward a terminal and let go early: no duplicate.
+        let files = urls.filter { $0.isFileURL && !Drops.canonicalPath($0).hasPrefix(Drops.canonicalPath(URL(filePath: root)) + "/") }
         guard !files.isEmpty else { return false }
         let (root, backups, place) = (root, store.backupsDir, name(of: dir))
         Task {

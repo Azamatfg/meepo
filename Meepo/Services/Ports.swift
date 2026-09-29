@@ -104,7 +104,10 @@ enum Ports {
     private static func lsof(_ args: [String]) -> String {
         let process = Process()
         process.executableURL = URL(filePath: "/usr/sbin/lsof")
-        process.arguments = args
+        // -b: no stat()/readlink() — by default lsof stats every mounted volume and each process's folder, and macOS
+        // charges that to meepo: "access files on a network volume", "data from other apps", Apple Music at every
+        // launch. The kernel still names sockets and cwds without them. -w: no warnings about what -b skipped.
+        process.arguments = ["-b", "-w"] + args
         let out = Pipe()
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice
