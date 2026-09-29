@@ -48,6 +48,16 @@ final class AppStore {
     var newSessionProjectId: Int64?
     /// The Settings sheet: ⌘, the ≡ menu and the rail's gear open it.
     var isSettingsShown = false
+    /// The Tools sheet, open on this tab; nil = closed. Menus anywhere can open it on Servers.
+    var toolsTab: ToolsView.Tab?
+    /// Servers opens with this project's Add server form, and the new server's shell opens once it's added.
+    var addServerProjectId: Int64?
+
+    /// "Add a server…" in a menu: straight to the form for the project being worked on.
+    func presentAddServer(projectId: Int64?) {
+        addServerProjectId = projectId ?? selectedSession?.projectId ?? projects.first?.id
+        toolsTab = .servers
+    }
     /// Feed of the selected session, newest first.
     private(set) var selectedEvents: [HookEvent] = []
     private(set) var isBridgeInstalled = false
@@ -79,6 +89,7 @@ final class AppStore {
         shell = Self.load(ShellLayout.self, Self.shellKey, from: defaults) ?? ShellLayout.preset(preset)
         relayThreshold = defaults.object(forKey: Self.relayThresholdKey) as? Double ?? 0.7
         remoteControlForNewSessions = defaults.bool(forKey: Self.remoteControlKey)
+        shellsBeside = defaults.object(forKey: Self.shellsBesideKey) as? Bool ?? true
         autofixProjectIds = Set((defaults.array(forKey: Self.autofixKey) as? [Int64]) ?? [])
         fixAttempts = (defaults.dictionary(forKey: Self.fixAttemptsKey) as? [String: Int]) ?? [:]
         screenshotHotKey = defaults.string(forKey: Self.shotHotKeyKey) ?? "⌘⇧6"
@@ -150,6 +161,7 @@ final class AppStore {
     /// transcript, else its first typed request — so two sessions of one project read differently everywhere.
     func displayName(of session: Session) -> String {
         if let name = session.name { return name }
+        if let host = session.sshHost { return host }
         if let id = session.id, let named = liveStatus[id]?.sessionName, !named.isEmpty { return named }
         if let id = session.id, let title = titles[id] { return Notifier.plainText(title, limit: 40) }
         return session.worktreeName.map { "worktree \($0)" } ?? session.branch ?? "session"
@@ -178,7 +190,7 @@ final class AppStore {
     /// session's first statusline, that's the name it has in Claude Code.
     func refreshTitles() async {
         let files = sessions.compactMap { session -> (Int64, URL)? in
-            guard let id = session.id, let folder = workdir(of: session) else { return nil }
+            guard let id = session.id, session.sshHost == nil, let folder = workdir(of: session) else { return nil }
             return (id, claudeHome.appending(path: "projects/\(ClaudeImport.claudeFolderName(for: folder))/\(session.claudeSessionId).jsonl"))
         }
         let found = await Task.detached {
@@ -197,7 +209,7 @@ final class AppStore {
         session.name = clean.isEmpty ? nil : clean
         _ = try? db.write { try session.update($0) }
         reload()
-        if !clean.isEmpty, runningSessionIds.contains(sessionId) { type("/rename \(clean)\r", into: sessionId) }
+        if !clean.isEmpty, session.sshHost == nil, runningSessionIds.contains(sessionId) { type("/rename \(clean)\r", into: sessionId) }
     }
 
     // MARK: Onboarding — the two ways in
@@ -244,7 +256,8 @@ final class AppStore {
 
     private var turnStates: [TurnState] {
         sessions.compactMap { session in
-            guard let id = session.id, runningSessionIds.contains(id), !exitedSessionIds.contains(id) else { return nil }
+            guard let id = session.id, session.sshHost == nil, runningSessionIds.contains(id), !exitedSessionIds.contains(id)
+            else { return nil }
             return TurnState(id: id, status: session.status, lastEvent: lastTurnEvents[id], runsGuided: guidedSessionIds.contains(id))
         }
     }
@@ -841,7 +854,7 @@ final class AppStore {
 
     func reload() {
         projects = (try? db.read { try Project.order(Column("name").collating(.localizedCaseInsensitiveCompare)).fetchAll($0) }) ?? []
-        sessions = (try? db.read { try Session.order(Column("createdAt")).fetchAll($0) }) ?? []
+        sessions = (try? db.read { try Session.order(Column("createdAt"), Column("id")).fetchAll($0) }) ?? []
         servers = (try? db.read { try Server.order(Column("label"), Column("host")).fetchAll($0) }) ?? []
     }
 
@@ -1080,6 +1093,7 @@ final class AppStore {
     /// "Opus 5.5 · xhigh", "· guided" when it runs in Guided mode: what the session really runs, once Claude Code
     /// has said; else what Meepo started it with.
     func modelLine(of session: Session) -> String {
+        if let host = session.sshHost { return "ssh \(host)" }
         let live = session.id.flatMap { liveStatus[$0] }
         let model = live?.modelName ?? session.model ?? "default model"
         let effort = live?.effort ?? session.effort
@@ -1230,7 +1244,7 @@ final class AppStore {
     func publishWidgetSnapshot() {
         usageToday = usageStats(since: Calendar.current.startOfDay(for: .now)).total.total
         let next = WidgetSnapshot(tokensToday: usageToday,
-                                  activeSessions: runningSessionIds.count, waitingSessions: waitingCount, updatedAt: .now)
+                                  activeSessions: sessions.filter { $0.sshHost == nil && runningSessionIds.contains($0.id ?? -1) }.count, waitingSessions: waitingCount, updatedAt: .now)
         var previous = widgetSnapshot
         previous.updatedAt = next.updatedAt
         // Unchanged numbers still refresh the file hourly, so the widget can tell Meepo is alive.
@@ -1439,6 +1453,13 @@ final class AppStore {
     }
 
     private static let remoteControlKey = "remoteControl"
+    private static let shellsBesideKey = "shellsBeside"
+
+    /// Server shells open next to the selected session, two terminals side by side (like VS Code's terminal under
+    /// the editor); off = a tab of their own.
+    var shellsBeside: Bool {
+        didSet { defaults.set(shellsBeside, forKey: Self.shellsBesideKey) }
+    }
     private static let shotHotKeyKey = "screenshotHotKey"
 
     /// Global screenshot hotkey (a `GlobalHotKey.combos` title); "" = off.
@@ -1769,7 +1790,7 @@ final class AppStore {
     /// clean and the agent is between turns, and the agent hears about them on its next prompt. Never pushes.
     /// `only`: the sessions to sync (tests); by default the running ones.
     func autoSync(only: [Session]? = nil) async {
-        let live = only ?? sessions.filter { runningSessionIds.contains($0.id ?? -1) }
+        let live = only ?? sessions.filter { $0.sshHost == nil && runningSessionIds.contains($0.id ?? -1) } // not server shells
         let byFolder = Dictionary(grouping: live) { workdir(of: $0) ?? "" }
         for (path, folderSessions) in byFolder where !path.isEmpty {
             let fetched = await Task.detached { () -> (status: GitPanel.Snapshot, incoming: (commits: [String], files: [String]), tip: String?) in
@@ -1972,7 +1993,7 @@ final class AppStore {
 
         var errorDescription: String? {
             switch self {
-            case .badHost(let host): "“\(host)” isn't an ssh host — use an alias from ~/.ssh/config or user@host."
+            case .badHost(let host): "“\(host)” isn't an ssh address — paste it as you'd type it: ssh root@1.2.3.4, or ssh -p 2222 user@host. Keys (-i) and jump hosts (-J) go in ~/.ssh/config."
             case .badSource(let name): "“\(name)” can't be passed safely: letters, digits and . _ - @ : only (a file path starts with / and may have /)."
             }
         }
@@ -1992,10 +2013,12 @@ final class AppStore {
 
     /// Where logs go: the selected session when it's the project's and running, else its latest running one.
     func logsTarget(in projectId: Int64) -> Session? {
-        if let selected = selectedSession, selected.projectId == projectId, let id = selected.id, runningSessionIds.contains(id) {
+        // Never a server shell: pasted logs there would run as commands.
+        if let selected = selectedSession, selected.projectId == projectId, selected.sshHost == nil, let id = selected.id,
+           runningSessionIds.contains(id) {
             return selected
         }
-        return sessions.last { $0.projectId == projectId && $0.id.map(runningSessionIds.contains) == true }
+        return sessions.last { $0.projectId == projectId && $0.sshHost == nil && $0.id.map(runningSessionIds.contains) == true }
     }
 
     /// Pastes the logs into the session's prompt; the user adds a question and sends it.
@@ -2160,7 +2183,7 @@ final class AppStore {
     /// Morning: one session per task, the task as its first prompt. A project's second and later
     /// sessions get their own worktree so parallel tasks don't edit the same files (module 5).
     func launchMorning(_ taskIds: [Int64]) throws {
-        var busy = Set(sessions.map(\.projectId))
+        var busy = Set(sessions.filter { $0.sshHost == nil }.map(\.projectId)) // a server shell edits no files here
         var worktreeNames = Set(sessions.compactMap(\.worktreeName))
         for id in taskIds {
             guard var task = tasks.first(where: { $0.id == id }), let projectId = task.projectId else { continue }
@@ -2405,7 +2428,7 @@ final class AppStore {
             do { try addProject(at: URL(filePath: path)) } catch { bridgeError = error.localizedDescription; return }
         }
         guard let project = projects.first(where: { $0.path == root }), let projectId = project.id else { return }
-        if let latest = orderedSessions.last(where: { $0.projectId == projectId }) {
+        if let latest = orderedSessions.last(where: { $0.projectId == projectId && $0.sshHost == nil }) {
             selectedSessionId = latest.id
         } else {
             try? createSession(projectId: projectId, model: nil, prompt: nil)
@@ -2473,6 +2496,10 @@ final class AppStore {
         holds[id] = nil
         if let session = sessions.first(where: { $0.id == id }), session.agentId != nil { markAttached(session, false) }
         _ = try? db.write { try Session.deleteOne($0, id: id) }
+        if let split = splitBeforeShells, !sessions.contains(where: { $0.id != id && $0.sshHost != nil }) {
+            splitBeforeShells = nil
+            editShell { $0.split = split }
+        }
         if selectedSessionId == id, let index = ordered.firstIndex(where: { $0.id == id }) {
             let rest = ordered.filter { $0.id != id }
             selectedSessionId = rest.isEmpty ? nil : rest[min(index, rest.count - 1)].id
@@ -2492,7 +2519,7 @@ final class AppStore {
     /// only if that resolution failed does claude go through the shell fallback.
     func startTerminalIfNeeded(_ sessionId: Int64) {
         guard isLoginResolved, let login = loginEnvironment, terminals.view(for: sessionId) == nil,
-              let existing = sessions.first(where: { $0.id == sessionId }),
+              let existing = sessions.first(where: { $0.id == sessionId }), existing.sshHost == nil, // shells: connectShell
               let project = project(for: existing) else { return }
         if existing.portBase == nil { assignPortBase(sessionId) } // sessions from before module 5
         guard let session = sessions.first(where: { $0.id == sessionId }) else { return }
@@ -2508,7 +2535,50 @@ final class AppStore {
         holds[id] = nil
         terminals.close(id)
         exitedSessionIds.remove(id)
-        startTerminalIfNeeded(id)
+        if sessions.first(where: { $0.id == id })?.sshHost != nil { connectShell(id) } else { startTerminalIfNeeded(id) }
+    }
+
+    /// A shell on the server; it connects right away. `shellsBeside`: right after the selected session of the same
+    /// project — tabs follow createdAt, so it's dated just after that one — and the two side by side.
+    func openShell(on server: Server) throws {
+        guard ServerLogs.isValidHost(server.host) else { throw ServerError.badHost(server.host) }
+        let partner = shellsBeside ? selectedSession.flatMap { $0.projectId == server.projectId ? $0 : nil } : nil
+        // The database keeps milliseconds: halfway to the session after the partner (another shell beside it, too),
+        // at most 10 ms on; a tie with the partner sorts after it by id. +0.1 ms so rounding never drops a millisecond.
+        let createdAt = partner.map { partner in
+            let next = sessions.first { $0.projectId == partner.projectId && $0.createdAt > partner.createdAt }
+            let gap = next.map { Int(($0.createdAt.timeIntervalSince(partner.createdAt) * 1000).rounded()) } ?? 20
+            return partner.createdAt.addingTimeInterval(Double(min(10, gap / 2)) / 1000 + 0.0001)
+        } ?? .now
+        var session = Session(projectId: server.projectId, claudeSessionId: UUID().uuidString.lowercased(),
+                              status: .idle, createdAt: createdAt, lastActiveAt: .now,
+                              name: server.label.isEmpty ? nil : server.label, sshHost: server.host)
+        try db.write { try session.insert($0) }
+        reload()
+        if let partner {
+            if shell.split < 2 {
+                splitBeforeShells = splitBeforeShells ?? shell.split
+                editShell { $0.split = 2 }
+            }
+            paneAnchor = partner.id
+        }
+        selectedSessionId = session.id
+        if let id = session.id { connectShell(id) }
+    }
+
+    /// The split before a shell opened beside a session widened it; the last shell closing puts it back.
+    private var splitBeforeShells: Int?
+
+    /// `ssh <host>` in the session's terminal. Only on the user's click: after meepo restarts a shell waits for Connect,
+    /// so no server gets logins nobody asked for. Like claude, waits for the login environment (never resolved in tests).
+    func connectShell(_ id: Int64) {
+        guard isLoginResolved, terminals.view(for: id) == nil, let session = sessions.first(where: { $0.id == id }),
+              let host = session.sshHost, let arguments = ServerLogs.shellArguments(host: host),
+              let project = project(for: session) else { return }
+        let environment = loginEnvironment?.environment ?? ClaudeLauncher.scrubbed(ProcessInfo.processInfo.environment)
+        terminals.startShell(session, arguments: arguments, environment: environment, directory: project.path)
+        exitedSessionIds.remove(id)
+        runningSessionIds.insert(id)
     }
 
     // MARK: Navigation

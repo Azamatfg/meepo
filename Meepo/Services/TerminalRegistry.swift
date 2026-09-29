@@ -17,13 +17,7 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
         guard let id = session.id, views[id] == nil else { return }
         var (directory, createWorktree) = ClaudeLauncher.location(worktreeName: session.worktreeName, projectPath: projectPath)
         if let folder = session.folder, FileManager.default.fileExists(atPath: folder) { directory = folder }
-        // Sessions start before they're on screen; a zero frame would start claude in a 0-column terminal.
-        let view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700))
-        view.font = Fonts.terminal(13)
-        view.nativeBackgroundColor = NSColor(hex: 0xF6F3EC) // Tokens.terminalBg
-        view.nativeForegroundColor = NSColor(hex: 0x1B1A17) // Tokens.text
-        view.caretColor = NSColor(hex: 0x2140D9)            // Tokens.work
-        view.processDelegate = self
+        let view = makeView()
         let bridge = BridgeInstaller()
         let hasBridge = FileManager.default.isExecutableFile(atPath: bridge.scriptURL.path)
         let args = if let agentId { ClaudeLauncher.attachArguments(agentId: agentId) } else {
@@ -55,14 +49,30 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
         views[id] = view
     }
 
+    /// A server shell: `ssh <host>` in the session's terminal, with the login environment (ssh-agent's socket).
+    func startShell(_ session: Session, arguments: [String], environment: [String: String], directory: String) {
+        guard let id = session.id, views[id] == nil else { return }
+        let view = makeView()
+        view.startProcess(executable: ServerLogs.ssh, args: arguments,
+                          environment: ClaudeLauncher.environment(base: environment), currentDirectory: directory)
+        views[id] = view
+    }
+
+    /// Sessions start before they're on screen; a zero frame would start the process in a 0-column terminal.
+    private func makeView(width: CGFloat = 1000) -> LocalProcessTerminalView {
+        let view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: width, height: 700))
+        view.font = Fonts.terminal(13)
+        view.nativeBackgroundColor = NSColor(hex: 0xF6F3EC) // Tokens.terminalBg
+        view.nativeForegroundColor = NSColor(hex: 0x1B1A17) // Tokens.text
+        view.caretColor = NSColor(hex: 0x2140D9)            // Tokens.work
+        view.processDelegate = self
+        return view
+    }
+
     /// Demo mode: a terminal that shows a fixed page and runs nothing.
     func showText(_ text: String, for sessionId: Int64) {
         // About a pane's width: SwiftTerm wraps text when it's fed and doesn't reflow it later.
-        let view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 700, height: 700))
-        view.font = Fonts.terminal(13)
-        view.nativeBackgroundColor = NSColor(hex: 0xF6F3EC)
-        view.nativeForegroundColor = NSColor(hex: 0x1B1A17)
-        view.caretColor = NSColor(hex: 0x2140D9)
+        let view = makeView(width: 700)
         view.feed(text: text)
         views[sessionId] = view
     }

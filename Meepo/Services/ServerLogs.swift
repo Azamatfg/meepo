@@ -62,9 +62,36 @@ enum ServerLogs {
     /// (executable, arguments, timeout) → result. Blocking; injected in tests so no real ssh ever runs.
     typealias Runner = @Sendable (String, [String], TimeInterval) -> RunResult
 
-    /// An ssh alias or user@host; never starts with "-" (ssh would read it as an option).
+    /// An ssh alias, user@host, or ssh://[user@]host[:port] (a port needs ssh's URI form); never starts with "-"
+    /// (ssh would read it as an option).
     static func isValidHost(_ host: String) -> Bool {
         host.wholeMatch(of: /([A-Za-z0-9_][A-Za-z0-9._-]*@)?[A-Za-z0-9_][A-Za-z0-9._-]{0,252}/) != nil
+            || host.wholeMatch(of: /ssh:\/\/([A-Za-z0-9_][A-Za-z0-9._-]*@)?[A-Za-z0-9_][A-Za-z0-9._-]{0,252}(:[0-9]{1,5})?/) != nil
+    }
+
+    /// What the user pastes, the way they type it in a terminal — `ssh root@1.2.3.4`, `ssh -p 2222 -l deploy box`,
+    /// or just the host — as the host meepo keeps. nil for anything else (-i, -J…: those belong in ~/.ssh/config).
+    static func destination(from typed: String) -> String? {
+        var words = typed.split(whereSeparator: \.isWhitespace).map(String.init)
+        if words.first == "ssh" { words.removeFirst() }
+        var port: String?, user: String?, host: String?
+        while !words.isEmpty {
+            let word = words.removeFirst()
+            if word == "-p" || word == "-l" {
+                guard !words.isEmpty else { return nil }
+                if word == "-p" { port = words.removeFirst() } else { user = words.removeFirst() }
+            } else if word.hasPrefix("-p"), word.count > 2 {
+                port = String(word.dropFirst(2))
+            } else if word.hasPrefix("-") || host != nil {
+                return nil
+            } else {
+                host = word
+            }
+        }
+        guard var host else { return nil }
+        if let user, !host.contains("@") { host = "\(user)@\(host)" }
+        let result = port.map { "ssh://\(host):\($0)" } ?? host
+        return isValidHost(result) ? result : nil
     }
 
     static func isValid(_ source: LogSource) -> Bool {
@@ -90,6 +117,12 @@ enum ServerLogs {
     static func sshArguments(host: String, command: String) -> [String]? {
         guard isValidHost(host) else { return nil }
         return ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "LogLevel=ERROR", host, command]
+    }
+
+    /// An interactive shell on the server, in a meepo terminal: prompts (a password, a new host key) are the user's to answer.
+    static func shellArguments(host: String) -> [String]? {
+        guard isValidHost(host) else { return nil }
+        return ["-o", "ConnectTimeout=10", host]
     }
 
     /// Logs from one source, trimmed; `error` in plain words when ssh or the command failed.

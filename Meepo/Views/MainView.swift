@@ -9,7 +9,6 @@ struct MainView: View {
     @State private var isStatsShown = false
     @State private var isMorningShown = false
     @State private var isDayShown = false
-    @State private var isToolsShown = false
     @State private var isNotesShown = false
     @State private var isImportShown = false
     @AppStorage("onboarded") private var isOnboarded = false
@@ -18,7 +17,7 @@ struct MainView: View {
     var body: some View {
         VStack(spacing: 0) {
             TitleBar(isStatsShown: $isStatsShown, isMorningShown: $isMorningShown, isDayShown: $isDayShown,
-                     isToolsShown: $isToolsShown, isNotesShown: $isNotesShown, isImportShown: $isImportShown) { isPickingFolder = true }
+                     isNotesShown: $isNotesShown, isImportShown: $isImportShown) { isPickingFolder = true }
             HStack(spacing: 0) {
                 Rail().zIndex(1) // its hover labels lie over the panels next to it
                 ZoneColumn(zone: .left)
@@ -50,7 +49,9 @@ struct MainView: View {
         .sheet(isPresented: $isStatsShown) { StatsView() }
         .sheet(isPresented: $isMorningShown) { TasksSheet() }
         .sheet(isPresented: $isDayShown) { DayView() }
-        .sheet(isPresented: $isToolsShown) { ToolsView() }
+        .sheet(isPresented: Binding(get: { store.toolsTab != nil }, set: { if !$0 { store.toolsTab = nil } })) {
+            ToolsView(tab: store.toolsTab ?? .docker)
+        }
         .sheet(isPresented: $isNotesShown) { NotesView() }
         .sheet(isPresented: $isImportShown) { ImportView() }
         .sheet(isPresented: Binding(get: { store.isSettingsShown }, set: { store.isSettingsShown = $0 })) { SettingsView() }
@@ -105,7 +106,6 @@ private struct TitleBar: View {
     @Binding var isStatsShown: Bool
     @Binding var isMorningShown: Bool
     @Binding var isDayShown: Bool
-    @Binding var isToolsShown: Bool
     @Binding var isNotesShown: Bool
     @Binding var isImportShown: Bool
     let onAddProject: () -> Void
@@ -122,7 +122,7 @@ private struct TitleBar: View {
                 Button("Day — end-of-day summary") { isDayShown = true }
                 Divider()
                 Button("Stats") { isStatsShown = true }
-                Button("Tools — Docker space, ports, servers, meepo's edits") { isToolsShown = true }
+                Button("Tools — Docker space, ports, servers, meepo's edits") { store.toolsTab = .docker }
                 Button("Notes — release notes") { isNotesShown = true }
                 Divider()
                 Toggle("Guided mode — Claude explains, asks first", isOn: Binding(get: { store.guidedMode }, set: { store.setGuidedMode($0) }))
@@ -155,6 +155,15 @@ private struct TitleBar: View {
                     }
                     Menu {
                         Button("New Session…") { store.presentNewSession() }.disabled(store.projects.isEmpty)
+                        Menu("Server Shell") {
+                            ForEach(store.servers) { server in
+                                Button("\(store.projects.first { $0.id == server.projectId }?.name ?? "?") · \(server.title)") {
+                                    do { try store.openShell(on: server) } catch { store.bridgeError = error.localizedDescription }
+                                }
+                            }
+                            if !store.servers.isEmpty { Divider() }
+                            Button("Add a server…") { store.presentAddServer(projectId: nil) }
+                        }
                         Divider()
                         Button("Add Project Folder…", action: onAddProject)
                         Button("Add from Claude Code History…") { isImportShown = true }
@@ -222,7 +231,8 @@ private struct SessionTab: View {
 
     /// Closes right away when claude is between turns; asks first while it works or waits on you mid-turn.
     private func close() {
-        guard store.look(of: session).ring != .idle else { return store.closeSession(session.id!) }
+        // Not running (no ring): no turn to cut off either.
+        guard session.sshHost == nil, let ring = store.look(of: session).ring, ring != .idle else { return store.closeSession(session.id!) }
         store.confirmation = PixelConfirmation(
             title: "Close this session in the middle of a turn?",
             message: "claude stops mid-turn. Files and commits stay; the conversation stays in Claude Code (claude --resume).",
@@ -235,7 +245,8 @@ extension AppStore {
     /// A session tab's caption: the project, plus the session's name when the project has several.
     func tabLabel(of session: Session) -> String {
         let name = project(for: session)?.name ?? "?"
-        return sessions.filter { $0.projectId == session.projectId }.count > 1 ? "\(name) · \(displayName(of: session))" : name
+        if session.sshHost != nil { return "\(name) · ssh \(displayName(of: session))" } // told apart from claude at a glance
+        return sessions.filter { $0.projectId == session.projectId && $0.sshHost == nil }.count > 1 ? "\(name) · \(displayName(of: session))" : name
     }
 }
 
@@ -650,9 +661,11 @@ private struct TerminalPane: View {
             if let session = store.sessions.first(where: { $0.id == sessionId }) {
                 header(session)
                 Rectangle().fill(Tokens.line).frame(height: 1)
-                terminal
-                Rectangle().fill(Tokens.line).frame(height: 1)
-                StagePanel(session: session)
+                terminal(host: session.sshHost)
+                if session.sshHost == nil { // stages, slash commands and voice are claude's
+                    Rectangle().fill(Tokens.line).frame(height: 1)
+                    StagePanel(session: session)
+                }
             }
         }
         .background(Tokens.terminalBg, in: RoundedRectangle(cornerRadius: 12))
@@ -702,7 +715,7 @@ private struct TerminalPane: View {
         .onTapGesture { store.selectedSessionId = sessionId }
     }
 
-    private var terminal: some View {
+    private func terminal(host: String?) -> some View {
         ZStack(alignment: .bottom) {
             Tokens.terminalBg
             if let view = store.terminalView(for: sessionId),
@@ -716,12 +729,23 @@ private struct TerminalPane: View {
                     .padding(8)
             }
             if store.terminalView(for: sessionId) == nil {
-                LaunchState()
+                if let host {
+                    HStack {
+                        Text("Shell on \(host)")
+                        Button("Connect") { store.connectShell(sessionId) }
+                            .buttonStyle(PixelButtonStyle(isPrimary: true))
+                            .keyboardShortcut(.defaultAction)
+                    }
+                    .pixelFrame(10)
+                    .frame(maxHeight: .infinity)
+                } else {
+                    LaunchState()
+                }
             }
             if store.exitedSessionIds.contains(sessionId) {
                 HStack {
-                    Text("Session exited")
-                    Button("Continue") { store.restartSession(sessionId) }
+                    Text(host == nil ? "Session exited" : "Disconnected")
+                    Button(host == nil ? "Continue" : "Reconnect") { store.restartSession(sessionId) }
                         .buttonStyle(PixelButtonStyle(isPrimary: true))
                         .keyboardShortcut(.defaultAction)
                 }

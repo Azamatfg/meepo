@@ -17,6 +17,9 @@ struct ServersView: View {
     @State private var busy: String?
     @State private var note: String?
     @State private var logs: Logs?
+    /// Came from "Add a server…": the shell opens once the server is added.
+    @State private var opensShell = false
+    @FocusState private var isHostFocused: Bool
 
     /// What Get logs brought back, for the project it belongs to.
     struct Logs {
@@ -29,13 +32,22 @@ struct ServersView: View {
             Text(Explain.servers).font(Fonts.ui(13)).foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
             if let note { Text(note).font(Fonts.ui(13, weight: .semibold)).foregroundStyle(Tokens.text).fixedSize(horizontal: false, vertical: true) }
             if let logs { logsView(logs) }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    if store.projects.isEmpty { Text("Add a project first — servers belong to a project.").foregroundStyle(Tokens.textDim) }
-                    ForEach(store.projects) { project in projectView(project) }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if store.projects.isEmpty { Text("Add a project first — servers belong to a project.").foregroundStyle(Tokens.textDim) }
+                        ForEach(store.projects) { project in projectView(project).id(project.id) }
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .onAppear {
+                    guard let id = store.addServerProjectId else { return }
+                    store.addServerProjectId = nil
+                    (addingTo, host, label, opensShell) = (id, "", "", true)
+                    proxy.scrollTo(id, anchor: .top)
+                    isHostFocused = true
+                }
             }
             .background(Tokens.dirt)
             .sunken()
@@ -66,6 +78,10 @@ struct ServersView: View {
             HStack(spacing: 8) {
                 Text(server.title).font(Fonts.mono(12)).foregroundStyle(Tokens.text).lineLimit(1)
                 Spacer()
+                Button("Open shell") {
+                    do { try store.openShell(on: server); dismiss() } catch { note = error.localizedDescription }
+                }
+                .help("ssh \(server.host) in a meepo tab, like a terminal in VS Code")
                 Button("Add logs…") { sourceFor = server.id; kind = .journal; name = "" }
                     .help("Where this server's logs are: a service, a container or a file")
                 Button(busy == "c\(server.id ?? 0)" ? "Looking…" : "Containers") { listContainers(server) }
@@ -112,12 +128,21 @@ struct ServersView: View {
                     .fixedSize()
                     .help("Hosts from your ssh config")
             }
-            TextField("host or user@host", text: $host).textFieldStyle(.roundedBorder).frame(width: 200)
+            TextField("ssh root@1.2.3.4", text: $host).textFieldStyle(.roundedBorder).frame(width: 240)
+                .focused($isHostFocused)
+                .help("As you'd type it in Terminal: ssh user@host, ssh -p 2222 user@host, or an alias from ~/.ssh/config")
             TextField("label: prod, stage", text: $label).textFieldStyle(.roundedBorder).frame(width: 130)
-            Button("Add") {
-                save(Server(projectId: projectId, host: host.trimmingCharacters(in: .whitespaces),
-                            label: label.trimmingCharacters(in: .whitespaces))) { addingTo = nil }
+            Button(opensShell ? "Add and open shell" : "Add") {
+                let typed = host.trimmingCharacters(in: .whitespaces)
+                let server = Server(projectId: projectId, host: ServerLogs.destination(from: typed) ?? typed,
+                                    label: label.trimmingCharacters(in: .whitespaces))
+                save(server) {
+                    addingTo = nil
+                    guard opensShell, let saved = store.servers(of: projectId).last(where: { $0.host == server.host }) else { return }
+                    do { try store.openShell(on: saved); dismiss() } catch { note = error.localizedDescription }
+                }
             }
+            .keyboardShortcut(.defaultAction)
             .disabled(host.trimmingCharacters(in: .whitespaces).isEmpty)
             Button("Cancel") { addingTo = nil }
         }

@@ -172,7 +172,7 @@ private struct UnitBlock: View {
                 Button("Compare") { openCompare(repo, old: range.old, new: range.new) }
                     .buttonStyle(PixelButtonStyle(compact: true))
                     .help("See every changed file, before and after")
-                if case .now = unit.kind, !repo.uncommitted.isEmpty {
+                if case .now = unit.kind, !repo.uncommitted.isEmpty, session.sshHost == nil { // /rewind in a server shell would run there
                     Button("Undo with rewind…") { askRewind() }
                         .buttonStyle(PixelButtonStyle(compact: true))
                         .help("Claude Code's /rewind: puts back what Claude edited, not what commands did")

@@ -90,7 +90,7 @@ final class ScreenshotFlow {
     }
 
     private func showPicker(image: NSImage, file: URL, returnTo previous: NSRunningApplication?) {
-        let choices = store.orderedSessions.filter { store.runningSessionIds.contains($0.id ?? -1) }.map { session in
+        let choices = store.orderedSessions.filter { $0.sshHost == nil && store.runningSessionIds.contains($0.id ?? -1) }.map { session in
             (id: session.id!, title: [store.project(for: session)?.name, session.branch].compactMap { $0 }.joined(separator: " · "))
         }
         let finish = { [weak self] (target: Int64?) in

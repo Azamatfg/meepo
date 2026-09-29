@@ -163,6 +163,13 @@ struct SettingsView: View {
                             .buttonStyle(PixelButtonStyle())
                             .help("claude --remote-control \"project · branch\": sessions show up in the Claude app and claude.ai (needs a claude.ai login)")
                     }
+                    FieldRow("Server shells open") {
+                        PixelMenu(selection: store.shellsBeside ? "BESIDE THE SESSION" : "IN A NEW TAB") {
+                            Button("Beside the session — two terminals side by side") { store.shellsBeside = true }
+                            Button("In a new tab") { store.shellsBeside = false }
+                        }
+                        .help("Where Servers → Open shell and + → Server Shell put ssh")
+                    }
                     FieldRow("Screenshot to a session") {
                         PixelMenu(selection: store.screenshotHotKey.isEmpty ? "OFF" : store.screenshotHotKey) {
                             ForEach(GlobalHotKey.combos) { combo in Button(combo.title) { store.screenshotHotKey = combo.title } }

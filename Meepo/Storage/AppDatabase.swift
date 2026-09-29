@@ -165,6 +165,11 @@ enum AppDatabase {
             }
         }
 
+        // A tab can be a shell on one of the project's servers instead of claude.
+        migrator.registerMigration("v15-server-shells") { db in
+            try db.alter(table: "session") { t in t.add(column: "sshHost", .text) }
+        }
+
         return migrator
     }
 }

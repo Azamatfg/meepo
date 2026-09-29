@@ -42,8 +42,9 @@ struct SessionsPanel: View {
 extension AppStore {
     func look(of session: Session) -> (ring: SelectionRing.Kind?, text: String) {
         guard let id = session.id else { return (nil, "") }
-        if exitedSessionIds.contains(id) { return (nil, "Exited") }
-        guard runningSessionIds.contains(id) else { return (nil, "Not running") }
+        if exitedSessionIds.contains(id) { return (nil, session.sshHost == nil ? "Exited" : "Disconnected") }
+        guard runningSessionIds.contains(id) else { return (nil, session.sshHost == nil ? "Not running" : "Not connected") }
+        if session.sshHost != nil { return (.idle, "Connected") } // a shell sends no hook events
         if interruptedSessionIds.contains(id) { return (.sync, "Turn interrupted") }
         if relayingSessionIds.contains(id) { return (.sync, "Relaying…") }
         let full = (contextFraction(for: id) ?? 0) >= relayThreshold
@@ -122,24 +123,40 @@ struct SessionMenu: View {
     var body: some View {
         let place = session.worktreeName.map { "worktree \($0)" } ?? session.branch ?? "this folder"
         Button("Rename…") { store.renamingSessionId = session.id }
-        Button("New Session Instead…") {
-            store.confirmation = PixelConfirmation(
-                title: "Start a fresh session?",
-                message: "A new claude in \(place), with a clean context. This one is closed; its conversation stays in Claude Code (claude --resume).",
-                action: "New session",
-                isDestructive: false
-            ) { try? store.replaceSession(session.id!) }
+        // Where VS Code users look for a terminal to the server: next to the session they work in.
+        Menu("Server Shell") {
+            ForEach(store.servers(of: session.projectId)) { server in
+                Button(server.title) {
+                    do { try store.openShell(on: server) } catch { store.bridgeError = error.localizedDescription }
+                }
+            }
+            if !store.servers(of: session.projectId).isEmpty { Divider() }
+            Button("Add a server…") { store.presentAddServer(projectId: session.projectId) }
         }
-        Button("Restart") { store.restartSession(session.id!) }
-        Divider()
-        Button("Close Session…", role: .destructive) {
-            store.confirmation = PixelConfirmation(
-                title: "Close this session?",
-                message: session.agentId != nil && store.attachId(for: session) != nil
-                    ? "Only the tab closes: the agent keeps running in the background (claude agents)."
-                    : "claude stops. Files and commits stay; the conversation stays in Claude Code (claude --resume).",
-                action: "Close"
-            ) { store.closeSession(session.id!) }
+        if session.sshHost != nil {
+            Button("Reconnect") { store.restartSession(session.id!) }
+            Divider()
+            Button("Close Shell", role: .destructive) { store.closeSession(session.id!) }
+        } else {
+            Button("New Session Instead…") {
+                store.confirmation = PixelConfirmation(
+                    title: "Start a fresh session?",
+                    message: "A new claude in \(place), with a clean context. This one is closed; its conversation stays in Claude Code (claude --resume).",
+                    action: "New session",
+                    isDestructive: false
+                ) { try? store.replaceSession(session.id!) }
+            }
+            Button("Restart") { store.restartSession(session.id!) }
+            Divider()
+            Button("Close Session…", role: .destructive) {
+                store.confirmation = PixelConfirmation(
+                    title: "Close this session?",
+                    message: session.agentId != nil && store.attachId(for: session) != nil
+                        ? "Only the tab closes: the agent keeps running in the background (claude agents)."
+                        : "claude stops. Files and commits stay; the conversation stays in Claude Code (claude --resume).",
+                    action: "Close"
+                ) { store.closeSession(session.id!) }
+            }
         }
     }
 }
@@ -157,7 +174,7 @@ struct SessionLabel: View {
             if let projectName {
                 Text(projectName).foregroundStyle(Tokens.text)
             }
-            Text(session.branch ?? "no branch")
+            Text(session.sshHost.map { "ssh \($0)" } ?? session.branch ?? "no branch")
                 .font(Fonts.mono(12))
                 .foregroundStyle(Tokens.textDim)
             Spacer(minLength: 0)

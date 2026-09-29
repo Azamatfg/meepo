@@ -143,7 +143,7 @@ struct NewSessionSheet: View {
             }
             isGit = await Task.detached { GitService.output(["rev-parse", "--is-inside-work-tree"], in: path) == "true" }.value
             // SPEC module 5: a second session in the same project defaults to its own worktree.
-            useWorktree = isGit && store.sessions.contains { $0.projectId == projectId }
+            useWorktree = isGit && store.sessions.contains { $0.projectId == projectId && $0.sshHost == nil }
             let open = Set(store.sessions.map(\.claudeSessionId))
             past = await Task.detached { ClaudeImport.claudeSessions(for: path) }.value.filter { !open.contains($0.id) }
         }

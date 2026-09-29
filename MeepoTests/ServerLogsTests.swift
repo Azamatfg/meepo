@@ -107,6 +107,21 @@ final class ServerLogsTemplateTests: XCTestCase {
         }
     }
 
+    /// Pasted as typed in a terminal, kept as a host ssh reads; options that would run something are refused.
+    func testPastedSSHCommandBecomesTheHost() {
+        XCTAssertEqual(ServerLogs.destination(from: "ssh root@1.2.3.4"), "root@1.2.3.4")
+        XCTAssertEqual(ServerLogs.destination(from: "  root@1.2.3.4 "), "root@1.2.3.4")
+        XCTAssertEqual(ServerLogs.destination(from: "ssh -p 2222 deploy@box"), "ssh://deploy@box:2222")
+        XCTAssertEqual(ServerLogs.destination(from: "ssh -p2222 -l deploy box"), "ssh://deploy@box:2222")
+        XCTAssertEqual(ServerLogs.destination(from: "prod"), "prod")
+        for typed in ["ssh -i key root@x", "ssh -oProxyCommand=reboot x", "ssh root@x uptime", "ssh -p", "ssh", "ssh -p 22;reboot x"] {
+            XCTAssertNil(ServerLogs.destination(from: typed), typed)
+        }
+        XCTAssertTrue(ServerLogs.isValidHost("ssh://deploy@box:2222"))
+        XCTAssertFalse(ServerLogs.isValidHost("ssh://-oProxyCommand=x"))
+        XCTAssertFalse(ServerLogs.isValidHost("box:2222"), "a port only in ssh's URI form")
+    }
+
     func testTrimKeepsTheLastLinesWithinTheLimit() {
         let raw = (1...500).map { "line \($0)" }.joined(separator: "\n") + "\n"
         let trimmed = ServerLogs.trim(raw)
@@ -223,5 +238,127 @@ final class ServerStoreTests: XCTestCase {
         XCTAssertEqual(ssh.calls.map { $0.args.last! }, ["journalctl -u 'app' -n 200 --no-pager", "tail -n 200 '/var/log/app.log'"])
         let prompt = store.initialPrompts[store.sessions[0].id!]!
         XCTAssertTrue(prompt.hasPrefix("Deploy “Deploy” failed on main @ abcdef1 (https://ci/7).\nInvestigate these logs from prod:"))
+    }
+}
+
+@MainActor
+final class ServerShellTests: XCTestCase {
+    private var store: AppStore!
+
+    override func setUp() async throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        store = makeIsolatedStore(db: db)
+        try store.addProject(at: try makeTempRepo())
+        try store.saveServer(Server(projectId: projectId, host: "deploy@prod", label: "prod"))
+    }
+
+    private var projectId: Int64 { store.projects[0].id! }
+
+    func testShellIsInteractiveAndHostCantBeAnOption() {
+        XCTAssertEqual(ServerLogs.shellArguments(host: "deploy@prod"), ["-o", "ConnectTimeout=10", "deploy@prod"],
+                       "no BatchMode: the user answers a password or a new host key in the terminal")
+        XCTAssertNil(ServerLogs.shellArguments(host: "-oProxyCommand=reboot"))
+        XCTAssertThrowsError(try store.openShell(on: Server(projectId: projectId, host: "-oProxyCommand=reboot")))
+    }
+
+    /// Beside: right after the selected session, not after the project's newest one, and both on screen.
+    func testBesideOpensNextToTheSelectedSessionSideBySide() throws {
+        store.applyPreset(.focus) // one terminal
+        try store.createSession(projectId: projectId, model: nil, prompt: nil)
+        try store.createSession(projectId: projectId, model: nil, prompt: nil)
+        let (first, second) = (store.sessions[0].id!, store.sessions[1].id!)
+        store.selectedSessionId = first
+        store.shellsBeside = true
+        try store.openShell(on: store.servers[0])
+        let shell = store.selectedSession!
+        XCTAssertEqual(shell.sshHost, "deploy@prod")
+        XCTAssertEqual(store.orderedSessions.map(\.id), [first, shell.id, second])
+        XCTAssertEqual(store.shell.split, 2)
+        XCTAssertEqual(store.visibleSessionIds, [first, shell.id!])
+        XCTAssertEqual(store.tabLabel(of: shell), "\(store.projects[0].name) · ssh prod")
+    }
+
+    /// A second shell beside the same session goes right after it as well — not behind the first shell, out of view.
+    func testSecondShellBesideTheSameSessionIsTheOneOnScreen() throws {
+        store.applyPreset(.focus)
+        try store.createSession(projectId: projectId, model: nil, prompt: nil)
+        try store.createSession(projectId: projectId, model: nil, prompt: nil)
+        let (first, second) = (store.sessions[0].id!, store.sessions[1].id!)
+        store.shellsBeside = true
+        store.selectedSessionId = first
+        try store.openShell(on: store.servers[0])
+        let prod = store.selectedSessionId!
+        try store.saveServer(Server(projectId: projectId, host: "stage"))
+        store.selectedSessionId = first
+        try store.openShell(on: store.servers.first { $0.host == "stage" }!)
+        let stage = store.selectedSessionId!
+        XCTAssertEqual(store.orderedSessions.map(\.id), [first, stage, prod, second])
+        XCTAssertEqual(store.visibleSessionIds, [first, stage])
+    }
+
+    func testNewTabGoesLastAndLeavesTheLayout() throws {
+        store.applyPreset(.focus)
+        try store.createSession(projectId: projectId, model: nil, prompt: nil)
+        try store.createSession(projectId: projectId, model: nil, prompt: nil)
+        store.selectedSessionId = store.sessions[0].id
+        store.shellsBeside = false
+        try store.openShell(on: store.servers[0])
+        XCTAssertEqual(store.orderedSessions.last?.sshHost, "deploy@prod")
+        XCTAssertEqual(store.shell.split, 1)
+    }
+
+    /// A server shell edits no files here: it neither sends the morning's task into a worktree nor stands in for
+    /// claude when `meepo <folder>` opens the project.
+    func testShellIsNotTheProjectsClaudeSession() throws {
+        try store.openShell(on: store.servers[0])
+        let task = try XCTUnwrap(store.addTask("fix the login", projectId: projectId))
+        try store.launchMorning([task.id!])
+        XCTAssertNil(store.selectedSession?.sshHost)
+        XCTAssertNil(store.selectedSession?.worktreeName)
+
+        try store.openShell(on: store.servers[0]) // selected again, and the newest of the project
+        var open = URLComponents(string: "meepo://open")!
+        open.queryItems = [URLQueryItem(name: "path", value: store.projects[0].path)]
+        store.openFromCommandLine(open.url!)
+        XCTAssertNil(store.selectedSession?.sshHost)
+        XCTAssertEqual(store.sessions.count, 3, "the claude session is picked, none is added")
+    }
+
+    /// The header and tab say where the shell is, not a model.
+    func testShellShowsItsHostNotAModel() throws {
+        try store.saveServer(Server(projectId: projectId, host: "stage"))
+        try store.openShell(on: store.servers.first { $0.host == "stage" }!)
+        XCTAssertEqual(store.modelLine(of: store.selectedSession!), "ssh stage")
+        XCTAssertEqual(store.displayName(of: store.selectedSession!), "stage")
+    }
+}
+
+@MainActor
+final class ServerShellLayoutTests: XCTestCase {
+    /// Beside widens Focus to two terminals only while a shell is open; claude's tab keeps its short caption.
+    func testLastShellClosingPutsTheSplitBack() throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        try store.addProject(at: try makeTempRepo())
+        let projectId = store.projects[0].id!
+        try store.saveServer(Server(projectId: projectId, host: "prod"))
+        store.applyPreset(.focus)
+        try store.createSession(projectId: projectId, model: nil, prompt: nil)
+        let claude = store.sessions[0]
+        store.shellsBeside = true
+        try store.openShell(on: store.servers[0])
+        let first = store.selectedSessionId!
+        store.selectedSessionId = claude.id
+        try store.openShell(on: store.servers[0])
+        let second = store.selectedSessionId!
+        XCTAssertEqual(store.shell.split, 2)
+        XCTAssertEqual(store.tabLabel(of: claude), store.projects[0].name, "shells don't count as the project's sessions")
+        store.closeSession(first)
+        XCTAssertEqual(store.shell.split, 2, "one shell still open")
+        store.closeSession(second)
+        XCTAssertEqual(store.shell.split, 1)
+        XCTAssertEqual(store.shell, ShellLayout.preset(.focus), "no edit left in the preset")
     }
 }

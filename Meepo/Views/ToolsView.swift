@@ -4,10 +4,14 @@ import SwiftUI
 /// No shared-commands library: Claude Code already gives one command to every project through ~/.claude.
 struct ToolsView: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var tab = Tab.docker
+    @State private var tab: Tab
     @State private var confirmation: PixelConfirmation?
 
     enum Tab: String, CaseIterable { case docker = "DOCKER", ports = "PORTS", servers = "SERVERS", changes = "CHANGES" }
+
+    init(tab: Tab = .docker) {
+        _tab = State(initialValue: tab)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {

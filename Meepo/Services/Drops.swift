@@ -100,7 +100,8 @@ extension AppStore {
     /// Files dropped on a session's terminal: images go to Claude as images (Ctrl+V, like a pasted screenshot),
     /// other files as their paths, the way Terminal.app types them.
     func dropFiles(_ urls: [URL], into sessionId: Int64) {
-        let images = urls.filter(Drops.isImage).compactMap { url in NSImage(contentsOf: url).map { (url, $0) } }
+        let isShell = sessions.first { $0.id == sessionId }?.sshHost != nil // a server shell takes paths only
+        let images = isShell ? [] : urls.filter(Drops.isImage).compactMap { url in NSImage(contentsOf: url).map { (url, $0) } }
         let paths = urls.filter { url in !images.contains { $0.0 == url } }
         if !paths.isEmpty { type(paths.map { Drops.escapedPath($0.path) }.joined(separator: " ") + " ", into: sessionId) }
         pasteImages(images.map(\.1), into: sessionId)
