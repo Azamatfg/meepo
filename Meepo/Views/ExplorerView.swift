@@ -152,7 +152,8 @@ struct ExplorerSection: View {
     /// in it. Each copy is logged in Tools → Changes (SPEC §8), where undoing it deletes it.
     private func copy(_ urls: [URL], into dir: String) -> Bool {
         // The project's own files, dragged from this tree toward a terminal and let go early: no duplicate.
-        let files = urls.filter { $0.isFileURL && !Drops.canonicalPath($0).hasPrefix(Drops.canonicalPath(URL(filePath: root)) + "/") }
+        let own = Drops.canonicalPath(URL(filePath: self.root)) + "/" // self.: the local `root` below shadows it
+        let files = urls.filter { $0.isFileURL && !Drops.canonicalPath($0).hasPrefix(own) }
         guard !files.isEmpty else { return false }
         let (root, backups, place) = (root, store.backupsDir, name(of: dir))
         Task {
