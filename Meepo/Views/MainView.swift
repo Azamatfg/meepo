@@ -201,6 +201,9 @@ private struct SessionTab: View {
     @Environment(AppStore.self) private var store
     let session: Session
     @State private var isHovered = false
+    @State private var isDropTarget = false
+    /// What a dragged tab carries; panels drag their own names, so a tab is told apart by the prefix.
+    private static let dragPrefix = "meepo-tab:"
 
     var body: some View {
         let look = store.look(of: session)
@@ -224,6 +227,15 @@ private struct SessionTab: View {
             .help("Close this session")
         }
         .onHover { isHovered = $0 }
+        // Drag a tab onto another to put it there; the order stays after meepo restarts.
+        .draggable(Self.dragPrefix + String(session.id ?? -1))
+        .dropDestination(for: String.self) { items, _ in
+            guard let item = items.first, item.hasPrefix(Self.dragPrefix), let id = Int64(item.dropFirst(Self.dragPrefix.count)),
+                  let target = session.id else { return false }
+            store.moveTab(id, onto: target)
+            return true
+        } isTargeted: { isDropTarget = $0 }
+        .overlay(alignment: .leading) { if isDropTarget { Capsule().fill(Tokens.work).frame(width: 3).padding(.vertical, 6) } }
         .contextMenu { SessionMenu(session: session) }
         .help("\(project) · \(look.text)")
     }

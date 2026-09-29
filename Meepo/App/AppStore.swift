@@ -91,6 +91,7 @@ final class AppStore {
         relayThreshold = defaults.object(forKey: Self.relayThresholdKey) as? Double ?? 0.7
         remoteControlForNewSessions = defaults.bool(forKey: Self.remoteControlKey)
         shellsBeside = defaults.object(forKey: Self.shellsBesideKey) as? Bool ?? true
+        tabOrder = (defaults.array(forKey: Self.tabOrderKey) as? [Int64]) ?? []
         appearance = defaults.string(forKey: Self.appearanceKey).flatMap(Appearance.init) ?? .system
         autofixProjectIds = Set((defaults.array(forKey: Self.autofixKey) as? [Int64]) ?? [])
         fixAttempts = (defaults.dictionary(forKey: Self.fixAttemptsKey) as? [String: Int]) ?? [:]
@@ -2430,8 +2431,36 @@ final class AppStore {
     // MARK: Sessions
 
     /// Sidebar order: projects by name, then sessions by creation time. Hotkeys walk this list.
+    /// Tabs left to right. By project, oldest first, until the user drags a tab; then their order, and a session
+    /// not in it yet (new since) comes right after the one before it in the project order — its project's latest
+    /// session, or the one a shell was opened beside.
     var orderedSessions: [Session] {
-        projects.flatMap { project in sessions.filter { $0.projectId == project.id } }
+        let base = projects.flatMap { project in sessions.filter { $0.projectId == project.id } }
+        guard !tabOrder.isEmpty else { return base }
+        let rank = Dictionary(tabOrder.enumerated().map { ($1, $0) }) { first, _ in first }
+        var ordered = base.filter { rank[$0.id ?? -1] != nil }.sorted { rank[$0.id!]! < rank[$1.id!]! }
+        for (index, session) in base.enumerated() where rank[session.id ?? -1] == nil {
+            let before = base[..<index].last { previous in ordered.contains { $0.id == previous.id } }
+            let at = before.flatMap { previous in ordered.firstIndex { $0.id == previous.id } }.map { $0 + 1 } ?? 0
+            ordered.insert(session, at: at)
+        }
+        return ordered
+    }
+
+    private static let tabOrderKey = "tabOrder"
+
+    /// Session ids in the order the user dragged the tabs into; empty = never dragged. Closed ids are simply skipped.
+    private var tabOrder: [Int64] {
+        didSet { defaults.set(tabOrder, forKey: Self.tabOrderKey) }
+    }
+
+    /// A tab dropped on another: it takes that tab's place, pushing it right (or left, when dragged from its left).
+    func moveTab(_ id: Int64, onto target: Int64) {
+        var ids = orderedSessions.compactMap(\.id)
+        guard id != target, let from = ids.firstIndex(of: id), let to = ids.firstIndex(of: target) else { return }
+        ids.remove(at: from)
+        ids.insert(id, at: to)
+        tabOrder = ids
     }
 
     var selectedSession: Session? {
