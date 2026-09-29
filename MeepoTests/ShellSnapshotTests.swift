@@ -76,6 +76,12 @@ final class ShellSnapshotTests: XCTestCase {
         store.selectedSessionId = sessions[0].id
         store.applyPreset(.full)
         try await shoot("full-narrow")
+        // Dark: every Tokens color has its dark value; the window's appearance picks it, as NSApp's does in the app.
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.setContentSize(NSSize(width: 1440, height: 900))
+        try await shoot("full-dark")
+        store.isHomeShown = true
+        try await shoot("home-dark")
     }
 
     /// Automations on this Mac's real history and skills — read only; the window's store has a temp settings file.

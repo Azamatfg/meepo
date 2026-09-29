@@ -32,7 +32,6 @@ struct MainView: View {
         .foregroundStyle(Tokens.text)
         // Rail + one side zone + a usable terminal; the title bar fits unclipped from here up.
         .frame(minWidth: 1060, minHeight: 560)
-        .preferredColorScheme(.light)
         // Explorer and Source Control share one git reading of the selected session's folder.
         .task(id: store.selectedSessionId) {
             while !Task.isCancelled {

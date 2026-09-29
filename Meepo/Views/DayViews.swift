@@ -176,7 +176,6 @@ struct TasksSheet: View {
             .frame(width: 620, height: 600)
             .background(Tokens.grass)
             .pixelFrame(6)
-            .preferredColorScheme(.light)
         }
     }
 }
@@ -231,7 +230,6 @@ struct MorningView: View {
         .frame(width: 620)
         .background(Tokens.grass)
         .pixelFrame(6)
-        .preferredColorScheme(.light)
         // Open tasks from yesterday are in by default: "evening list → tomorrow's sessions".
         .onAppear { selected = Set(open.filter { $0.projectId != nil }.compactMap(\.id)) }
     }
@@ -304,7 +302,6 @@ struct DayView: View {
         .frame(width: 680, height: 560)
         .background(Tokens.grass)
         .pixelFrame(6)
-        .preferredColorScheme(.light)
         .task {
             // git off the main thread; the rest is the database and what the store already holds.
             let (paths, start) = (store.projects.map(\.path), Calendar.current.startOfDay(for: .now))

@@ -6,6 +6,49 @@ import SwiftTerm
 final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
     private var views: [Int64: LocalProcessTerminalView] = [:]
     var onExit: ((Int64) -> Void)?
+    /// The app turned light or dark (Settings → Appearance, or macOS at sunset): true = dark now.
+    var onAppearanceChange: ((Bool) -> Void)?
+    private var appearanceObservation: NSKeyValueObservation?
+    private var wasDark = false
+
+    /// Once the app runs: in App.init, where the registry is made, NSApp is still nil and nothing could be observed.
+    func observeAppearance() {
+        guard appearanceObservation == nil, let app = NSApp else { return }
+        wasDark = Self.isDark
+        appearanceObservation = app.observe(\.effectiveAppearance) { [weak self] _, _ in
+            Task { @MainActor in self?.appearanceChanged() }
+        }
+        for view in views.values { paint(view) } // any made before the app's appearance was set
+    }
+
+    /// What the app draws in now; claude starts in the matching theme.
+    static var isDark: Bool {
+        NSApp?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+    }
+
+    /// SwiftTerm turns a color into its own when it's set, so every terminal is told again.
+    private func appearanceChanged() {
+        guard Self.isDark != wasDark else { return }
+        wasDark = Self.isDark
+        for view in views.values { paint(view) }
+        onAppearanceChange?(wasDark)
+    }
+
+    private func paint(_ view: LocalProcessTerminalView) {
+        view.nativeBackgroundColor = Self.resolved(Tokens.Terminal.background)
+        view.nativeForegroundColor = Self.resolved(Tokens.Terminal.foreground)
+        view.caretColor = Self.resolved(Tokens.Terminal.caret)
+        view.needsDisplay = true
+    }
+
+    /// A light/dark color fixed to the app's current look.
+    private static func resolved(_ color: NSColor) -> NSColor {
+        var fixed = color
+        (NSApp?.effectiveAppearance ?? NSAppearance(named: .aqua)!).performAsCurrentDrawingAppearance {
+            fixed = color.usingColorSpace(.sRGB) ?? color
+        }
+        return fixed
+    }
 
     func view(for sessionId: Int64) -> LocalProcessTerminalView? {
         views[sessionId]
@@ -23,7 +66,7 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
         let args = if let agentId { ClaudeLauncher.attachArguments(agentId: agentId) } else {
             ClaudeLauncher.sessionSettings(effort: session.effort,
                                                   statusLine: hasBridge ? bridge.statusLineCommand : nil,
-                                                  guided: guided)
+                                                  guided: guided, dark: Self.isDark)
             + ClaudeLauncher.claudeArguments(
             sessionId: session.claudeSessionId,
             resume: ClaudeLauncher.hasTranscript(sessionId: session.claudeSessionId),
@@ -62,9 +105,7 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
     private func makeView(width: CGFloat = 1000) -> LocalProcessTerminalView {
         let view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: width, height: 700))
         view.font = Fonts.terminal(13)
-        view.nativeBackgroundColor = NSColor(hex: 0xF6F3EC) // Tokens.terminalBg
-        view.nativeForegroundColor = NSColor(hex: 0x1B1A17) // Tokens.text
-        view.caretColor = NSColor(hex: 0x2140D9)            // Tokens.work
+        paint(view)
         view.processDelegate = self
         return view
     }

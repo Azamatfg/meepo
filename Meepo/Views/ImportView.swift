@@ -19,7 +19,6 @@ struct ImportView: View {
         .frame(width: 760, height: 600)
         .background(Tokens.grass)
         .pixelFrame(6)
-        .preferredColorScheme(.light)
     }
 }
 

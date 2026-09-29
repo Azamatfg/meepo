@@ -3,11 +3,11 @@ import Foundation
 /// Builds the command line for a `claude` session. Flags verified against `claude --help` (v2.1.280).
 enum ClaudeLauncher {
     /// Settings only Meepo's sessions get (`--settings` outranks the user's files and changes nothing on disk):
-    /// the light theme for Meepo's paper-light terminals, ultracode when that's the chosen effort —
+    /// the theme matching meepo's terminals (`dark`: the app is in Dark), ultracode when that's the chosen effort —
     /// ultracode is a setting, not an `--effort` value (2.1.282 accepts low…max there) — and the statusline.
     /// `statusLine`: Meepo's statusline command, when the bridge is there to receive it.
-    static func sessionSettings(effort: String?, statusLine: String? = nil, guided: Bool = false) -> [String] {
-        var settings: [String: Any] = ["theme": "light"]
+    static func sessionSettings(effort: String?, statusLine: String? = nil, guided: Bool = false, dark: Bool = false) -> [String] {
+        var settings: [String: Any] = ["theme": dark ? "dark" : "light"]
         if effort == ultracode { settings["ultracode"] = true }
         if guided {
             settings["outputStyle"] = "Explanatory"

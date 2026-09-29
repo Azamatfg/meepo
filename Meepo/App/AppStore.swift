@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import GRDB
 import Observation
@@ -90,6 +91,7 @@ final class AppStore {
         relayThreshold = defaults.object(forKey: Self.relayThresholdKey) as? Double ?? 0.7
         remoteControlForNewSessions = defaults.bool(forKey: Self.remoteControlKey)
         shellsBeside = defaults.object(forKey: Self.shellsBesideKey) as? Bool ?? true
+        appearance = defaults.string(forKey: Self.appearanceKey).flatMap(Appearance.init) ?? .system
         autofixProjectIds = Set((defaults.array(forKey: Self.autofixKey) as? [Int64]) ?? [])
         fixAttempts = (defaults.dictionary(forKey: Self.fixAttemptsKey) as? [String: Int]) ?? [:]
         screenshotHotKey = defaults.string(forKey: Self.shotHotKeyKey) ?? "⌘⇧6"
@@ -118,6 +120,7 @@ final class AppStore {
         isBridgeInstalled = bridge.isInstalled()
         refreshVoice()
         terminals.onExit = { [weak self] id in self?.sessionExited(id) }
+        terminals.onAppearanceChange = { [weak self] dark in self?.appearanceChanged(dark: dark) }
     }
 
     func sessionExited(_ id: Int64) {
@@ -1454,6 +1457,65 @@ final class AppStore {
 
     private static let remoteControlKey = "remoteControl"
     private static let shellsBesideKey = "shellsBeside"
+    private static let appearanceKey = "appearance"
+
+    enum Appearance: String, CaseIterable {
+        case system, light, dark
+
+        var title: String { rawValue.capitalized }
+
+        /// nil = follow macOS.
+        var nsAppearance: NSAppearance? {
+            switch self {
+            case .system: nil
+            case .light: NSAppearance(named: .aqua)
+            case .dark: NSAppearance(named: .darkAqua)
+            }
+        }
+    }
+
+    /// Light, dark, or whatever macOS uses (and switches to at sunset). Applied to the whole app: every Tokens color
+    /// resolves against it, terminals repaint (TerminalRegistry), and claude starts in the matching theme.
+    var appearance: Appearance {
+        didSet {
+            defaults.set(appearance.rawValue, forKey: Self.appearanceKey)
+            applyAppearance()
+        }
+    }
+
+    func applyAppearance() {
+        NSApp?.appearance = appearance.nsAppearance
+        terminals.observeAppearance()
+    }
+
+    /// Sessions whose claude started in the dark theme: claude picks its colors once, when it starts.
+    private(set) var darkSessionIds: Set<Int64> = []
+
+    /// The terminals repainted; claude's own colors don't follow until it restarts — light-theme ink on a dark
+    /// terminal is hard to read. Sessions between turns are offered a restart (the same conversation continues);
+    /// busy ones keep their colors until the user restarts them.
+    func appearanceChanged(dark: Bool) {
+        guard !isDemo, confirmation == nil else { return }
+        let offered = themeRestart(dark: dark)
+        guard !offered.isEmpty else { return }
+        let names = offered.compactMap { id in sessions.first { $0.id == id }.map(tabLabel) }.joined(separator: ", ")
+        let count = offered.count == 1 ? "1 session" : "\(offered.count) sessions"
+        confirmation = PixelConfirmation(
+            title: dark ? "meepo is dark now" : "meepo is light now",
+            message: "claude picks its colors when it starts, so \(names) still \(offered.count == 1 ? "uses" : "use") the \(dark ? "light" : "dark") theme. A restart continues the same conversation.",
+            action: "Restart \(count)", cancel: "Later", isDestructive: false
+        ) { [weak self] in
+            guard let self else { return }
+            for id in self.themeRestart(dark: dark) where offered.contains(id) { self.restartSession(id) }
+        }
+    }
+
+    /// Running sessions in the other theme that are free to restart now (the Guided mode rule: between turns).
+    private func themeRestart(dark: Bool) -> [Int64] {
+        let states = turnStates.map { TurnState(id: $0.id, status: $0.status, lastEvent: $0.lastEvent,
+                                                runsGuided: darkSessionIds.contains($0.id)) }
+        return Self.guidedRestart(states, guided: dark, hooks: isBridgeInstalled).now
+    }
 
     /// Server shells open next to the selected session, two terminals side by side (like VS Code's terminal under
     /// the editor); off = a tab of their own.
@@ -2491,6 +2553,7 @@ final class AppStore {
         runningSessionIds.remove(id)
         exitedSessionIds.remove(id)
         guidedSessionIds.remove(id)
+        darkSessionIds.remove(id)
         lastTurnEvents[id] = nil
         initialPrompts[id] = nil
         holds[id] = nil
@@ -2529,6 +2592,7 @@ final class AppStore {
                         guided: guidedMode, attach: attachId(for: session))
         runningSessionIds.insert(sessionId)
         if guidedMode { guidedSessionIds.insert(sessionId) } else { guidedSessionIds.remove(sessionId) }
+        if TerminalRegistry.isDark { darkSessionIds.insert(sessionId) } else { darkSessionIds.remove(sessionId) }
     }
 
     func restartSession(_ id: Int64) {

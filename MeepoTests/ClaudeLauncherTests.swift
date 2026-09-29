@@ -92,6 +92,16 @@ final class SessionSettingsTests: XCTestCase {
         XCTAssertEqual(json?["theme"] as? String, "light")
     }
 
+    /// claude's colors match meepo's terminal: dark ink on paper, light ink on the dark terminal.
+    func testThemeFollowsTheAppsAppearance() throws {
+        func theme(dark: Bool) throws -> String? {
+            let json = try JSONSerialization.jsonObject(with: Data(ClaudeLauncher.sessionSettings(effort: nil, dark: dark)[1].utf8))
+            return (json as? [String: Any])?["theme"] as? String
+        }
+        XCTAssertEqual(try theme(dark: true), "dark")
+        XCTAssertEqual(try theme(dark: false), "light")
+    }
+
     func testOtherEffortsStayFlags() throws {
         let args = ClaudeLauncher.claudeArguments(sessionId: "id", resume: false, model: nil, effort: "xhigh", prompt: nil)
         XCTAssertEqual(Array(args.suffix(2)), ["--effort", "xhigh"])

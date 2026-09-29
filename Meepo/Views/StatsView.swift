@@ -67,7 +67,6 @@ struct StatsView: View {
         .frame(minHeight: 420, maxHeight: 560, alignment: .top)
         .background(Tokens.grass)
         .pixelFrame(6)
-        .preferredColorScheme(.light)
         .task(id: period) {
             stats = store.usageStats(since: period.start())
             if period == .all { since = store.usageHistoryStart() }
@@ -163,6 +162,13 @@ struct SettingsView: View {
                             .buttonStyle(PixelButtonStyle())
                             .help("claude --remote-control \"project · branch\": sessions show up in the Claude app and claude.ai (needs a claude.ai login)")
                     }
+                    FieldRow("Appearance") {
+                        PixelMenu(selection: store.appearance.title.uppercased()) {
+                            ForEach(AppStore.Appearance.allCases, id: \.self) { item in
+                                Button(item == .system ? "System — follows macOS" : item.title) { store.appearance = item }
+                            }
+                        }
+                    }
                     FieldRow("Server shells open") {
                         PixelMenu(selection: store.shellsBeside ? "BESIDE THE SESSION" : "IN A NEW TAB") {
                             Button("Beside the session — two terminals side by side") { store.shellsBeside = true }
@@ -187,7 +193,6 @@ struct SettingsView: View {
         .background(Tokens.grass)
         .pixelFrame(6)
         .pixelConfirm(Binding(get: { store.confirmation }, set: { store.confirmation = $0 })) // CHECK NOW, the ⌘Q question
-        .preferredColorScheme(.light)
     }
 }
 

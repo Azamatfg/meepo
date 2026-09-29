@@ -57,6 +57,7 @@ struct MeepoApp: App {
                 }
                 .onChange(of: store.screenshotHotKey) { services?.bindScreenshotHotKey(store.screenshotHotKey, store: store) }
                 .task {
+                    store.applyAppearance()
                     if Demo.isOn { await store.loadDemo(); return }
                     guard let services else { return }
                     // Asking in App.init is too early: macOS answers "not allowed" before launch finishes.

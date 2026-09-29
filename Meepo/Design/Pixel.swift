@@ -22,7 +22,6 @@ extension View {
     func paperSheet() -> some View {
         background(Tokens.ground)
             .foregroundStyle(Tokens.text)
-            .preferredColorScheme(.light)
     }
 
     /// A panel: surface fill, rounded, hairline border.

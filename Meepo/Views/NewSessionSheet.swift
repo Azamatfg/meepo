@@ -132,7 +132,6 @@ struct NewSessionSheet: View {
         .frame(width: 460)
         .background(Tokens.grass)
         .pixelFrame(6)
-        .preferredColorScheme(.light)
         .onAppear { projectId = store.newSessionProjectId }
         .task(id: projectId) {
             guard let path = store.projects.first(where: { $0.id == projectId })?.path else {

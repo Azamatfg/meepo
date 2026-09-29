@@ -251,7 +251,6 @@ private struct CommandList: View {
         .frame(width: 240)
         .frame(maxHeight: 380)
         .background(Tokens.dirt)
-        .preferredColorScheme(.light)
     }
 }
 
@@ -323,7 +322,6 @@ private struct TaskPrompt: View {
         .padding(10)
         .frame(width: 360)
         .background(Tokens.grass)
-        .preferredColorScheme(.light)
         .onAppear { focused = true }
     }
 }
@@ -374,7 +372,6 @@ private struct MissingCommand: View {
         .padding(10)
         .frame(width: 440, alignment: .leading)
         .background(Tokens.grass)
-        .preferredColorScheme(.light)
         .task {
             let command = stage.command ?? stage.name
             for source in store.commandSources(command, excluding: session.projectId) {
@@ -413,6 +410,5 @@ private struct HandoffNotes: View {
         .padding(10)
         .frame(width: 420)
         .background(Tokens.grass)
-        .preferredColorScheme(.light)
     }
 }
