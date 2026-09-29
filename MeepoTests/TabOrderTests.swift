@@ -43,6 +43,38 @@ final class TabOrderTests: XCTestCase {
         XCTAssertEqual(tabs, [a2, a1, b1])
     }
 
+    /// A pane dropped on another by its header: just those two trade places, the rest stay put.
+    func testPanesSwapWithoutMovingTheOthers() throws {
+        let (a1, a2, b1) = (try newSession(in: 0), try newSession(in: 0), try newSession(in: 1))
+        store.swapTabs(a1, b1)
+        XCTAssertEqual(tabs, [b1, a2, a1], "a move would give [a2, b1, a1] or [b1, a1, a2]")
+        XCTAssertEqual(AppStore.draggedTab([AppStore.tabDragPrefix + String(a2)]), a2)
+        XCTAssertNil(AppStore.draggedTab(["explorer"]), "a dragged panel isn't a tab")
+    }
+
+    /// On screen, the two panes trade places and the third stays: the grid follows the tabs, not the selected one.
+    func testSwappedPanesTradePlacesInTheGrid() throws {
+        store.applyPreset(.deck) // four panes, three sessions
+        let (a1, a2, b1) = (try newSession(in: 0), try newSession(in: 0), try newSession(in: 1))
+        store.selectedSessionId = b1 // the last one: the grid still starts at the first tab, not rotated to it
+        XCTAssertEqual(store.visibleSessionIds, [a1, a2, b1])
+        store.swapTabs(b1, a1)
+        XCTAssertEqual(store.visibleSessionIds, [b1, a2, a1], "not rotated back to start at the selected a1")
+        store.selectedSessionId = a1
+        store.moveTab(a1, onto: b1) // the grid's first session moves to the middle of the tabs
+        XCTAssertEqual(store.visibleSessionIds, tabs, "all on screen: the grid is the tabs, never rotated to one of them")
+    }
+
+    /// More sessions than panes: the swap happens in place, the window doesn't slide.
+    func testSwapInsideAWiderListKeepsTheWindow() throws {
+        store.applyPreset(.full) // two panes
+        _ = (try newSession(in: 0), try newSession(in: 0), try newSession(in: 1))
+        let before = store.visibleSessionIds
+        XCTAssertEqual(before.count, 2)
+        store.swapTabs(before[0], before[1])
+        XCTAssertEqual(store.visibleSessionIds, [before[1], before[0]], "the window would slide if the anchor stayed")
+    }
+
     /// Opened after a drag: next to its project's latest session, not at the far end or the front.
     func testNewSessionGoesAfterItsProjectsLatest() throws {
         let (a1, b1) = (try newSession(in: 0), try newSession(in: 1))

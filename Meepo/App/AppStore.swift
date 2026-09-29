@@ -1419,6 +1419,8 @@ final class AppStore {
 
     private func paneWindow(from anchor: Int64, count: Int) -> [Int64] {
         let ids = orderedSessions.compactMap(\.id)
+        // All on screen: the grid reads like the tabs, left to right, top to bottom — never rotated to the anchor.
+        if count >= ids.count { return ids }
         guard let start = ids.firstIndex(of: anchor) else { return Array(ids.prefix(count)) }
         return Array((ids[start...] + ids[..<start]).prefix(count))
     }
@@ -2461,6 +2463,23 @@ final class AppStore {
         ids.remove(at: from)
         ids.insert(id, at: to)
         tabOrder = ids
+    }
+
+    /// A terminal pane dropped on another by its header: the two trade places, in the grid and in the tabs.
+    func swapTabs(_ id: Int64, _ other: Int64) {
+        var ids = orderedSessions.compactMap(\.id)
+        guard id != other, let a = ids.firstIndex(of: id), let b = ids.firstIndex(of: other) else { return }
+        ids.swapAt(a, b)
+        tabOrder = ids
+        // The grid starts at the anchor: it moves with its slot, so the other panes stay where they were.
+        if paneAnchor == id { paneAnchor = other } else if paneAnchor == other { paneAnchor = id }
+    }
+
+    /// What a dragged tab or pane header carries; panels drag their own names, so it's told apart by the prefix.
+    static let tabDragPrefix = "meepo-tab:"
+
+    static func draggedTab(_ items: [String]) -> Int64? {
+        items.first.flatMap { $0.hasPrefix(tabDragPrefix) ? Int64($0.dropFirst(tabDragPrefix.count)) : nil }
     }
 
     var selectedSession: Session? {

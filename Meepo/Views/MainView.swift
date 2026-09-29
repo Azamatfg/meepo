@@ -202,8 +202,6 @@ private struct SessionTab: View {
     let session: Session
     @State private var isHovered = false
     @State private var isDropTarget = false
-    /// What a dragged tab carries; panels drag their own names, so a tab is told apart by the prefix.
-    private static let dragPrefix = "meepo-tab:"
 
     var body: some View {
         let look = store.look(of: session)
@@ -228,10 +226,9 @@ private struct SessionTab: View {
         }
         .onHover { isHovered = $0 }
         // Drag a tab onto another to put it there; the order stays after meepo restarts.
-        .draggable(Self.dragPrefix + String(session.id ?? -1))
+        .draggable(AppStore.tabDragPrefix + String(session.id ?? -1))
         .dropDestination(for: String.self) { items, _ in
-            guard let item = items.first, item.hasPrefix(Self.dragPrefix), let id = Int64(item.dropFirst(Self.dragPrefix.count)),
-                  let target = session.id else { return false }
+            guard let id = AppStore.draggedTab(items), let target = session.id else { return false }
             store.moveTab(id, onto: target)
             return true
         } isTargeted: { isDropTarget = $0 }
@@ -666,6 +663,7 @@ private struct TerminalPane: View {
     let sessionId: Int64
     let isFocused: Bool
     let isSplit: Bool
+    @State private var isDropTarget = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -724,6 +722,15 @@ private struct TerminalPane: View {
         .frame(height: 36)
         .contentShape(Rectangle())
         .onTapGesture { store.selectedSessionId = sessionId }
+        // Drag a pane by its header onto another: the two trade places (and so do their tabs).
+        .draggable(AppStore.tabDragPrefix + String(sessionId))
+        .dropDestination(for: String.self) { items, _ in
+            guard let id = AppStore.draggedTab(items) else { return false }
+            store.swapTabs(id, sessionId)
+            return true
+        } isTargeted: { isDropTarget = $0 }
+        .background(isDropTarget ? Tokens.workTint : .clear)
+        .help(isSplit ? "Drag by this bar onto another terminal to swap them" : "")
     }
 
     private func terminal(host: String?) -> some View {
