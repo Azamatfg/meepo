@@ -2434,14 +2434,15 @@ final class AppStore {
 
     /// Sidebar order: projects by name, then sessions by creation time. Hotkeys walk this list.
     /// Tabs left to right. By project, oldest first, until the user drags a tab; then their order, and a session
-    /// not in it yet (new since) comes right after the one before it in the project order — its project's latest
-    /// session, or the one a shell was opened beside.
+    /// not in it yet (new since) goes last, so the arranged tabs and grid stay put — except a shell, which comes
+    /// right after the one before it in the project order: the session it was opened beside.
     var orderedSessions: [Session] {
         let base = projects.flatMap { project in sessions.filter { $0.projectId == project.id } }
         guard !tabOrder.isEmpty else { return base }
         let rank = Dictionary(tabOrder.enumerated().map { ($1, $0) }) { first, _ in first }
         var ordered = base.filter { rank[$0.id ?? -1] != nil }.sorted { rank[$0.id!]! < rank[$1.id!]! }
         for (index, session) in base.enumerated() where rank[session.id ?? -1] == nil {
+            guard session.sshHost != nil else { ordered.append(session); continue }
             let before = base[..<index].last { previous in ordered.contains { $0.id == previous.id } }
             let at = before.flatMap { previous in ordered.firstIndex { $0.id == previous.id } }.map { $0 + 1 } ?? 0
             ordered.insert(session, at: at)
@@ -2463,6 +2464,17 @@ final class AppStore {
         ids.remove(at: from)
         ids.insert(id, at: to)
         tabOrder = ids
+    }
+
+    /// Closed this run, still holding their place in `tabOrder`: closed id → its project.
+    private var vacatedSlots: [Int64: Int64] = [:]
+
+    /// A new session of a project whose tab was just closed takes that tab's place — closing taxinet and opening a
+    /// fresh one doesn't send it to the end and move the other panes.
+    private func takeVacatedSlot(_ id: Int64?, projectId: Int64) {
+        guard let id, let index = tabOrder.lastIndex(where: { vacatedSlots[$0] == projectId }) else { return }
+        vacatedSlots[tabOrder[index]] = nil
+        tabOrder[index] = id
     }
 
     /// A terminal pane dropped on another by its header: the two trade places, in the grid and in the tabs.
@@ -2517,6 +2529,7 @@ final class AppStore {
             folder: folder == project.path ? nil : folder
         )
         try db.write { try session.insert($0) }
+        takeVacatedSlot(session.id, projectId: projectId)
         if agentId != nil { markAttached(session) }
         if let prompt, !prompt.isEmpty { initialPrompts[session.id!] = prompt }
         reload()
@@ -2551,6 +2564,7 @@ final class AppStore {
         guard let old = sessions.first(where: { $0.id == id }) else { return }
         let fresh = try successor(of: old, model: old.model, effort: old.effort, stage: nil, prompt: nil, keepsPorts: true)
         closeSession(id)
+        takeVacatedSlot(fresh, projectId: old.projectId) // the fresh claude sits where the old one did
         selectedSessionId = fresh
     }
 
@@ -2597,6 +2611,7 @@ final class AppStore {
 
     func closeSession(_ id: Int64) {
         let ordered = orderedSessions
+        if tabOrder.contains(id), let projectId = sessions.first(where: { $0.id == id })?.projectId { vacatedSlots[id] = projectId }
         terminals.close(id)
         runningSessionIds.remove(id)
         exitedSessionIds.remove(id)

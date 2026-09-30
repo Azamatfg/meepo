@@ -75,12 +75,26 @@ final class TabOrderTests: XCTestCase {
         XCTAssertEqual(store.visibleSessionIds, [before[1], before[0]], "the window would slide if the anchor stayed")
     }
 
-    /// Opened after a drag: next to its project's latest session, not at the far end or the front.
-    func testNewSessionGoesAfterItsProjectsLatest() throws {
+    /// Opened after a drag: last, like a browser tab — the arranged tabs (and the grid) don't move.
+    func testNewSessionGoesLastAndLeavesTheArrangement() throws {
         let (a1, b1) = (try newSession(in: 0), try newSession(in: 1))
         store.moveTab(b1, onto: a1) // [b1, a1]
         let b2 = try newSession(in: 1)
-        XCTAssertEqual(tabs, [b1, b2, a1])
+        XCTAssertEqual(tabs, [b1, a1, b2], "not squeezed in after b1, pushing a1 to another pane")
+    }
+
+    /// Closing a tab and opening a fresh session of that project puts it back in the same place.
+    func testFreshSessionTakesTheClosedOnesPlace() throws {
+        let (a1, a2, b1) = (try newSession(in: 0), try newSession(in: 0), try newSession(in: 1))
+        store.moveTab(a1, onto: a2) // [a2, a1, b1]
+        store.closeSession(a2)
+        XCTAssertEqual(tabs, [a1, b1])
+        let a3 = try newSession(in: 0)
+        XCTAssertEqual(tabs, [a3, a1, b1], "back in a2's place, not last")
+        store.selectedSessionId = a1
+        try store.replaceSession(a1) // New Session Instead
+        let fresh = try XCTUnwrap(store.selectedSessionId)
+        XCTAssertEqual(tabs, [a3, fresh, b1], "the replacement keeps a1's place")
     }
 
     /// A shell opened beside a session still sits right after it once the tabs were dragged.
