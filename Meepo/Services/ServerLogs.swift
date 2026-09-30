@@ -6,6 +6,54 @@ enum SSHConfig {
     static let gitHosts: Set<String> = ["github.com", "gitlab.com", "bitbucket.org", "ssh.github.com", "altssh.gitlab.com"]
 
     static var userConfig: URL { FileManager.default.homeDirectoryForCurrentUser.appending(path: ".ssh/config") }
+    static var knownHostsFile: URL { FileManager.default.homeDirectoryForCurrentUser.appending(path: ".ssh/known_hosts") }
+    static var zshHistory: URL { FileManager.default.homeDirectoryForCurrentUser.appending(path: ".zsh_history") }
+
+    /// What Add server offers as you type, the way a terminal's `ssh <Tab>` would: the servers you ssh'd to (shell
+    /// history, newest first), then ~/.ssh/config, then every host ssh already knows. Git hosts never.
+    static func suggestions(config: String, knownHosts: String, history: String) -> [String] {
+        var seen = Set<String>()
+        return (Self.history(history) + hosts(config) + Self.knownHosts(knownHosts)).filter { seen.insert($0).inserted }
+    }
+
+    /// Hosts ssh has connected to. Hashed entries (|1|…) can't be read back; "[host]:port" keeps its port.
+    static func knownHosts(_ text: String) -> [String] {
+        var result: [String] = []
+        for line in text.split(whereSeparator: \.isNewline) where !line.hasPrefix("#") && !line.hasPrefix("@") && !line.hasPrefix("|") {
+            guard let field = line.split(separator: " ").first else { continue }
+            for name in field.split(separator: ",").map(String.init) {
+                let host = name.wholeMatch(of: /\[(.+)\]:(\d+)/).map { "ssh://\($0.1):\($0.2)" } ?? name
+                if !isGit(host), ServerLogs.isValidHost(host), !result.contains(host) { result.append(host) }
+            }
+        }
+        return result
+    }
+
+    /// `ssh …` commands from zsh history (": time:0;command" or plain), newest first, as meepo keeps a host.
+    static func history(_ text: String) -> [String] {
+        var result: [String] = []
+        for raw in text.split(whereSeparator: \.isNewline).reversed() {
+            let command = raw.replacing(/^: \d+:\d+;/, with: "")
+            guard command.hasPrefix("ssh "), let host = ServerLogs.destination(from: String(command)),
+                  !isGit(host), !result.contains(host) else { continue }
+            result.append(host)
+        }
+        return result
+    }
+
+    /// "ssh://deploy@box:2222" → "box"; git@github.com → "github.com".
+    private static func isGit(_ host: String) -> Bool {
+        var name = host.replacingOccurrences(of: "ssh://", with: "")
+        if let at = name.lastIndex(of: "@") { name = String(name[name.index(after: at)...]) }
+        if let colon = name.firstIndex(of: ":") { name = String(name[..<colon]) }
+        return gitHosts.contains(name.lowercased())
+    }
+
+    /// A kept host the way it's typed in a terminal: "ssh://deploy@box:2222" → "ssh -p 2222 deploy@box".
+    static func command(for host: String) -> String {
+        guard let uri = host.wholeMatch(of: /ssh:\/\/(.+?)(?::(\d+))?/) else { return "ssh \(host)" }
+        return uri.2.map { "ssh -p \($0) \(uri.1)" } ?? "ssh \(uri.1)"
+    }
 
     /// Every concrete `Host` name, in file order: patterns (`*`, `?`, `!`) are skipped, and so are aliases of git
     /// hosts (`Host github-work` with `HostName github.com`). `Include` and `Match` are not followed.

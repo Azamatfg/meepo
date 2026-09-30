@@ -57,6 +57,34 @@ final class SSHConfigTests: XCTestCase {
                        "every name of a Host line; no patterns, git aliases, Include targets or option-looking names")
     }
 
+    /// Offered like `ssh <Tab>`: history first (newest), then config, then known_hosts; no git hosts, no repeats.
+    func testSuggestionsComeFromHistoryConfigAndKnownHosts() {
+        let history = """
+            : 1700000000:0;ssh root@1.2.3.4
+            : 1700000100:0;git push
+            : 1700000200:0;ssh -T git@github.com
+            ssh -p 2222 deploy@box
+            : 1700000300:0;ssh root@1.2.3.4
+            : 1700000400:0;ssh -i key evil@x
+            """
+        XCTAssertEqual(SSHConfig.history(history), ["root@1.2.3.4", "ssh://deploy@box:2222"],
+                       "newest first, once; -i and git hosts left out")
+        let known = """
+            app.medoc.kz,10.0.0.9 ssh-ed25519 AAAA
+            [stage.example.com]:2200 ssh-rsa AAAA
+            |1|hashed=|salt= ssh-ed25519 AAAA
+            github.com ssh-ed25519 AAAA
+            @cert-authority *.example.com ssh-rsa AAAA
+            """
+        XCTAssertEqual(SSHConfig.knownHosts(known), ["app.medoc.kz", "10.0.0.9", "ssh://stage.example.com:2200"])
+        XCTAssertEqual(SSHConfig.suggestions(config: "Host prod\n  HostName 1.2.3.4\n", knownHosts: known, history: history).prefix(3),
+                       ["root@1.2.3.4", "ssh://deploy@box:2222", "prod"])
+        XCTAssertEqual(SSHConfig.command(for: "ssh://deploy@box:2222"), "ssh -p 2222 deploy@box")
+        XCTAssertEqual(SSHConfig.command(for: "root@1.2.3.4"), "ssh root@1.2.3.4")
+        XCTAssertEqual(ServerLogs.destination(from: SSHConfig.command(for: "ssh://deploy@box:2222")), "ssh://deploy@box:2222",
+                       "what's shown goes back to what's kept")
+    }
+
     /// A Match block's HostName doesn't belong to the Host block before it (it would hide "prod" as a git alias).
     func testMatchEndsTheHostBlockAndTheFirstHostNameWins() {
         XCTAssertEqual(SSHConfig.hosts("Host prod\nMatch all\nHostName github.com\n"), ["prod"])
