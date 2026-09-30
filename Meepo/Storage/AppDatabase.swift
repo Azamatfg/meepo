@@ -170,6 +170,16 @@ enum AppDatabase {
             try db.alter(table: "session") { t in t.add(column: "sshHost", .text) }
         }
 
+        // How often each part of meepo is used, per day: names and counts only, never sent anywhere (UsageCounts).
+        migrator.registerMigration("v16-usage-counts") { db in
+            try db.create(table: "usageCount") { t in
+                t.column("day", .text).notNull()
+                t.column("name", .text).notNull()
+                t.column("count", .integer).notNull()
+                t.primaryKey(["day", "name"])
+            }
+        }
+
         return migrator
     }
 }

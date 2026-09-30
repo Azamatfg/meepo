@@ -169,6 +169,15 @@ struct SettingsView: View {
                             }
                         }
                     }
+                    FieldRow("Learn from how I use meepo") {
+                        HStack(spacing: 6) {
+                            Button(store.learnsUsage ? "ON" : "OFF") { store.learnsUsage.toggle() }
+                            Button("FORGET") { store.forgetUsage() }
+                                .help("Deletes every count so far")
+                        }
+                        .buttonStyle(PixelButtonStyle())
+                        .help("Counts which panels and buttons you use, on this Mac only — no text, nothing sent. Automations then suggests hiding what you never touch.")
+                    }
                     FieldRow("Server shells open") {
                         PixelMenu(selection: store.shellsBeside ? "BESIDE THE SESSION" : "IN A NEW TAB") {
                             Button("Beside the session — two terminals side by side") { store.shellsBeside = true }

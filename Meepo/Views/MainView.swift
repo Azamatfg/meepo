@@ -288,7 +288,10 @@ private struct PresetPicker: View {
             ForEach(ShellLayout.Preset.allCases) { preset in
                 let isOn = store.shellPreset == preset
                 let isEdited = store.editedLayouts[preset] != nil
-                Button(preset.title + (isEdited ? "•" : "")) { store.applyPreset(preset) }
+                Button(preset.title + (isEdited ? "•" : "")) {
+                    store.applyPreset(preset)
+                    store.count("preset." + preset.rawValue)
+                }
                     .buttonStyle(.plain)
                     .font(Fonts.ui(13, weight: .semibold))
                     .foregroundStyle(isOn ? Tokens.text : Tokens.textDim)
@@ -468,7 +471,7 @@ private extension View {
 }
 
 /// One panel: a header you drag to another zone (or move from its menu), and its content, scrolling.
-private struct PanelBox: View {
+struct PanelBox: View {
     @Environment(AppStore.self) private var store
     let panel: ShellLayout.Panel
 
@@ -519,6 +522,8 @@ private struct PanelBox: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Tokens.line))
+        // A click anywhere in it counts as using it (Automations asks about panels that never get one).
+        .simultaneousGesture(TapGesture().onEnded { store.count("panel." + panel.rawValue) })
     }
 
     private func titled(project: String? = nil, tab: String = "") -> some View {

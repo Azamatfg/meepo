@@ -13,7 +13,7 @@ struct NoticedRow: View {
         HStack(alignment: .center, spacing: 18) {
             // A 0.3 button may no longer be a habit in the history: no count to show then.
             if suggestion.count > 0 {
-                Text("\(suggestion.count)×").font(Fonts.ui(isCard ? 40 : 26, weight: .bold)).foregroundStyle(Tokens.work)
+                Text(isUnused ? "0×" : "\(suggestion.count)×").font(Fonts.ui(isCard ? 40 : 26, weight: .bold)).foregroundStyle(Tokens.work)
                     .frame(minWidth: isCard ? 80 : 56, alignment: .leading)
             }
             VStack(alignment: .leading, spacing: 4) {
@@ -36,6 +36,10 @@ struct NoticedRow: View {
             case .skill:
                 Button("Draft a skill…") { isDrafting = true }
                     .buttonStyle(PixelButtonStyle(compact: !isCard, isPrimary: true))
+            case .unusedPanel, .unusedStage:
+                Button("Hide it") { store.hideUnused(suggestion) }
+                    .buttonStyle(PixelButtonStyle(compact: !isCard, isPrimary: true))
+                    .help("Comes back any time: the rail for a panel, Edit stages for a stage")
             }
             Button("Not now") { store.dismissSuggestion(suggestion) }
                 .buttonStyle(PixelButtonStyle(compact: !isCard))
@@ -54,6 +58,18 @@ struct NoticedRow: View {
             return "Your " + commands.map { "/" + $0 }.joined(separator: " → ") + " button from meepo 0.3 is off"
         case let .chain(commands): return "You run " + commands.map { "/" + $0 }.joined(separator: " → ") + " one after another"
         case let .skill(phrase): return "You keep asking: “\(phrase)”"
+        case let .unusedPanel(panel):
+            let name = ShellLayout.Panel(rawValue: panel).map(PanelBox.title) ?? panel
+            return "\(name) is in your layout, but you haven't clicked it in \(UsageCounts.quietDays) days"
+        case let .unusedStage(stage): return "You haven't pressed \(stage.uppercased()) in \(UsageCounts.quietDays) days"
+        }
+    }
+
+    /// Noticed in meepo's own counts (Settings → Learn from how I use meepo), not in history.
+    private var isUnused: Bool {
+        switch suggestion.kind {
+        case .unusedPanel, .unusedStage: true
+        default: false
         }
     }
 
@@ -66,6 +82,8 @@ struct NoticedRow: View {
                 + ": a skill of your own that runs them in order — in meepo and in any terminal. Claude stops if one asks you something."
         case .chain: return "In the last 8 weeks. A button runs them in order, as a skill of your own: each starts when the one before has finished, and Claude stops if one asks you something."
         case .skill: return "In the last 8 weeks. A skill of your own does it with one command — Claude drafts it, you read and save it."
+        case .unusedPanel: return "A calmer window: hide it, and bring it back from the rail when you need it. Counted on this Mac only."
+        case .unusedStage: return "One button less on the bar; Edit stages puts it back. Counted on this Mac only."
         }
     }
 }

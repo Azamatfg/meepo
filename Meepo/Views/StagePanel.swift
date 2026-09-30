@@ -35,11 +35,15 @@ struct StagePanel: View {
         // All stages are always shown; ones this project lacks are dimmed and offer to add the command.
         let stages = store.stages
         let available = Set(store.stages(for: session.projectId).map(\.name))
+        // One button lit: what to press now (none while Claude works or nothing's waiting).
+        let next = Stage.nextStep(after: session.stage, isReady: store.look(of: session).ring == .idle,
+                                  hasUncommitted: store.dirtyProjectIds.contains(session.projectId),
+                                  bar: stages.filter { available.contains($0.name) }.map(\.name))
         HStack(spacing: 6) {
             InfoButton(title: "Stages", text: Explain.stages)
             ForEach(stages) { stage in
                 Button(stage.label) { available.contains(stage.name) ? run(stage) : (missingStage = stage) }
-                    .buttonStyle(PixelButtonStyle())
+                    .buttonStyle(PixelButtonStyle(isPrimary: stage.name == next))
                     .opacity(available.contains(stage.name) ? 1 : 0.4)
                     .popover(isPresented: Binding(get: { missingStage == stage }, set: { if !$0 { missingStage = nil } }),
                              arrowEdge: .top) {
@@ -57,10 +61,13 @@ struct StagePanel: View {
                         Button("Hide \(stage.label) from this bar") { store.stages.removeAll { $0.id == stage.id } }
                         Button("Edit stages…") { isStagesEdited = true }
                     }
-                    .help(help(for: stage))
+                    .help(stage.name == next ? "Next step · " + help(for: stage) : help(for: stage))
             }
             ForEach(store.skillButtons(for: session.projectId), id: \.self) { name in
-                Button("/" + name) { store.type("/\(name)\r", into: session.id!) }
+                Button("/" + name) {
+                    store.type("/\(name)\r", into: session.id!)
+                    store.count("button." + name)
+                }
                     .buttonStyle(PixelButtonStyle())
                     .overlay { Capsule().strokeBorder(Tokens.work.opacity(0.5), lineWidth: 1) }
                     .help("Your workflow /\(name): runs its steps in order. Right-click to repeat or schedule it.")
@@ -106,6 +113,10 @@ struct StagePanel: View {
                         CommandList(commands: others) { command in
                             isMoreShown = false
                             execute(command.name)
+                            store.count("more." + command.name)
+                        } pin: { command in
+                            isMoreShown = false
+                            store.pinCommand(command.name)
                         }
                     }
             }
@@ -197,6 +208,7 @@ struct StagePanel: View {
 
     /// A click runs the stage's command right away; ship first checks that QA ran after the last edit.
     private func run(_ stage: Stage, checked: Bool = false) {
+        if !checked { store.count("stage." + stage.name) }
         if stage.name == "ship", !checked, store.codeChangedSinceQA(session.id!) {
             let qa = store.stages.first { $0.name == "qa" }
             store.confirmation = PixelConfirmation(
@@ -238,12 +250,15 @@ struct StagePanel: View {
 private struct CommandList: View {
     let commands: [SlashCommand]
     let onPick: (SlashCommand) -> Void
+    /// Right-click → Pin to the bar: the command becomes a button next to the stages.
+    var pin: ((SlashCommand) -> Void)? = nil
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(commands) { command in
                     CommandRow(command: command) { onPick(command) }
+                        .contextMenu { if let pin { Button("Pin /\(command.name) to the bar") { pin(command) } } }
                 }
             }
             .padding(6)

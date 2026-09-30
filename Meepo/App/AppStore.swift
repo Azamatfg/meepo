@@ -91,6 +91,7 @@ final class AppStore {
         relayThreshold = defaults.object(forKey: Self.relayThresholdKey) as? Double ?? 0.7
         remoteControlForNewSessions = defaults.bool(forKey: Self.remoteControlKey)
         shellsBeside = defaults.object(forKey: Self.shellsBesideKey) as? Bool ?? true
+        learnsUsage = defaults.object(forKey: Self.learnsUsageKey) as? Bool ?? true
         tabOrder = (defaults.array(forKey: Self.tabOrderKey) as? [Int64]) ?? []
         appearance = defaults.string(forKey: Self.appearanceKey).flatMap(Appearance.init) ?? .system
         autofixProjectIds = Set((defaults.array(forKey: Self.autofixKey) as? [Int64]) ?? [])
@@ -585,7 +586,63 @@ final class AppStore {
             let entries = Noticing.entries(historyLines: text.split(separator: "\n"))
             let since = Date.now.addingTimeInterval(-Noticing.window)
             return Noticing.chains(entries, known: known, since: since) + Noticing.repeatedPrompts(entries, since: since)
+        }.value + usageSuggestions()
+    }
+
+    /// Panels in the layout and stages on the bar not used once in `UsageCounts.quietDays` (counting on that long).
+    func usageSuggestions(now: Date = .now) -> [Noticing.Suggestion] {
+        guard learnsUsage else { return [] }
+        let (counts, first) = UsageCounts.totals(since: now.addingTimeInterval(-Double(UsageCounts.quietDays) * 86400), in: db)
+        let panels = ShellLayout.Zone.allCases.flatMap { shell[$0] }.map { "panel." + $0.rawValue }
+        let stageNames = stages.map { "stage." + $0.name }
+        return UsageCounts.unused(panels + stageNames, counts: counts, firstDay: first, now: now).map { name in
+            let item = String(name.drop { $0 != "." }.dropFirst())
+            return Noticing.Suggestion(kind: name.hasPrefix("panel.") ? .unusedPanel(item) : .unusedStage(item),
+                                       count: UsageCounts.quietDays)
+        }
+    }
+
+    /// "Hide it" on an unused panel or stage; comes back from Edit stages / the rail, like any hidden one.
+    func hideUnused(_ suggestion: Noticing.Suggestion) {
+        switch suggestion.kind {
+        case let .unusedPanel(raw): if let panel = ShellLayout.Panel(rawValue: raw) { editShell { $0.remove(panel) } }
+        case let .unusedStage(name): stages.removeAll { $0.name == name }
+        default: return
+        }
+        markApplied(suggestion)
+    }
+
+    /// Once: the bar keeps only the stages actually used (history, 8 weeks, plus meepo's own counts); the rest go,
+    /// with a note that says which and puts them back on request. Seven equal buttons read as noise.
+    func tidyStagesOnce() async {
+        let key = "stagesTidied"
+        guard !isDemo, !defaults.bool(forKey: key) else { return }
+        defaults.set(true, forKey: key)
+        var usage = await Task.detached {
+            let text = (try? String(contentsOf: Automations.historyFile, encoding: .utf8)) ?? ""
+            return Automations.usage(historyLines: text.split(separator: "\n")).mapValues(\.total)
         }.value
+        let clicks = UsageCounts.totals(since: .now.addingTimeInterval(-Double(Automations.weeks) * 7 * 86400), in: db).counts
+        for (name, count) in clicks where name.hasPrefix("stage.") {
+            if let command = stages.first(where: { "stage." + $0.name == name })?.command { usage[command, default: 0] += count }
+        }
+        let before = stages
+        let kept = Stage.used(before, usage: usage)
+        let hidden = before.filter { !kept.contains($0) }
+        guard !hidden.isEmpty, kept.count > 1 else { return }
+        stages = kept
+        confirmation = PixelConfirmation(
+            title: "A shorter bar",
+            message: "Hidden, as you haven't used them in 8 weeks: \(hidden.map(\.label).joined(separator: ", ")). They're one click away in MORE, and Edit stages (right-click a stage) puts them back.\n\nThe button to press next now lights up: SIMP once Claude has changed code, then SHIP, then SYNC.",
+            action: "OK", alternative: ("PUT THEM BACK", { [weak self] in self?.stages = before }), cancel: nil, isDestructive: false
+        ) {}
+    }
+
+    /// MORE → Pin to the bar: any command as a button next to the stages (e.g. /starting-session).
+    func pinCommand(_ name: String) {
+        guard !skillButtons.contains(name) else { return }
+        skillButtons.append(name)
+        defaults.set(skillButtons, forKey: Self.skillButtonsKey)
     }
 
     func dismissSuggestion(_ suggestion: Noticing.Suggestion) {
@@ -1460,6 +1517,24 @@ final class AppStore {
 
     private static let remoteControlKey = "remoteControl"
     private static let shellsBesideKey = "shellsBeside"
+    private static let learnsUsageKey = "learnsUsage"
+
+    /// Settings → Learn from how I use meepo: local counts (UsageCounts) that Automations turns into suggestions.
+    var learnsUsage: Bool {
+        didSet { defaults.set(learnsUsage, forKey: Self.learnsUsageKey) }
+    }
+
+    /// One use of a part of meepo — a name, never what was in it.
+    func count(_ name: String) {
+        guard learnsUsage, !isDemo else { return }
+        UsageCounts.add(name, in: db)
+    }
+
+    /// Settings → Forget: every count gone, and what they suggested.
+    func forgetUsage() {
+        UsageCounts.forget(in: db)
+        suggestions.removeAll { if case .unusedPanel = $0.kind { true } else if case .unusedStage = $0.kind { true } else { false } }
+    }
     private static let appearanceKey = "appearance"
 
     enum Appearance: String, CaseIterable {

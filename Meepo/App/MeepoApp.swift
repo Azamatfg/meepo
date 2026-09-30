@@ -69,6 +69,7 @@ struct MeepoApp: App {
                         await store.refreshWork()
                     }
                     await store.refreshSuggestions()
+                    await store.tidyStagesOnce()
                     quitHandler.store = store
                     store.terminate = { NSApp.terminate(nil) }
                     Task { // Updates like Claude Code: at launch, then every 6 hours; installed at quit.

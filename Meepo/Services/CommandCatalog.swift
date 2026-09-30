@@ -141,3 +141,26 @@ struct Stage: Codable, Hashable, Identifiable {
         return result
     }
 }
+
+extension Stage {
+    /// The one stage worth pressing now, or nil: Claude is between turns and there's uncommitted work — tidy it
+    /// (simplify), then ship; once shipped, save what was learned (sync). Only stages on the bar are offered.
+    static func nextStep(after last: String?, isReady: Bool, hasUncommitted: Bool, bar: [String]) -> String? {
+        guard isReady else { return nil }
+        if hasUncommitted {
+            if last != "simplify", bar.contains("simplify") { return "simplify" }
+            return bar.contains("ship") ? "ship" : nil
+        }
+        return last == "ship" && bar.contains("sync") ? "sync" : nil
+    }
+
+    /// The stages to keep on the bar: the ones run at least `minUses` times in history (typed or pressed; a stand-in
+    /// counts for its stage) plus CODE, which is just talking to Claude.
+    static func used(_ stages: [Stage], usage: [String: Int], minUses: Int = 3) -> [Stage] {
+        stages.filter { stage in
+            guard let command = stage.command else { return true }
+            let uses = (usage[command] ?? 0) + (CommandCatalog.standIns[stage.name].flatMap { usage[$0] } ?? 0)
+            return uses >= minUses
+        }
+    }
+}

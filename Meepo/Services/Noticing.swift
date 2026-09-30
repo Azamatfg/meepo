@@ -16,6 +16,10 @@ enum Noticing {
             case chain([String])
             /// A request typed again and again: worth a skill of its own.
             case skill(phrase: String)
+            /// A panel in the layout that went unclicked for `UsageCounts.quietDays` (its ShellLayout.Panel raw value).
+            case unusedPanel(String)
+            /// A stage on the bar never pressed in that time (its Stage name).
+            case unusedStage(String)
         }
 
         let kind: Kind
@@ -25,6 +29,8 @@ enum Noticing {
             switch kind {
             case let .chain(commands): "chain:" + commands.joined(separator: ">")
             case let .skill(phrase): "skill:" + phrase
+            case let .unusedPanel(panel): "panel:" + panel
+            case let .unusedStage(stage): "stage:" + stage
             }
         }
     }
