@@ -56,7 +56,7 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
 
     func start(_ session: Session, projectPath: String, initialPrompt: String?,
                login: ClaudeLauncher.LoginEnvironment, remoteControlName: String? = nil, guided: Bool = false,
-               attach agentId: String? = nil) {
+               asks: [String] = [], attach agentId: String? = nil) {
         guard let id = session.id, views[id] == nil else { return }
         var (directory, createWorktree) = ClaudeLauncher.location(worktreeName: session.worktreeName, projectPath: projectPath)
         if let folder = session.folder, FileManager.default.fileExists(atPath: folder) { directory = folder }
@@ -66,7 +66,7 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
         let args = if let agentId { ClaudeLauncher.attachArguments(agentId: agentId) } else {
             ClaudeLauncher.sessionSettings(effort: session.effort,
                                                   statusLine: hasBridge ? bridge.statusLineCommand : nil,
-                                                  guided: guided, dark: Self.isDark)
+                                                  guided: guided, dark: Self.isDark, asks: asks)
             + ClaudeLauncher.claudeArguments(
             sessionId: session.claudeSessionId,
             resume: ClaudeLauncher.hasTranscript(sessionId: session.claudeSessionId),
@@ -92,11 +92,12 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
         views[id] = view
     }
 
-    /// A server shell: `ssh <host>` in the session's terminal, with the login environment (ssh-agent's socket).
-    func startShell(_ session: Session, arguments: [String], environment: [String: String], directory: String) {
+    /// A shell in the session's terminal — `ssh <host>`, or the user's own shell — with the login environment
+    /// (ssh-agent's socket, PATH from ~/.zshrc).
+    func startShell(_ session: Session, executable: String, arguments: [String], environment: [String: String], directory: String) {
         guard let id = session.id, views[id] == nil else { return }
         let view = makeView()
-        view.startProcess(executable: ServerLogs.ssh, args: arguments,
+        view.startProcess(executable: executable, args: arguments,
                           environment: ClaudeLauncher.environment(base: environment), currentDirectory: directory)
         views[id] = view
     }

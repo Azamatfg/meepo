@@ -6,13 +6,15 @@ enum ClaudeLauncher {
     /// the theme matching meepo's terminals (`dark`: the app is in Dark), ultracode when that's the chosen effort —
     /// ultracode is a setting, not an `--effort` value (2.1.282 accepts low…max there) — and the statusline.
     /// `statusLine`: Meepo's statusline command, when the bridge is there to receive it.
-    static func sessionSettings(effort: String?, statusLine: String? = nil, guided: Bool = false, dark: Bool = false) -> [String] {
+    /// `asks`: more permission rules that always ask first — a production database's MCP server (`mcp__<name>`),
+    /// so every query shows its SQL and waits for Allow, auto mode included.
+    static func sessionSettings(effort: String?, statusLine: String? = nil, guided: Bool = false, dark: Bool = false,
+                                asks: [String] = []) -> [String] {
         var settings: [String: Any] = ["theme": dark ? "dark" : "light"]
         if effort == ultracode { settings["ultracode"] = true }
-        if guided {
-            settings["outputStyle"] = "Explanatory"
-            settings["permissions"] = ["ask": guidedAsks]
-        }
+        if guided { settings["outputStyle"] = "Explanatory" }
+        let ask = (guided ? guidedAsks : []) + asks
+        if !ask.isEmpty { settings["permissions"] = ["ask": ask] }
         if let statusLine { settings["statusLine"] = ["type": "command", "command": statusLine, "padding": 0] }
         let json = (try? JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys, .withoutEscapingSlashes]))
             .map { String(decoding: $0, as: UTF8.self) } ?? #"{"theme":"light"}"#

@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
+  #stage { width: 100%; height: 100%; overflow: hidden; cursor: grab; }
+  #out { transform-origin: 0 0; display: inline-block; }
+  #out svg { max-width: none !important; }
+  .err { color: #c0392b; font: 12px -apple-system, sans-serif; padding: 12px; white-space: pre-wrap; }
+</style>
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<div id="stage"><div id="out"></div></div>
+<script>
+  // Pan by dragging or scrolling, zoom with pinch or ⌘/Ctrl + scroll; a new diagram fits the view.
+  let scale = 1, x = 0, y = 0, drag = null, n = 0;
+  const out = document.getElementById('out'), stage = document.getElementById('stage');
+  const apply = () => { out.style.transform = `translate(${x}px, ${y}px) scale(${scale})`; };
+  stage.addEventListener('wheel', e => {
+    e.preventDefault();
+    if (e.ctrlKey || e.metaKey) {
+      const f = Math.exp(-e.deltaY / 200), r = stage.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
+      x = px - (px - x) * f; y = py - (py - y) * f; scale *= f;
+    } else { x -= e.deltaX; y -= e.deltaY; }
+    apply();
+  }, { passive: false });
+  stage.addEventListener('mousedown', e => { drag = [e.clientX - x, e.clientY - y]; stage.style.cursor = 'grabbing'; });
+  addEventListener('mouseup', () => { drag = null; stage.style.cursor = 'grab'; });
+  addEventListener('mousemove', e => { if (drag) { x = e.clientX - drag[0]; y = e.clientY - drag[1]; apply(); } });
+
+  function fit() {
+    const svg = out.querySelector('svg'); if (!svg) return;
+    scale = 1; x = 0; y = 0; apply();
+    const box = svg.getBoundingClientRect(), W = stage.clientWidth, H = stage.clientHeight;
+    scale = Math.min(1.4, Math.min(W / box.width, H / box.height) * 0.94);
+    x = (W - box.width * scale) / 2; y = Math.max(8, (H - box.height * scale) / 2); apply();
+  }
+
+  async function meepoRender(text, dark) {
+    mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'neutral', securityLevel: 'strict',
+                         er: { useMaxWidth: false }, flowchart: { useMaxWidth: false }, sequence: { useMaxWidth: false } });
+    try {
+      const { svg } = await mermaid.render('d' + (++n), text);
+      out.innerHTML = svg; fit();
+    } catch (e) {
+      out.innerHTML = '<div class="err">' + String(e.message || e).replace(/</g, '&lt;') + '</div>';
+    }
+  }
+</script>
+</body>
+</html>

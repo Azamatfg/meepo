@@ -180,6 +180,35 @@ enum AppDatabase {
             }
         }
 
+        // A project's Postgres for Claude, read only: the read-only role's address (Postgres, Tools → DATABASES).
+        migrator.registerMigration("v17-databases") { db in
+            try db.create(table: "projectDatabase") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.belongsTo("project", onDelete: .cascade).notNull()
+                t.column("label", .text).notNull()
+                t.column("url", .text).notNull()
+            }
+        }
+
+        // A database on a server, reached through an ssh tunnel meepo keeps open (SSHTunnel).
+        migrator.registerMigration("v18-database-tunnels") { db in
+            try db.alter(table: "projectDatabase") { t in
+                t.add(column: "serverId", .integer)
+                t.add(column: "remoteHost", .text)
+                t.add(column: "remotePort", .integer)
+                t.add(column: "localPort", .integer)
+            }
+        }
+
+        // Which .mcp.json server a database is, and whether each of Claude's queries asks first (production).
+        migrator.registerMigration("v19-database-asks") { db in
+            try db.alter(table: "projectDatabase") { t in
+                t.add(column: "mcpName", .text)
+                t.add(column: "asksEachQuery", .boolean).notNull().defaults(to: false)
+            }
+            try db.execute(sql: "UPDATE projectDatabase SET mcpName = 'postgres-main' WHERE serverId IS NOT NULL AND label LIKE '% on main'")
+        }
+
         return migrator
     }
 }

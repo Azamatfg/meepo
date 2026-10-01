@@ -38,8 +38,16 @@ struct Session: Codable, Identifiable, Hashable, FetchableRecord, MutablePersist
     var agentId: String? = nil
     /// Where claude runs when that isn't the project folder: a session from outside meepo started in a subfolder.
     var folder: String? = nil
-    /// A server shell, not claude: an ssh alias or user@host, opened as `ssh <host>` (Servers → Open shell).
+    /// A shell, not claude: an ssh alias or user@host, opened as `ssh <host>` (Servers → Open shell) — or
+    /// `Session.localTerminal` (""), the user's own shell in the project folder (+ → Terminal).
     var sshHost: String? = nil
+
+    static let localTerminal = ""
+    var isLocalTerminal: Bool { sshHost == Self.localTerminal }
+    /// `ssh <host>` to a project's server (not a local terminal, not claude).
+    var isServerShell: Bool { sshHost.map { !$0.isEmpty } ?? false }
+    /// What a shell's tab, header and menu bar call it; nil for claude.
+    var shellCaption: String? { sshHost.map { $0.isEmpty ? "terminal" : "ssh \($0)" } }
 
     mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID

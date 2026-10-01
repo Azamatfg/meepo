@@ -54,6 +54,19 @@ final class AppStore {
     /// Servers opens with this project's Add server form, and the new server's shell opens once it's added.
     var addServerProjectId: Int64?
 
+    /// What Tools → DATABASES opens with, from a session's menu: the wizard for a project, or a database's schema.
+    enum DatabaseRequest: Equatable {
+        case add(projectId: Int64)
+        case schema(databaseId: Int64)
+    }
+
+    var databaseRequest: DatabaseRequest?
+
+    func presentDatabases(_ request: DatabaseRequest) {
+        databaseRequest = request
+        toolsTab = .databases
+    }
+
     /// "Add a server…" in a menu: straight to the form for the project being worked on.
     func presentAddServer(projectId: Int64?) {
         addServerProjectId = projectId ?? selectedSession?.projectId ?? projects.first?.id
@@ -166,6 +179,7 @@ final class AppStore {
     /// transcript, else its first typed request — so two sessions of one project read differently everywhere.
     func displayName(of session: Session) -> String {
         if let name = session.name { return name }
+        if session.isLocalTerminal { return "terminal" }
         if let host = session.sshHost { return host }
         if let id = session.id, let named = liveStatus[id]?.sessionName, !named.isEmpty { return named }
         if let id = session.id, let title = titles[id] { return Notifier.plainText(title, limit: 40) }
@@ -917,6 +931,7 @@ final class AppStore {
         projects = (try? db.read { try Project.order(Column("name").collating(.localizedCaseInsensitiveCompare)).fetchAll($0) }) ?? []
         sessions = (try? db.read { try Session.order(Column("createdAt"), Column("id")).fetchAll($0) }) ?? []
         servers = (try? db.read { try Server.order(Column("label"), Column("host")).fetchAll($0) }) ?? []
+        databases = (try? db.read { try ProjectDatabase.order(Column("label")).fetchAll($0) }) ?? []
     }
 
     // MARK: Hook events
@@ -1154,7 +1169,7 @@ final class AppStore {
     /// "Opus 5.5 · xhigh", "· guided" when it runs in Guided mode: what the session really runs, once Claude Code
     /// has said; else what Meepo started it with.
     func modelLine(of session: Session) -> String {
-        if let host = session.sshHost { return "ssh \(host)" }
+        if let caption = session.shellCaption { return caption }
         let live = session.id.flatMap { liveStatus[$0] }
         let model = live?.modelName ?? session.model ?? "default model"
         let effort = live?.effort ?? session.effort
@@ -1478,8 +1493,11 @@ final class AppStore {
         let ids = orderedSessions.compactMap(\.id)
         // All on screen: the grid reads like the tabs, left to right, top to bottom — never rotated to the anchor.
         if count >= ids.count { return ids }
-        guard let start = ids.firstIndex(of: anchor) else { return Array(ids.prefix(count)) }
-        return Array((ids[start...] + ids[..<start]).prefix(count))
+        guard let anchorIndex = ids.firstIndex(of: anchor) else { return Array(ids.prefix(count)) }
+        // Never wrapping from the last tab to the first: near the end the window slides back, so the last tab
+        // shares the grid with the tabs just before it (its own project's), not with whatever tab comes first.
+        let start = min(anchorIndex, ids.count - count)
+        return Array(ids[start..<start + count])
     }
 
     /// The repos the selected session works in (its folder, the repos inside it, "Also work in" folders).
@@ -1909,6 +1927,40 @@ final class AppStore {
     private static let autofixKey = "ciAutofixProjects"
     private static let fixAttemptsKey = "ciFixAttempts"
 
+    // MARK: DRAW — a diagram instead of text
+
+    /// Sessions whose picture is being drawn.
+    private(set) var drawingSessionIds: Set<Int64> = []
+
+    func draw(_ request: Diagram.Request, for sessionId: Int64) async throws -> Diagram.Result {
+        guard let login = loginEnvironment else { throw ClaudeHeadless.Failure(errorDescription: "claude isn't found in the login shell") }
+        guard let session = sessions.first(where: { $0.id == sessionId }), let folder = workdir(of: session) else {
+            throw ClaudeHeadless.Failure(errorDescription: "No such session.")
+        }
+        drawingSessionIds.insert(sessionId)
+        defer { drawingSessionIds.remove(sessionId) }
+        let material: String
+        switch request {
+        case .lastAnswer:
+            guard let reply = latestReply(of: sessionId), !reply.isEmpty else {
+                throw ClaudeHeadless.Failure(errorDescription: "Claude hasn't answered anything in this session yet.")
+            }
+            material = reply
+        case .changes:
+            let diff = await Task.detached { GitPanel.fullDiff(from: "HEAD", to: nil, in: folder) }.value
+            guard !diff.isEmpty else { throw ClaudeHeadless.Failure(errorDescription: "Nothing uncommitted to draw.") }
+            material = String(diff.prefix(Diagram.diffLimit))
+        case .question:
+            material = ""
+        }
+        let prompt = Diagram.prompt(request, material: material, language: GitPanel.userLanguage)
+        let data = try await ClaudeHeadless.askJSON(prompt, schema: Diagram.schema, claude: login.claudePath, environment: login.environment,
+                                                    tools: Diagram.tools(for: request), directory: URL(filePath: folder))
+        let answer = try JSONDecoder().decode(Diagram.Result.self, from: data)
+        count("draw")
+        return Diagram.Result(title: answer.title, mermaid: Diagram.cleaned(answer.mermaid), caption: answer.caption)
+    }
+
     /// EXPLAIN in the inspector: changes from `from` to `to` (nil = files on disk) in plain words, by a headless claude.
     func explainChanges(in path: String, from: String, to: String?, whose: String, newFiles: [String]) async throws -> String {
         guard let login = loginEnvironment else { throw ClaudeHeadless.Failure(errorDescription: "claude isn't found in the login shell") }
@@ -2104,6 +2156,244 @@ final class AppStore {
     }
 
     // MARK: Servers and logs (SPEC module 10)
+
+    // MARK: Databases — Postgres for Claude, read only
+
+    private(set) var databases: [ProjectDatabase] = []
+    /// Each database's tables, read once (one query) and drawn from memory after.
+    private(set) var schemas: [Int64: [Postgres.Table]] = [:]
+    /// Runs psql; injected in tests so no real database is touched.
+    var postgresRunner: Postgres.Runner = Postgres.run
+
+    func databases(of projectId: Int64?) -> [ProjectDatabase] { databases.filter { $0.projectId == projectId } }
+
+    /// psql from the login shell's PATH, else where Homebrew's keg-only formulas and Postgres.app keep it.
+    var psqlPath: String? {
+        toolPath("psql") ?? Postgres.kegPaths.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    /// One of meepo's fixed queries, read only, off the main thread. `readOnly: false` only for the role SQL.
+    func pgQuery(_ sql: String, url: String, readOnly: Bool = true) async -> Result<String, Postgres.Failure> {
+        guard let psql = psqlPath else { return .failure(Postgres.notInstalled) }
+        let runner = postgresRunner
+        return await Task.detached { Postgres.query(sql, url: url, psql: psql, readOnly: readOnly, runner: runner) }.value
+    }
+
+    func identity(at url: String) async -> Result<Postgres.Identity, Postgres.Failure> {
+        await pgQuery(Postgres.whoAmISQL, url: url).flatMap { output in
+            Postgres.identity(from: output).map { .success($0) } ?? .failure(Postgres.Failure(errorDescription: "Unexpected answer: \(output)"))
+        }
+    }
+
+    /// The Postgres containers on a server (docker ps / inspect over ssh, read only; the password stays there).
+    func findDatabases(on serverId: Int64) async -> Result<[Postgres.Found], Postgres.Failure> {
+        await runOnServer(serverId, Postgres.findOnServerCommand).map(Postgres.found(fromServerListing:))
+    }
+
+    /// One command on a project's server through the log-reading ssh (keys only, fails fast); its output or why not.
+    private func runOnServer(_ serverId: Int64, _ command: String) async -> Result<String, Postgres.Failure> {
+        guard let host = servers.first(where: { $0.id == serverId })?.host,
+              let args = ServerLogs.sshArguments(host: host, command: command) else {
+            return .failure(Postgres.Failure(errorDescription: "No such server."))
+        }
+        let runner = sshRunner
+        let result = await Task.detached { runner(ServerLogs.ssh, args, ServerLogs.timeout) }.value
+        guard result.status == 0 else {
+            return .failure(Postgres.Failure(errorDescription: result.output.split(separator: "\n").last.map(String.init) ?? "ssh failed"))
+        }
+        return .success(result.output)
+    }
+
+    /// The whole setup for a database in Docker on a server, after the user said so: the read-only role made inside
+    /// the container (docker exec, no password), a tunnel to it, a check that the role can't write, then Claude's
+    /// .mcp.json gets it as its own server. Returns the database saved.
+    @discardableResult
+    func setUpOnServer(projectId: Int64, serverId: Int64, found: Postgres.Found, asksEachQuery: Bool = true,
+                       progress: (String) -> Void = { _ in }) async throws -> ProjectDatabase {
+        let password = Postgres.newPassword()
+        guard let command = Postgres.createRoleCommand(in: found, sql: Postgres.roleSQL(database: found.database, password: password)) else {
+            throw Postgres.Failure(errorDescription: "Unusual container or database name — set it up by hand.")
+        }
+        progress("Creating \(Postgres.role) inside \(found.container)…")
+        if case let .failure(failure) = await runOnServer(serverId, command) { throw failure }
+        progress("Opening the ssh tunnel…")
+        guard let port = SSHTunnel.freePort() else { throw Postgres.Failure(errorDescription: "No free local port for the tunnel.") }
+        let tunnel = Tunnel(serverId: serverId, remoteHost: found.ip, remotePort: 5432, localPort: port)
+        guard openTunnel(Self.wizardTunnel, tunnel), await waitForTunnel(tunnel) else {
+            closeTunnel(Self.wizardTunnel)
+            throw Postgres.Failure(errorDescription: "The ssh tunnel didn't open.")
+        }
+        progress("Checking that \(Postgres.role) can only read…")
+        let url = "postgresql://\(Postgres.role):\(password)@127.0.0.1:\(port)/\(found.database)"
+        switch await identity(at: url) {
+        case let .success(identity) where identity.user == Postgres.role && !identity.canWrite: break
+        case .success: closeTunnel(Self.wizardTunnel); throw Postgres.Failure(errorDescription: "\(Postgres.role) can still change data — stopped before giving Claude access.")
+        case let .failure(failure): closeTunnel(Self.wizardTunnel); throw failure
+        }
+        progress("Giving Claude access…")
+        return try addDatabase(projectId: projectId, url: url, switchingFrom: url, tunnel: tunnel, asksEachQuery: asksEachQuery)
+    }
+
+    /// Runs the role SQL as the owner — the one write meepo ever makes, after the user saw the SQL and said so.
+    func createReadOnlyRole(ownerURL: String, sql: String) async -> Result<Void, Postgres.Failure> {
+        await pgQuery(sql, url: ownerURL, readOnly: false).map { _ in }
+    }
+
+    /// Where a database on a server is reached: through `localPort` to `remoteHost:remotePort` there.
+    struct Tunnel: Equatable {
+        let serverId: Int64
+        let remoteHost: String
+        let remotePort: Int
+        let localPort: Int
+    }
+
+    /// Saves the database for the project. `switchingFrom`: Claude's postgres server in .mcp.json moves from that
+    /// address to this one first (a backup, logged in Tools → Changes); nil keeps .mcp.json as it is. With a tunnel,
+    /// meepo keeps it open from now on (it was opened for the wizard already).
+    /// `asksEachQuery`: every query Claude makes shows its SQL and waits for Allow (production).
+    @discardableResult
+    func addDatabase(projectId: Int64, url: String, switchingFrom old: String?, tunnel: Tunnel? = nil,
+                     asksEachQuery: Bool = false) throws -> ProjectDatabase {
+        let label = Postgres.parts(of: url)?.database ?? "database"
+        let serverLabel = tunnel.flatMap { tunnel in servers.first { $0.id == tunnel.serverId } }.map { $0.label.isEmpty ? $0.host : $0.label }
+        var name = Postgres.mcpName(for: url, server: serverLabel)
+        if let old { name = try switchClaude(projectId: projectId, from: old, to: url, name: name) }
+        var database = ProjectDatabase(projectId: projectId, label: serverLabel.map { "\(label) on \($0)" } ?? label, url: url,
+                                       serverId: tunnel?.serverId, remoteHost: tunnel?.remoteHost, remotePort: tunnel?.remotePort,
+                                       localPort: tunnel?.localPort, mcpName: name, asksEachQuery: asksEachQuery)
+        try db.write { try database.insert($0) }
+        reload()
+        if let tunnel, let id = database.id {
+            closeTunnel(Self.wizardTunnel)
+            _ = openTunnel(id, tunnel)
+        }
+        return database
+    }
+
+    /// Ask before each query, on or off, for sessions of the project started from now on.
+    func setAsksEachQuery(_ database: ProjectDatabase, _ on: Bool) {
+        var changed = database
+        changed.asksEachQuery = on
+        _ = try? db.write { try changed.update($0) }
+        reload()
+    }
+
+    /// Permission rules a project's sessions start with: each asking database's MCP server, every tool of it.
+    func databaseAsks(for projectId: Int64?) -> [String] {
+        databases(of: projectId).filter(\.asksEachQuery).compactMap { $0.mcpName.map { "mcp__" + $0 } }
+    }
+
+    // MARK: Tunnels — ssh -L to databases on servers, open while meepo runs
+
+    /// The Add database wizard's tunnel, before the database has an id.
+    static let wizardTunnel: Int64 = -1
+    private var tunnels: [Int64: Process] = [:]
+    /// Tunnels to keep open: one that drops comes back after a few seconds.
+    private var wantedTunnels: [Int64: Tunnel] = [:]
+
+    /// Opens the tunnel (a running one is kept). False when it can't: no such server, or bad ports.
+    @discardableResult
+    func openTunnel(_ key: Int64, _ tunnel: Tunnel) -> Bool {
+        wantedTunnels[key] = tunnel
+        if tunnels[key]?.isRunning == true { return true }
+        guard !isDemo, isLoginResolved, let host = servers.first(where: { $0.id == tunnel.serverId })?.host,
+              let arguments = SSHTunnel.arguments(host: host, localPort: tunnel.localPort, remoteHost: tunnel.remoteHost,
+                                                  remotePort: tunnel.remotePort) else { return false }
+        let process = Process()
+        process.executableURL = URL(filePath: ServerLogs.ssh)
+        process.arguments = arguments
+        process.environment = loginEnvironment?.environment ?? ClaudeLauncher.scrubbed(ProcessInfo.processInfo.environment)
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { [weak self] ended in
+            Task { @MainActor in
+                guard let self, self.tunnels[key] === ended else { return }
+                self.tunnels[key] = nil
+                try? await Task.sleep(for: .seconds(5))
+                if let wanted = self.wantedTunnels[key] { self.openTunnel(key, wanted) }
+            }
+        }
+        do { try process.run() } catch { return false }
+        tunnels[key] = process
+        return true
+    }
+
+    /// Waits until the tunnel's local port answers (a few seconds at most for ssh to log in).
+    func waitForTunnel(_ tunnel: Tunnel) async -> Bool {
+        for _ in 0..<50 {
+            if !SSHTunnel.isFree(tunnel.localPort) { return true }
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        return false
+    }
+
+    func closeTunnel(_ key: Int64) {
+        wantedTunnels[key] = nil
+        tunnels.removeValue(forKey: key)?.terminate()
+    }
+
+    /// At launch: every saved database on a server gets its tunnel back.
+    func openDatabaseTunnels() {
+        for database in databases {
+            guard let id = database.id, let serverId = database.serverId, let remoteHost = database.remoteHost,
+                  let remotePort = database.remotePort, let localPort = database.localPort else { continue }
+            openTunnel(id, Tunnel(serverId: serverId, remoteHost: remoteHost, remotePort: remotePort, localPort: localPort))
+        }
+    }
+
+    /// When meepo quits: no ssh left behind.
+    func closeTunnels() {
+        wantedTunnels.removeAll()
+        for process in tunnels.values { process.terminate() }
+        tunnels.removeAll()
+    }
+
+    /// meepo forgets the database and closes its tunnel; its server leaves the project's .mcp.json too (a backup,
+    /// logged in Tools → Changes), so Claude doesn't keep a database that's gone. The role stays in the database.
+    func deleteDatabase(_ id: Int64) {
+        if let database = databases.first(where: { $0.id == id }), let name = database.mcpName,
+           let project = projects.first(where: { $0.id == database.projectId }) {
+            let file = URL(filePath: project.path).appending(path: ".mcp.json")
+            if let text = try? String(contentsOf: file, encoding: .utf8), let updated = Postgres.mcpConfig(text, removing: name),
+               let backup = try? ChangeLog.backup(file, folder: "mcp", backups: backupsDir) {
+                try? updated.write(to: file, atomically: true, encoding: .utf8)
+                ChangeLog.record("Claude no longer reads \(database.label) (\(name))", file: file, backup: backup, backups: backupsDir)
+            }
+        }
+        closeTunnel(id)
+        _ = try? db.write { try ProjectDatabase.deleteOne($0, id: id) }
+        schemas[id] = nil
+        reload()
+    }
+
+    /// Points Claude's postgres MCP server in the project's .mcp.json at the read-only role. Claude reads it when a
+    /// session starts.
+    /// Returns the server's name in .mcp.json (the one switched, or the one added).
+    private func switchClaude(projectId: Int64, from ownerURL: String, to roleURL: String, name: String) throws -> String {
+        guard let project = projects.first(where: { $0.id == projectId }) else { throw Postgres.Failure(errorDescription: "No such project.") }
+        let file = URL(filePath: project.path).appending(path: ".mcp.json")
+        let old = try? String(contentsOf: file, encoding: .utf8)
+        guard let updated = Postgres.mcpConfig(old, replacing: ownerURL, with: roleURL, name: name) else {
+            throw Postgres.Failure(errorDescription: ".mcp.json isn't JSON meepo can read — change the postgres address there by hand.")
+        }
+        let backup = old == nil ? nil : try ChangeLog.backup(file, folder: "mcp", backups: backupsDir)
+        try updated.text.write(to: file, atomically: true, encoding: .utf8)
+        ChangeLog.record("Claude reads \(project.name)'s database as \(Postgres.role)", file: file, backup: backup, backups: backupsDir)
+        return updated.key
+    }
+
+    /// The schema, from memory when read before (`refresh` reads it again).
+    func schema(of database: ProjectDatabase, refresh: Bool = false) async -> Result<[Postgres.Table], Postgres.Failure> {
+        if !refresh, let id = database.id, let cached = schemas[id] { return .success(cached) }
+        let json = await pgQuery(Postgres.schemaSQL, url: database.url)
+        // Decoded off the main thread: a few hundred tables with every column.
+        let result = await Task.detached {
+            json.flatMap { Postgres.tables(fromJSON: $0).map { .success($0) } ?? .failure(Postgres.Failure(errorDescription: "Couldn't read the schema.")) }
+        }.value
+        if case let .success(tables) = result, let id = database.id { schemas[id] = tables }
+        return result
+    }
 
     /// Servers of every project; ssh logs in with the user's own keys, meepo stores none.
     private(set) var servers: [Server] = []
@@ -2720,14 +3010,16 @@ final class AppStore {
     /// only if that resolution failed does claude go through the shell fallback.
     func startTerminalIfNeeded(_ sessionId: Int64) {
         guard isLoginResolved, let login = loginEnvironment, terminals.view(for: sessionId) == nil,
-              let existing = sessions.first(where: { $0.id == sessionId }), existing.sshHost == nil, // shells: connectShell
+              let existing = sessions.first(where: { $0.id == sessionId }),
               let project = project(for: existing) else { return }
+        // Shells: a local terminal just starts, a server shell waits for Connect (connectShell).
+        guard existing.sshHost == nil else { if existing.isLocalTerminal { connectShell(sessionId) }; return }
         if existing.portBase == nil { assignPortBase(sessionId) } // sessions from before module 5
         guard let session = sessions.first(where: { $0.id == sessionId }) else { return }
         terminals.start(session, projectPath: project.path, initialPrompt: initialPrompts.removeValue(forKey: sessionId),
                         login: login,
                         remoteControlName: remoteControlForNewSessions ? [project.name, session.branch].compactMap { $0 }.joined(separator: " · ") : nil,
-                        guided: guidedMode, attach: attachId(for: session))
+                        guided: guidedMode, asks: databaseAsks(for: project.id), attach: attachId(for: session))
         runningSessionIds.insert(sessionId)
         if guidedMode { guidedSessionIds.insert(sessionId) } else { guidedSessionIds.remove(sessionId) }
         if TerminalRegistry.isDark { darkSessionIds.insert(sessionId) } else { darkSessionIds.remove(sessionId) }
@@ -2744,7 +3036,17 @@ final class AppStore {
     /// project — tabs follow createdAt, so it's dated just after that one — and the two side by side.
     func openShell(on server: Server) throws {
         guard ServerLogs.isValidHost(server.host) else { throw ServerError.badHost(server.host) }
-        let partner = shellsBeside ? selectedSession.flatMap { $0.projectId == server.projectId ? $0 : nil } : nil
+        try openShellSession(projectId: server.projectId, host: server.host, name: server.label.isEmpty ? nil : server.label)
+    }
+
+    /// + → Terminal: the user's own shell in the project folder, like VS Code's terminal — placed like a server shell.
+    func openTerminal(projectId: Int64? = nil) throws {
+        guard let projectId = projectId ?? selectedSession?.projectId ?? projects.first?.id else { return }
+        try openShellSession(projectId: projectId, host: Session.localTerminal, name: nil)
+    }
+
+    private func openShellSession(projectId: Int64, host: String, name: String?) throws {
+        let partner = shellsBeside ? selectedSession.flatMap { $0.projectId == projectId ? $0 : nil } : nil
         // The database keeps milliseconds: halfway to the session after the partner (another shell beside it, too),
         // at most 10 ms on; a tie with the partner sorts after it by id. +0.1 ms so rounding never drops a millisecond.
         let createdAt = partner.map { partner in
@@ -2752,9 +3054,8 @@ final class AppStore {
             let gap = next.map { Int(($0.createdAt.timeIntervalSince(partner.createdAt) * 1000).rounded()) } ?? 20
             return partner.createdAt.addingTimeInterval(Double(min(10, gap / 2)) / 1000 + 0.0001)
         } ?? .now
-        var session = Session(projectId: server.projectId, claudeSessionId: UUID().uuidString.lowercased(),
-                              status: .idle, createdAt: createdAt, lastActiveAt: .now,
-                              name: server.label.isEmpty ? nil : server.label, sshHost: server.host)
+        var session = Session(projectId: projectId, claudeSessionId: UUID().uuidString.lowercased(),
+                              status: .idle, createdAt: createdAt, lastActiveAt: .now, name: name, sshHost: host)
         try db.write { try session.insert($0) }
         reload()
         if let partner {
@@ -2772,13 +3073,20 @@ final class AppStore {
     private var splitBeforeShells: Int?
 
     /// `ssh <host>` in the session's terminal. Only on the user's click: after meepo restarts a shell waits for Connect,
-    /// so no server gets logins nobody asked for. Like claude, waits for the login environment (never resolved in tests).
+    /// so no server gets logins nobody asked for (a local terminal starts on its own). Like claude, waits for the login
+    /// environment (never resolved in tests).
     func connectShell(_ id: Int64) {
         guard isLoginResolved, terminals.view(for: id) == nil, let session = sessions.first(where: { $0.id == id }),
-              let host = session.sshHost, let arguments = ServerLogs.shellArguments(host: host),
-              let project = project(for: session) else { return }
+              let host = session.sshHost, let project = project(for: session) else { return }
+        let (executable, arguments): (String, [String])
+        if session.isLocalTerminal {
+            (executable, arguments) = (ClaudeLauncher.defaultShell, ["-l"])
+        } else {
+            guard let ssh = ServerLogs.shellArguments(host: host) else { return }
+            (executable, arguments) = (ServerLogs.ssh, ssh)
+        }
         let environment = loginEnvironment?.environment ?? ClaudeLauncher.scrubbed(ProcessInfo.processInfo.environment)
-        terminals.startShell(session, arguments: arguments, environment: environment, directory: project.path)
+        terminals.startShell(session, executable: executable, arguments: arguments, environment: environment, directory: project.path)
         exitedSessionIds.remove(id)
         runningSessionIds.insert(id)
     }

@@ -20,6 +20,10 @@ struct ServersView: View {
     /// Came from "Add a server…": the shell opens once the server is added.
     @State private var opensShell = false
     @FocusState private var isHostFocused: Bool
+    /// The suggestion ↑↓ is on; Tab or Enter takes it.
+    @State private var picked = 0
+    /// ↑↓ was used since the last edit: Enter takes the highlighted host instead of adding what's typed.
+    @State private var isPicking = false
 
     /// What Get logs brought back, for the project it belongs to.
     struct Logs {
@@ -79,71 +83,85 @@ struct ServersView: View {
 
     private func serverView(_ server: Server) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Text(server.title).font(Fonts.mono(12)).foregroundStyle(Tokens.text).lineLimit(1)
-                    Spacer()
-                    Button("Open shell") {
-                        do { try store.openShell(on: server); dismiss() } catch { note = error.localizedDescription }
-                    }
-                    .help("ssh \(server.host) in a meepo tab, like a terminal in VS Code")
-                    Button("Add logs…") { sourceFor = server.id; kind = .journal; name = "" }
-                        .help("Where this server's logs are: a service, a container or a file")
-                    Button(busy == "c\(server.id ?? 0)" ? "Looking…" : "Containers") { listContainers(server) }
-                        .disabled(busy != nil)
-                        .help("Lists the containers running on \(server.host) (docker ps) — click one to add its logs")
-                    Button("Remove…") { confirmRemove(server) }
+            HStack(spacing: 8) {
+                Text(server.title).font(Fonts.mono(12)).foregroundStyle(Tokens.text).lineLimit(1)
+                Spacer()
+                Button("Open shell") {
+                    do { try store.openShell(on: server); dismiss() } catch { note = error.localizedDescription }
                 }
-                if server.sources.isEmpty {
-                    Text("No logs yet — Add logs… or Containers.").font(.caption).foregroundStyle(Tokens.textDim)
-                }
-                ForEach(server.sources) { source in
-                    HStack(spacing: 8) {
-                        Text(ServerLogs.command(for: source) ?? source.name).font(Fonts.mono(11)).foregroundStyle(Tokens.screen)
-                            .lineLimit(1).truncationMode(.middle)
-                        Spacer()
-                        Button("×") { remove(source, from: server) }.help("Forget this log source")
-                        Button(busy == "\(server.id ?? 0)\(source.id)" ? "Reading…" : "Get logs") { getLogs(source, of: server) }
-                            .buttonStyle(PixelButtonStyle(compact: true, isPrimary: true))
-                            .disabled(busy != nil)
-                            .help("Runs only this on \(server.host) over ssh and shows the last \(ServerLogs.lines) lines")
-                    }
-                    .padding(.leading, 12)
-                }
-                if let names = server.id.flatMap({ containers[$0] }) {
-                    HStack(spacing: 6) {
-                        Text(names.isEmpty ? "No containers running." : "Running:").font(.caption).foregroundStyle(Tokens.textDim)
-                        ForEach(names, id: \.self) { container in
-                            Button(container) { add(LogSource(kind: .docker, name: container), to: server) }
-                                .disabled(server.sources.contains(LogSource(kind: .docker, name: container)))
-                        }
-                    }
-                    .padding(.leading, 12)
-                }
-                if sourceFor == server.id { addSourceForm(server) }
+                .help("ssh \(server.host) in a meepo tab, like a terminal in VS Code")
+                Button("Add logs…") { sourceFor = server.id; kind = .journal; name = "" }
+                    .help("Where this server's logs are: a service, a container or a file")
+                Button(busy == "c\(server.id ?? 0)" ? "Looking…" : "Containers") { listContainers(server) }
+                    .disabled(busy != nil)
+                    .help("Lists the containers running on \(server.host) (docker ps) — click one to add its logs")
+                Button("Remove…") { confirmRemove(server) }
             }
-            .padding(6)
-            .background(Tokens.grass)
+            if server.sources.isEmpty {
+                Text("No logs yet — Add logs… or Containers.").font(.caption).foregroundStyle(Tokens.textDim)
+            }
+            ForEach(server.sources) { source in
+                HStack(spacing: 8) {
+                    Text(ServerLogs.command(for: source) ?? source.name).font(Fonts.mono(11)).foregroundStyle(Tokens.screen)
+                        .lineLimit(1).truncationMode(.middle)
+                    Spacer()
+                    Button("×") { remove(source, from: server) }.help("Forget this log source")
+                    Button(busy == "\(server.id ?? 0)\(source.id)" ? "Reading…" : "Get logs") { getLogs(source, of: server) }
+                        .buttonStyle(PixelButtonStyle(compact: true, isPrimary: true))
+                        .disabled(busy != nil)
+                        .help("Runs only this on \(server.host) over ssh and shows the last \(ServerLogs.lines) lines")
+                }
+                .padding(.leading, 12)
+            }
+            if let names = server.id.flatMap({ containers[$0] }) {
+                HStack(spacing: 6) {
+                    Text(names.isEmpty ? "No containers running." : "Running:").font(.caption).foregroundStyle(Tokens.textDim)
+                    ForEach(names, id: \.self) { container in
+                        Button(container) { add(LogSource(kind: .docker, name: container), to: server) }
+                            .disabled(server.sources.contains(LogSource(kind: .docker, name: container)))
+                    }
+                }
+                .padding(.leading, 12)
+            }
+            if sourceFor == server.id { addSourceForm(server) }
         }
+        .padding(6)
+        .background(Tokens.grass)
+    }
 
-        /// Hosts that fit what's typed so far, as ssh commands; Tab takes the first.
-        private var matches: [String] {
-            let typed = host.trimmingCharacters(in: .whitespaces).replacing(/^ssh\s*/, with: "")
-            return sshHosts.map(SSHConfig.command(for:))
-                .filter { typed.isEmpty || $0.localizedCaseInsensitiveContains(typed) }
-                .filter { $0 != host.trimmingCharacters(in: .whitespaces) }
-                .prefix(100).map { $0 }
-        }
+    /// Hosts that fit what's typed so far, as ssh commands; Tab takes the first.
+    private var matches: [String] {
+        let typed = host.trimmingCharacters(in: .whitespaces).replacing(/^ssh\s*/, with: "")
+        return sshHosts.map(SSHConfig.command(for:))
+            .filter { typed.isEmpty || $0.localizedCaseInsensitiveContains(typed) }
+            .filter { $0 != host.trimmingCharacters(in: .whitespaces) }
+            .prefix(100).map { $0 }
+    }
 
-        private func addServerForm(_ projectId: Int64) -> some View {
-            VStack(alignment: .leading, spacing: 4) {
+    /// The highlighted suggestion into the field; ignored (Enter adds, Tab moves on) when there's none to take.
+    private func take() -> KeyPress.Result {
+        guard matches.indices.contains(picked) else { return .ignored }
+        host = matches[picked]
+        return .handled
+    }
+
+    private func move(_ step: Int) -> KeyPress.Result {
+        guard !matches.isEmpty else { return .ignored }
+        picked = min(max(picked + step, 0), matches.count - 1)
+        isPicking = true
+        return .handled
+    }
+
+    private func addServerForm(_ projectId: Int64) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 TextField("ssh root@1.2.3.4", text: $host).textFieldStyle(.roundedBorder).frame(width: 240)
                     .focused($isHostFocused)
-                    .onKeyPress(.tab) {
-                        guard let first = matches.first else { return .ignored }
-                        host = first
-                        return .handled
-                    }
+                    .onKeyPress(.tab) { take() }
+                    .onKeyPress(.return) { isPicking ? take() : .ignored } // picked with ↑↓: take it; else Enter adds
+                    .onKeyPress(.downArrow) { move(1) }
+                    .onKeyPress(.upArrow) { move(-1) }
+                    .onChange(of: host) { picked = 0; isPicking = false }
                     .help("As you'd type it in Terminal: ssh user@host, ssh -p 2222 user@host, or an alias from ~/.ssh/config")
                 TextField("label: prod, stage", text: $label).textFieldStyle(.roundedBorder).frame(width: 130)
                 Button(opensShell ? "Add and open shell" : "Add") {
@@ -162,19 +180,28 @@ struct ServersView: View {
             }
             // Like `ssh <Tab>` in a terminal: servers from your history, ~/.ssh/config and known_hosts.
             if !matches.isEmpty {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(matches, id: \.self) { match in
-                            Button(match) { host = match }
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(matches.enumerated()), id: \.element) { index, match in
+                                Button { host = match } label: {
+                                    Text(match).font(Fonts.mono(12))
+                                        .foregroundStyle(index == picked ? Tokens.text : Tokens.textDim)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.vertical, 3).padding(.horizontal, 4)
+                                        .background(index == picked ? Tokens.workTint : .clear, in: RoundedRectangle(cornerRadius: 4))
+                                        .contentShape(Rectangle())
+                                }
                                 .buttonStyle(.plain)
-                                .font(Fonts.mono(12))
-                                .foregroundStyle(match == matches.first ? Tokens.text : Tokens.textDim)
-                                .help(match == matches.first ? "Tab or click to use it" : "Click to use it")
+                                .id(index)
+                            }
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // A fixed height: inside the page's own scroll view a capped one grows to fit and never scrolls.
+                    .frame(height: min(CGFloat(matches.count) * 22, 200))
+                    .onChange(of: picked) { proxy.scrollTo(picked) }
                 }
-                .frame(maxHeight: 180) // every known host, scrolling past the first few
+                Text("↑↓ to pick · Tab or Enter to use · \(matches.count) known").font(.caption2).foregroundStyle(Tokens.textDim)
             }
         }
     }

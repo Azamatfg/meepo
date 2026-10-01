@@ -154,6 +154,11 @@ private struct TitleBar: View {
                     }
                     Menu {
                         Button("New Session…") { store.presentNewSession() }.disabled(store.projects.isEmpty)
+                        Button("Terminal") {
+                            do { try store.openTerminal() } catch { store.bridgeError = error.localizedDescription }
+                        }
+                        .disabled(store.projects.isEmpty)
+                        .help("Your own shell in the project folder, like VS Code's terminal")
                         Menu("Server Shell") {
                             ForEach(store.servers) { server in
                                 Button("\(store.projects.first { $0.id == server.projectId }?.name ?? "?") · \(server.title)") {
@@ -253,7 +258,7 @@ extension AppStore {
     /// A session tab's caption: the project, plus the session's name when the project has several.
     func tabLabel(of session: Session) -> String {
         let name = project(for: session)?.name ?? "?"
-        if session.sshHost != nil { return "\(name) · ssh \(displayName(of: session))" } // told apart from claude at a glance
+        if session.sshHost != nil { return "\(name) · \(session.isLocalTerminal ? "terminal" : "ssh " + displayName(of: session))" } // told apart from claude at a glance
         return sessions.filter { $0.projectId == session.projectId && $0.sshHost == nil }.count > 1 ? "\(name) · \(displayName(of: session))" : name
     }
 }
@@ -675,7 +680,7 @@ private struct TerminalPane: View {
             if let session = store.sessions.first(where: { $0.id == sessionId }) {
                 header(session)
                 Rectangle().fill(Tokens.line).frame(height: 1)
-                terminal(host: session.sshHost)
+                terminal(session)
                 if session.sshHost == nil { // stages, slash commands and voice are claude's
                     Rectangle().fill(Tokens.line).frame(height: 1)
                     StagePanel(session: session)
@@ -738,7 +743,7 @@ private struct TerminalPane: View {
         .help(isSplit ? "Drag by this bar onto another terminal to swap them" : "")
     }
 
-    private func terminal(host: String?) -> some View {
+    private func terminal(_ session: Session) -> some View {
         ZStack(alignment: .bottom) {
             Tokens.terminalBg
             if let view = store.terminalView(for: sessionId),
@@ -752,7 +757,7 @@ private struct TerminalPane: View {
                     .padding(8)
             }
             if store.terminalView(for: sessionId) == nil {
-                if let host {
+                if session.isServerShell, let host = session.sshHost {
                     HStack {
                         Text("Shell on \(host)")
                         Button("Connect") { store.connectShell(sessionId) }
@@ -767,8 +772,8 @@ private struct TerminalPane: View {
             }
             if store.exitedSessionIds.contains(sessionId) {
                 HStack {
-                    Text(host == nil ? "Session exited" : "Disconnected")
-                    Button(host == nil ? "Continue" : "Reconnect") { store.restartSession(sessionId) }
+                    Text(session.isServerShell ? "Disconnected" : session.isLocalTerminal ? "Terminal exited" : "Session exited")
+                    Button(session.isServerShell ? "Reconnect" : session.isLocalTerminal ? "Restart" : "Continue") { store.restartSession(sessionId) }
                         .buttonStyle(PixelButtonStyle(isPrimary: true))
                         .keyboardShortcut(.defaultAction)
                 }

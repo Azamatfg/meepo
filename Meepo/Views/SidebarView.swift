@@ -42,9 +42,9 @@ struct SessionsPanel: View {
 extension AppStore {
     func look(of session: Session) -> (ring: SelectionRing.Kind?, text: String) {
         guard let id = session.id else { return (nil, "") }
-        if exitedSessionIds.contains(id) { return (nil, session.sshHost == nil ? "Exited" : "Disconnected") }
-        guard runningSessionIds.contains(id) else { return (nil, session.sshHost == nil ? "Not running" : "Not connected") }
-        if session.sshHost != nil { return (.idle, "Connected") } // a shell sends no hook events
+        if exitedSessionIds.contains(id) { return (nil, session.isServerShell ? "Disconnected" : "Exited") }
+        guard runningSessionIds.contains(id) else { return (nil, session.isServerShell ? "Not connected" : "Not running") }
+        if session.sshHost != nil { return (.idle, session.isServerShell ? "Connected" : "Terminal") } // a shell sends no hook events
         if interruptedSessionIds.contains(id) { return (.sync, "Turn interrupted") }
         if relayingSessionIds.contains(id) { return (.sync, "Relaying…") }
         let full = (contextFraction(for: id) ?? 0) >= relayThreshold
@@ -133,8 +133,19 @@ struct SessionMenu: View {
             if !store.servers(of: session.projectId).isEmpty { Divider() }
             Button("Add a server…") { store.presentAddServer(projectId: session.projectId) }
         }
+        // The project's databases, read only for Claude: the schema, or the wizard to add one.
+        Menu("Database") {
+            ForEach(store.databases(of: session.projectId)) { database in
+                Button("Schema of \(database.label)") { if let id = database.id { store.presentDatabases(.schema(databaseId: id)) } }
+            }
+            if !store.databases(of: session.projectId).isEmpty { Divider() }
+            Button("Add database…") { store.presentDatabases(.add(projectId: session.projectId)) }
+        }
+        Button("Open Terminal Here") {
+            do { try store.openTerminal(projectId: session.projectId) } catch { store.bridgeError = error.localizedDescription }
+        }
         if session.sshHost != nil {
-            Button("Reconnect") { store.restartSession(session.id!) }
+            Button(session.isLocalTerminal ? "Restart" : "Reconnect") { store.restartSession(session.id!) }
             Divider()
             Button("Close Shell", role: .destructive) { store.closeSession(session.id!) }
         } else {
@@ -174,7 +185,7 @@ struct SessionLabel: View {
             if let projectName {
                 Text(projectName).foregroundStyle(Tokens.text)
             }
-            Text(session.sshHost.map { "ssh \($0)" } ?? session.branch ?? "no branch")
+            Text(session.shellCaption ?? session.branch ?? "no branch")
                 .font(Fonts.mono(12))
                 .foregroundStyle(Tokens.textDim)
             Spacer(minLength: 0)

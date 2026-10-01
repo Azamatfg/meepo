@@ -64,6 +64,7 @@ struct MeepoApp: App {
                     await services.requestNotificationPermission(store: store)
                     services.bindScreenshotHotKey(store.screenshotHotKey, store: store)
                     await store.restoreSessions()
+                    store.openDatabaseTunnels() // needs the login environment: ssh-agent's socket
                     Task { // off the launch path: transcripts and git for every folder take a moment
                         await store.refreshTitles()
                         await store.refreshWork()
@@ -277,6 +278,7 @@ final class QuitHandler: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
             guard let store else { return }
+            store.closeTunnels() // no ssh left behind
             let updated = store.installStagedUpdate()
             if store.relaunchAfterQuit, updated { Updater.relaunch(Bundle.main.bundleURL) }
         }

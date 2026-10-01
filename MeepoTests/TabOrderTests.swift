@@ -75,6 +75,17 @@ final class TabOrderTests: XCTestCase {
         XCTAssertEqual(store.visibleSessionIds, [before[1], before[0]], "the window would slide if the anchor stayed")
     }
 
+    /// More tabs than panes: the last tab shares the grid with the ones before it — never wrapped to the first tab.
+    func testLastTabIsShownWithItsNeighboursNotTheFirstTab() throws {
+        store.applyPreset(.full) // two panes
+        let (a1, b1, b2, b3) = (try newSession(in: 0), try newSession(in: 1), try newSession(in: 1), try newSession(in: 1))
+        store.selectedSessionId = a1
+        XCTAssertEqual(store.visibleSessionIds, [a1, b1])
+        store.selectedSessionId = b3
+        XCTAssertEqual(store.visibleSessionIds, [b2, b3], "not [b3, a1]: another project's session wrapped in")
+        _ = b1
+    }
+
     /// Opened after a drag: last, like a browser tab — the arranged tabs (and the grid) don't move.
     func testNewSessionGoesLastAndLeavesTheArrangement() throws {
         let (a1, b1) = (try newSession(in: 0), try newSession(in: 1))

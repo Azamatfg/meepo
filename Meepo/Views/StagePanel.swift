@@ -18,6 +18,8 @@ struct StagePanel: View {
     @State private var isStagesEdited = false
     /// How to use voice, shown once: the first time it's turned on.
     @State private var isVoiceHintShown = false
+    @State private var isDrawAsked = false
+    @State private var drawing: Diagram.Request?
 
     var body: some View {
         // Scrolls sideways when the window is narrow. Not ViewThatFits: on macOS 15 it measures its options on
@@ -121,6 +123,16 @@ struct StagePanel: View {
                     }
             }
             Spacer()
+            Button(store.drawingSessionIds.contains(session.id!) ? "DRAWING…" : "DRAW") { isDrawAsked = true }
+                .buttonStyle(PixelButtonStyle())
+                .help("A picture instead of text: Claude's last answer, what changed, or how something works")
+                .popover(isPresented: $isDrawAsked, arrowEdge: .top) {
+                    DrawPrompt { request in
+                        isDrawAsked = false
+                        drawing = request
+                    }
+                }
+                .sheet(item: $drawing) { DiagramSheet(sessionId: session.id!, request: $0) }
             Button("PHONE") { store.type("/remote-control\r", into: session.id!) }
                 .buttonStyle(PixelButtonStyle())
                 .help("Turn on Claude Code Remote Control: follow and answer this session from the Claude app or claude.ai")
@@ -425,5 +437,87 @@ private struct HandoffNotes: View {
         .padding(10)
         .frame(width: 420)
         .background(Tokens.grass)
+    }
+}
+
+/// DRAW's three kinds of picture; a question is answered by Claude reading the code.
+private struct DrawPrompt: View {
+    let pick: (Diagram.Request) -> Void
+    @State private var question = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("DRAW").font(Fonts.title(14))
+            Button("Claude's last answer") { pick(.lastAnswer) }
+                .help("The long answer above, as one picture")
+            Button("What changed") { pick(.changes) }
+                .help("What the uncommitted changes do, and where")
+            Text("How does… work?").font(Fonts.ui(12, weight: .semibold)).padding(.top, 4)
+            TextField("how a payment reaches the database", text: $question)
+                .textFieldStyle(.roundedBorder).frame(width: 300)
+                .onSubmit { if !question.trimmingCharacters(in: .whitespaces).isEmpty { pick(.question(question)) } }
+            Text("Claude reads the code to draw it; it changes nothing.").font(.caption).foregroundStyle(Tokens.textDim)
+        }
+        .buttonStyle(PixelButtonStyle(compact: true))
+        .padding(14)
+    }
+}
+
+/// The picture: drawn once on open, with Redraw and the Mermaid source to copy.
+struct DiagramSheet: View {
+    @Environment(AppStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    let sessionId: Int64
+    let request: Diagram.Request
+    @State private var result: Diagram.Result?
+    @State private var error: String?
+    private var isDrawing: Bool { store.drawingSessionIds.contains(sessionId) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(result?.title ?? "Drawing…").font(Fonts.ui(18, weight: .bold)).lineLimit(1)
+                Spacer()
+                if let result {
+                    Button("Copy Mermaid") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(result.mermaid, forType: .string)
+                    }
+                    .help("Paste into a README, a PR or mermaid.live")
+                }
+                Button("Redraw") { draw() }.disabled(isDrawing)
+                Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            if let caption = result?.caption {
+                Text(caption).font(Fonts.ui(14)).foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
+            }
+            if let error { Text(error).font(.caption).foregroundStyle(Tokens.danger).fixedSize(horizontal: false, vertical: true) }
+            ZStack {
+                RoundedRectangle(cornerRadius: 10).fill(Tokens.surface)
+                if let result {
+                    MermaidView(text: result.mermaid).padding(4)
+                } else if isDrawing {
+                    VStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Claude is drawing — about half a minute").font(.caption).foregroundStyle(Tokens.textDim)
+                    }
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                Text("drag to move · pinch or ⌘-scroll to zoom").font(.caption2).foregroundStyle(Tokens.textDim).padding(8)
+            }
+        }
+        .padding(18)
+        .frame(minWidth: 900, minHeight: 620)
+        .background(Tokens.grass)
+        .buttonStyle(PixelButtonStyle(compact: true))
+        .task { draw() }
+    }
+
+    private func draw() {
+        error = nil
+        Task {
+            do { result = try await store.draw(request, for: sessionId) } catch { self.error = error.localizedDescription }
+        }
     }
 }

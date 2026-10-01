@@ -13,13 +13,18 @@ enum ClaudeHeadless {
 
     /// A JSON answer checked against `schema`. A fresh, empty conversation — never a fork of a session's, which
     /// re-read the whole conversation (~600k tokens a click on a long day) and after /clear explained the wrong one.
-    static func jsonArguments(schema: String) -> [String] {
-        arguments + ["--output-format", "json", "--json-schema", schema]
+    /// `tools`: built-in tools it may use ("" = none); a DRAW question reads the project with read-only ones.
+    static func jsonArguments(schema: String, tools: String = "") -> [String] {
+        var args = arguments
+        if let flag = args.firstIndex(of: "--tools") { args[flag + 1] = tools }
+        return args + ["--output-format", "json", "--json-schema", schema]
     }
 
     /// Returns the JSON of the answer (`structured_output`).
-    static func askJSON(_ prompt: String, schema: String, claude: String, environment: [String: String]) async throws -> Data {
-        let output = try await run(prompt, claude: claude, environment: environment, arguments: jsonArguments(schema: schema))
+    static func askJSON(_ prompt: String, schema: String, claude: String, environment: [String: String],
+                        tools: String = "", directory: URL? = nil) async throws -> Data {
+        let output = try await run(prompt, claude: claude, environment: environment,
+                                   arguments: jsonArguments(schema: schema, tools: tools), directory: directory)
         guard let object = try? JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any],
               let structured = object["structured_output"],
               let data = try? JSONSerialization.data(withJSONObject: structured) else {
@@ -29,14 +34,15 @@ enum ClaudeHeadless {
     }
 
     /// Runs off the main thread; the login shell's environment carries PATH (nvm) and no CLAUDE_* leftovers.
+    /// `directory`: where claude runs (a DRAW question reads the project there); ~/.meepo otherwise.
     static func run(_ prompt: String, claude: String, environment: [String: String],
-                    arguments: [String] = arguments) async throws -> String {
+                    arguments: [String] = arguments, directory: URL? = nil) async throws -> String {
         try await Task.detached {
             let process = Process()
             process.executableURL = URL(filePath: claude)
             process.arguments = arguments
             process.environment = environment
-            process.currentDirectoryURL = MeepoHome.url
+            process.currentDirectoryURL = directory ?? MeepoHome.url
             let input = Pipe(), out = Pipe(), err = Pipe()
             process.standardInput = input
             process.standardOutput = out

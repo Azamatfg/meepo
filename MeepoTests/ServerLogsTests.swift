@@ -353,6 +353,21 @@ final class ServerShellTests: XCTestCase {
         XCTAssertEqual(store.sessions.count, 3, "the claude session is picked, none is added")
     }
 
+    /// + → Terminal: the user's own shell, placed like a server shell, and nothing meant for claude.
+    func testLocalTerminalIsAShellOfItsOwn() throws {
+        try store.createSession(projectId: projectId, model: nil, prompt: nil)
+        let claude = store.selectedSession!
+        store.shellsBeside = true
+        try store.openTerminal()
+        let terminal = store.selectedSession!
+        XCTAssertTrue(terminal.isLocalTerminal)
+        XCTAssertEqual(store.orderedSessions.map(\.id), [claude.id, terminal.id], "beside the session it was opened from")
+        XCTAssertEqual(store.tabLabel(of: terminal), "\(store.projects[0].name) · terminal")
+        XCTAssertEqual(store.modelLine(of: terminal), "terminal")
+        XCTAssertNil(store.logsTarget(in: projectId).flatMap { $0.id == terminal.id ? $0 : nil }, "logs never paste into a shell")
+        XCTAssertNil(ServerLogs.shellArguments(host: Session.localTerminal), "never an ssh with an empty host")
+    }
+
     /// The header and tab say where the shell is, not a model.
     func testShellShowsItsHostNotAModel() throws {
         try store.saveServer(Server(projectId: projectId, host: "stage"))

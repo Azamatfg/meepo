@@ -7,7 +7,9 @@ struct ToolsView: View {
     @State private var tab: Tab
     @State private var confirmation: PixelConfirmation?
 
-    enum Tab: String, CaseIterable { case docker = "DOCKER", ports = "PORTS", servers = "SERVERS", changes = "CHANGES" }
+    enum Tab: String, CaseIterable {
+        case docker = "DOCKER", ports = "PORTS", servers = "SERVERS", databases = "DATABASES", changes = "CHANGES"
+    }
 
     init(tab: Tab = .docker) {
         _tab = State(initialValue: tab)
@@ -29,6 +31,7 @@ struct ToolsView: View {
             case .docker: DockerView(confirmation: $confirmation)
             case .ports: PortsView(confirmation: $confirmation)
             case .servers: ServersView(confirmation: $confirmation)
+            case .databases: DatabasesView()
             case .changes: ChangesView(confirmation: $confirmation)
             }
         }
