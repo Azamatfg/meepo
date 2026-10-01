@@ -345,6 +345,16 @@ enum Postgres {
         return String(decoding: data, as: UTF8.self) + "\n"
     }
 
+    /// The servers in a .mcp.json that reach a Postgres (a postgres:// address among their arguments).
+    static func postgresServers(inMCP text: String) -> [String] {
+        guard let servers = ((try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any])?["mcpServers"] as? [String: Any]
+        else { return [] }
+        return servers.compactMap { name, value in
+            let args = (value as? [String: Any])?["args"] as? [String] ?? []
+            return args.contains { $0.hasPrefix("postgres://") || $0.hasPrefix("postgresql://") } ? name : nil
+        }.sorted()
+    }
+
     /// The .mcp.json server name for a database: "postgres" on this Mac's localhost, else after where it is
     /// ("postgres-main" for a server, "postgres-db-taxinet-kz" for a host).
     static func mcpName(for url: String, server: String?) -> String {

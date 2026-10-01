@@ -2280,7 +2280,39 @@ final class AppStore {
 
     /// Permission rules a project's sessions start with: each asking database's MCP server, every tool of it.
     func databaseAsks(for projectId: Int64?) -> [String] {
-        databases(of: projectId).filter(\.asksEachQuery).compactMap { $0.mcpName.map { "mcp__" + $0 } }
+        let project = projects.first { $0.id == projectId }
+        var asks = databases(of: projectId).filter(\.asksEachQuery).compactMap { $0.mcpName.map { "mcp__" + $0 } }
+        if let project, project.isImportant {
+            // Important: every server and database command, and every Postgres server Claude has in .mcp.json.
+            asks += Self.serverAndDatabaseAsks
+            let mcp = (try? String(contentsOf: URL(filePath: project.path).appending(path: ".mcp.json"), encoding: .utf8)) ?? ""
+            asks += Postgres.postgresServers(inMCP: mcp).map { "mcp__" + $0 }
+        }
+        var seen = Set<String>()
+        return asks.filter { seen.insert($0).inserted }
+    }
+
+    /// What an important project's sessions ask before: reaching a server, or a database from the shell.
+    static let serverAndDatabaseAsks = ["Bash(ssh:*)", "Bash(scp:*)", "Bash(rsync:*)", "Bash(sftp:*)", "Bash(docker exec:*)",
+                                        "Bash(docker compose exec:*)", "Bash(kubectl:*)", "Bash(psql:*)", "Bash(pg_dump:*)",
+                                        "Bash(mysql:*)"]
+
+    /// Important on or off; the project's running claude sessions are offered a restart (claude reads its rules at start).
+    func setImportant(_ projectId: Int64, _ on: Bool) {
+        guard var project = projects.first(where: { $0.id == projectId }) else { return }
+        project.isImportant = on
+        _ = try? db.write { try project.update($0) }
+        reload()
+        let running = sessions.filter { $0.projectId == projectId && $0.sshHost == nil && $0.id.map(runningSessionIds.contains) == true }
+        guard !running.isEmpty else { return }
+        let count = running.count == 1 ? "1 session" : "\(running.count) sessions"
+        confirmation = PixelConfirmation(
+            title: on ? "\(project.name) is important now" : "\(project.name) isn't marked important",
+            message: (on ? "Server and database commands will ask first: ssh, scp, docker exec, psql… and every query to its databases."
+                         : "Server and database commands run without asking again (a database set to ask still does).")
+                + " Claude reads this when it starts: restart \(count) to apply it now — the conversation continues.",
+            action: "Restart \(count)", cancel: "Later", isDestructive: false
+        ) { [weak self] in for session in running { if let id = session.id { self?.restartSession(id) } } }
     }
 
     // MARK: Tunnels — ssh -L to databases on servers, open while meepo runs

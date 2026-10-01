@@ -141,6 +141,11 @@ struct SessionMenu: View {
             if !store.databases(of: session.projectId).isEmpty { Divider() }
             Button("Add database…") { store.presentDatabases(.add(projectId: session.projectId)) }
         }
+        // Production projects: anything touching a server or a database asks first.
+        let important = store.projects.first { $0.id == session.projectId }?.isImportant ?? false
+        Button(important ? "✓ Important — asks before server & database commands" : "Mark Important — ask before server & database commands") {
+            store.setImportant(session.projectId, !important)
+        }
         Button("Open Terminal Here") {
             do { try store.openTerminal(projectId: session.projectId) } catch { store.bridgeError = error.localizedDescription }
         }

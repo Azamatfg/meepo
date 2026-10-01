@@ -701,6 +701,10 @@ private struct TerminalPane: View {
             SelectionRing(kind: look.ring)
             Text(store.project(for: session)?.name ?? "").font(Fonts.ui(14, weight: .bold))
                 .lineLimit(1).truncationMode(.middle).layoutPriority(2)
+            if store.project(for: session)?.isImportant == true {
+                Image(systemName: "lock.fill").font(.system(size: 10)).foregroundStyle(Tokens.textDim)
+                    .help("Important project: server and database commands ask first")
+            }
             Text(store.displayName(of: session)).font(Fonts.ui(14)).lineLimit(1).truncationMode(.tail).layoutPriority(1)
                 .onTapGesture(count: 2) { store.renamingSessionId = sessionId }
                 .help("Double-click to rename")

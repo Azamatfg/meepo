@@ -314,3 +314,26 @@ final class MCPRemoveTests: XCTestCase {
         XCTAssertNil(Postgres.mcpConfig(config, removing: "nope"), "nothing to remove: file left alone")
     }
 }
+
+
+@MainActor
+final class ImportantProjectTests: XCTestCase {
+    /// Important: server and database commands, and every Postgres server in .mcp.json, ask first; off, none do.
+    func testImportantProjectAsksBeforeServersAndDatabases() throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        let repo = try makeTempRepo()
+        try store.addProject(at: repo)
+        let projectId = store.projects[0].id!
+        try #"{"mcpServers":{"postgres":{"args":["postgresql://u@127.0.0.1/app"]},"github":{"command":"gh"}}}"#
+            .write(to: repo.appending(path: ".mcp.json"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(store.databaseAsks(for: projectId), [], "an ordinary project asks nothing extra")
+        store.setImportant(projectId, true)
+        let asks = store.databaseAsks(for: projectId)
+        XCTAssertTrue(asks.contains("Bash(ssh:*)") && asks.contains("Bash(docker exec:*)") && asks.contains("Bash(psql:*)"))
+        XCTAssertTrue(asks.contains("mcp__postgres") && !asks.contains("mcp__github"), "databases ask, other servers don't")
+        store.setImportant(projectId, false)
+        XCTAssertEqual(store.databaseAsks(for: projectId), [])
+    }
+}

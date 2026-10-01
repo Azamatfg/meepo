@@ -209,6 +209,11 @@ enum AppDatabase {
             try db.execute(sql: "UPDATE projectDatabase SET mcpName = 'postgres-main' WHERE serverId IS NOT NULL AND label LIKE '% on main'")
         }
 
+        // An important project: its sessions ask before any server or database command.
+        migrator.registerMigration("v20-important-projects") { db in
+            try db.alter(table: "project") { t in t.add(column: "isImportant", .boolean).notNull().defaults(to: false) }
+        }
+
         return migrator
     }
 }
