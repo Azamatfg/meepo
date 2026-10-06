@@ -157,6 +157,48 @@ final class BridgeReplyTests: XCTestCase {
         XCTAssertEqual(out, "[Meepo] Teammates pushed 1 new commit")
     }
 
+    /// A session running Meepo's mod gets its events from the mod: the script stays out, or each would come twice.
+    func testBridgeStaysOutOfSessionsRunningTheMod() async throws {
+        let home = FileManager.default.temporaryDirectory.appending(path: "bh-\(UUID().uuidString)")
+        let installer = BridgeInstaller(settingsURL: home.appending(path: "settings.json"), meepoHome: home.appending(path: ".meepo"))
+        try installer.writeScript()
+        let token = try MeepoHome.token(in: home.appending(path: ".meepo"))
+        let port = UInt16.random(in: 49_000...59_000)
+        var received: [Int64] = []
+        let server = EventServer(token: token) { id, _ in received.append(id) }
+        try server.start(port: port)
+        defer { server.stop() }
+        try await Task.sleep(for: .milliseconds(200))
+
+        for mod in [true, false] {
+            try await Task.detached {
+                let process = Process()
+                process.executableURL = URL(filePath: "/bin/bash")
+                process.arguments = [installer.scriptURL.path]
+                var env = ["HOME": home.path, "MEEPO_SESSION_ID": mod ? "7" : "8", "MEEPO_PORT": String(port), "PATH": "/usr/bin:/bin"]
+                if mod { env["MEEPO_MOD"] = "1" }
+                process.environment = env
+                let input = Pipe()
+                process.standardInput = input
+                process.standardOutput = Pipe()
+                try process.run()
+                input.fileHandleForWriting.write(Data(#"{"hook_event_name":"Stop","session_id":"s"}"#.utf8))
+                try input.fileHandleForWriting.close()
+                process.waitUntilExit()
+            }.value
+        }
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(received, [8], "only the session without the mod went through the script")
+    }
+
+    /// The mod forwards the events the bridge subscribes to — its `on()` names must be literals, so they're listed
+    /// by hand there and checked here.
+    func testModForwardsTheBridgesEvents() throws {
+        let source = try String(contentsOf: XCTUnwrap(Bundle.main.url(forResource: "MeepoMod/hooks/register", withExtension: "ts")), encoding: .utf8)
+        let hooked = Set(source.matches(of: /on\('classic\.(\w+)'/).map { String($0.1) })
+        XCTAssertEqual(hooked, Set(BridgeInstaller.events))
+    }
+
     func testEmptyReplyIs204WithNoBody() {
         let empty = String(decoding: EventServer.response(status: 204, text: ""), as: UTF8.self)
         XCTAssertTrue(empty.hasPrefix("HTTP/1.1 204") && empty.hasSuffix("\r\n\r\n"))

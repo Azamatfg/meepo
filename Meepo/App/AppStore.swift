@@ -147,6 +147,9 @@ final class AppStore {
     /// Resolves the login shell environment once, then brings every saved session back
     /// in the background so switching to it is instant.
     func restoreSessions() async {
+        // Here, not in init: a test run's app has an empty database and must not empty the user's guard.json.
+        if let bundled = Bundle.main.url(forResource: "MeepoMod", withExtension: nil) { try? bridge.writeMod(from: bundled) }
+        writeGuard()
         await resolveLogin()
     }
 
@@ -155,6 +158,12 @@ final class AppStore {
         isLoginResolved = false
         loginEnvironment = await Task.detached { ClaudeLauncher.resolveLoginEnvironment() }.value
         isLoginResolved = true
+        // Before any session starts: the version decides whether they load Meepo's mod.
+        if let login = loginEnvironment {
+            async let output = Task.detached { ClaudeLauncher.versionOutput(login: login) }.value
+            async let changelog = Task.detached { try? String(contentsOf: ClaudeChangelog.cacheFile, encoding: .utf8) }.value
+            if let version = await output.flatMap(ClaudeChangelog.version(fromCLI:)) { noteClaudeVersion(version, changelog: await changelog ?? "") }
+        }
         for session in orderedSessions where session.agentId == nil {
             if let id = session.id { startTerminalIfNeeded(id) }
         }
@@ -163,11 +172,6 @@ final class AppStore {
         if sessions.contains(where: { $0.agentId != nil }) { await refreshElsewhere() }
         for session in orderedSessions {
             if let id = session.id { startTerminalIfNeeded(id) }
-        }
-        if let login = loginEnvironment {
-            let output = await Task.detached { ClaudeLauncher.versionOutput(login: login) }.value
-            let changelog = await Task.detached { try? String(contentsOf: ClaudeChangelog.cacheFile, encoding: .utf8) }.value
-            if let version = output.flatMap(ClaudeChangelog.version(fromCLI:)) { noteClaudeVersion(version, changelog: changelog ?? "") }
         }
         await checkClaudeLogin()
     }
@@ -2285,11 +2289,16 @@ final class AppStore {
         if let project, project.isImportant {
             // Important: every server and database command, and every Postgres server Claude has in .mcp.json.
             asks += Self.serverAndDatabaseAsks
-            let mcp = (try? String(contentsOf: URL(filePath: project.path).appending(path: ".mcp.json"), encoding: .utf8)) ?? ""
-            asks += Postgres.postgresServers(inMCP: mcp).map { "mcp__" + $0 }
+            asks += postgresServers(of: project).map { "mcp__" + $0 }
         }
         var seen = Set<String>()
         return asks.filter { seen.insert($0).inserted }
+    }
+
+    /// The Postgres servers Claude has in the project's .mcp.json.
+    private func postgresServers(of project: Project) -> [String] {
+        let mcp = (try? String(contentsOf: URL(filePath: project.path).appending(path: ".mcp.json"), encoding: .utf8)) ?? ""
+        return Postgres.postgresServers(inMCP: mcp)
     }
 
     /// What an important project's sessions ask before: reaching a server, or a database from the shell.
@@ -2297,13 +2306,33 @@ final class AppStore {
                                         "Bash(docker compose exec:*)", "Bash(kubectl:*)", "Bash(psql:*)", "Bash(pg_dump:*)",
                                         "Bash(mysql:*)"]
 
-    /// Important on or off; the project's running claude sessions are offered a restart (claude reads its rules at start).
+    /// Meepo's mod for new sessions: when this claude runs mods and the copy is in place, else nil (the bridge).
+    var modForSessions: URL? {
+        guard ClaudeLauncher.supportsMods(claudeVersion), FileManager.default.fileExists(atPath: bridge.modURL.path) else { return nil }
+        return bridge.modURL
+    }
+
+    /// Sessions running Meepo's mod: they follow Important at once, through guard.json.
+    private(set) var modSessionIds: Set<Int64> = []
+
+    /// guard.json for the mod, what `databaseAsks` gives an important project: the commands ("ssh", "docker exec")
+    /// and each important project's path → its Postgres MCP servers.
+    func writeGuard() {
+        let commands = Self.serverAndDatabaseAsks.map { $0.replacingOccurrences(of: "Bash(", with: "").replacingOccurrences(of: ":*)", with: "") }
+        let projects = Dictionary(uniqueKeysWithValues: projects.filter(\.isImportant).map { ($0.path, postgresServers(of: $0)) })
+        try? bridge.writeGuard(["commands": commands, "projects": projects])
+    }
+
+    /// Important on or off. Sessions running the mod follow it at once; the others are offered a restart
+    /// (claude reads its rules at start).
     func setImportant(_ projectId: Int64, _ on: Bool) {
         guard var project = projects.first(where: { $0.id == projectId }) else { return }
         project.isImportant = on
         _ = try? db.write { try project.update($0) }
         reload()
-        let running = sessions.filter { $0.projectId == projectId && $0.sshHost == nil && $0.id.map(runningSessionIds.contains) == true }
+        writeGuard()
+        let running = sessions.filter { $0.projectId == projectId && $0.sshHost == nil && $0.id.map(runningSessionIds.contains) == true
+                                        && $0.id.map(modSessionIds.contains) != true }
         guard !running.isEmpty else { return }
         let count = running.count == 1 ? "1 session" : "\(running.count) sessions"
         confirmation = PixelConfirmation(
@@ -3014,6 +3043,7 @@ final class AppStore {
         exitedSessionIds.remove(id)
         guidedSessionIds.remove(id)
         darkSessionIds.remove(id)
+        modSessionIds.remove(id)
         lastTurnEvents[id] = nil
         initialPrompts[id] = nil
         holds[id] = nil
@@ -3048,11 +3078,14 @@ final class AppStore {
         guard existing.sshHost == nil else { if existing.isLocalTerminal { connectShell(sessionId) }; return }
         if existing.portBase == nil { assignPortBase(sessionId) } // sessions from before module 5
         guard let session = sessions.first(where: { $0.id == sessionId }) else { return }
+        let mod = attachId(for: session) == nil ? modForSessions : nil // an attached agent was started elsewhere
         terminals.start(session, projectPath: project.path, initialPrompt: initialPrompts.removeValue(forKey: sessionId),
                         login: login,
                         remoteControlName: remoteControlForNewSessions ? [project.name, session.branch].compactMap { $0 }.joined(separator: " · ") : nil,
-                        guided: guidedMode, asks: databaseAsks(for: project.id), attach: attachId(for: session))
+                        guided: guidedMode, asks: databaseAsks(for: project.id), attach: attachId(for: session),
+                        mod: mod)
         runningSessionIds.insert(sessionId)
+        if mod != nil { modSessionIds.insert(sessionId) } else { modSessionIds.remove(sessionId) }
         if guidedMode { guidedSessionIds.insert(sessionId) } else { guidedSessionIds.remove(sessionId) }
         if TerminalRegistry.isDark { darkSessionIds.insert(sessionId) } else { darkSessionIds.remove(sessionId) }
     }

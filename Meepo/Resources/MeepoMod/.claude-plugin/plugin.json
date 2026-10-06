@@ -1,0 +1,6 @@
+{
+  "name": "meepo",
+  "version": "0.1.0",
+  "description": "Meepo's sessions: hook events to the Meepo app, and important projects ask before servers and databases",
+  "author": { "name": "Azamat Bigali" }
+}

@@ -56,7 +56,7 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
 
     func start(_ session: Session, projectPath: String, initialPrompt: String?,
                login: ClaudeLauncher.LoginEnvironment, remoteControlName: String? = nil, guided: Bool = false,
-               asks: [String] = [], attach agentId: String? = nil) {
+               asks: [String] = [], attach agentId: String? = nil, mod: URL? = nil) {
         guard let id = session.id, views[id] == nil else { return }
         var (directory, createWorktree) = ClaudeLauncher.location(worktreeName: session.worktreeName, projectPath: projectPath)
         if let folder = session.folder, FileManager.default.fileExists(atPath: folder) { directory = folder }
@@ -67,6 +67,7 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
             ClaudeLauncher.sessionSettings(effort: session.effort,
                                                   statusLine: hasBridge ? bridge.statusLineCommand : nil,
                                                   guided: guided, dark: Self.isDark, asks: asks)
+            + (mod.map { ["--plugin-dir", $0.path] } ?? [])
             + ClaudeLauncher.claudeArguments(
             sessionId: session.claudeSessionId,
             resume: ClaudeLauncher.hasTranscript(sessionId: session.claudeSessionId),
@@ -82,6 +83,7 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
         // Lets meepo-bridge.sh tag every hook event with this session, even after /clear changes the claude id.
         var meepo = ["MEEPO_SESSION_ID": String(id), "MEEPO_PORT": String(EventServer.defaultPort)]
         if hasBridge, let own = bridge.userStatusLine() { meepo["MEEPO_USER_STATUSLINE"] = own }
+        if mod != nil { meepo["MEEPO_MOD"] = "1" } // the bridge script steps aside: the mod forwards the events
         if let base = session.portBase { // SPEC module 5: the session's own port range
             meepo["PORT"] = String(base)
             meepo["MEEPO_PORT_BASE"] = String(base)

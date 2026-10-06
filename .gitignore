@@ -19,3 +19,6 @@ xcuserdata/
 
 # XcodeGen output (regenerate: xcodegen generate)
 Meepo.xcodeproj/
+
+# Written by `claude plugin validate/test` (types for the editor)
+Meepo/Resources/MeepoMod/tsconfig.json

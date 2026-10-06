@@ -9,6 +9,14 @@ final class ClaudeLauncherTests: XCTestCase {
         XCTAssertEqual(args, ["--session-id", id, "--model", "opus", "fix login"])
     }
 
+    /// Mods from 2.1.291 (checked live); an older or not-yet-known claude keeps the bridge.
+    func testModsOnlyFromTheVersionTheyWereCheckedOn() {
+        XCTAssertTrue(ClaudeLauncher.supportsMods("2.1.291"))
+        XCTAssertTrue(ClaudeLauncher.supportsMods("2.2.0"))
+        XCTAssertFalse(ClaudeLauncher.supportsMods("2.1.290"))
+        XCTAssertFalse(ClaudeLauncher.supportsMods(nil))
+    }
+
     func testResumeNeverResendsInitialPrompt() {
         let args = ClaudeLauncher.claudeArguments(sessionId: id, resume: true, model: "sonnet", prompt: "fix login")
         XCTAssertEqual(args, ["--resume", id, "--model", "sonnet"])

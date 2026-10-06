@@ -29,6 +29,14 @@ enum ClaudeLauncher {
     static let guidedAsks = ["Bash(git push:*)", "Bash(git reset --hard:*)", "Bash(rm -rf:*)", "Bash(sudo:*)",
                              "Bash(npm publish:*)", "Edit(**/.env*)"]
 
+    /// Mods (`--plugin-dir` hooks modules with `classic.*` events) — checked live on 2.1.291; older claude, or
+    /// a version not known yet, keeps the hook bridge.
+    static func supportsMods(_ version: String?) -> Bool {
+        version.flatMap(Updater.Version.init).map { $0 >= firstModVersion } ?? false
+    }
+
+    private static let firstModVersion = Updater.Version("2.1.291")!
+
     static let ultracode = "ultracode"
     /// "" = Claude Code's default.
     static let effortLevels = ["", "low", "medium", "high", "xhigh", "max", ultracode]

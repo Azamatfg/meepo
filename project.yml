@@ -40,13 +40,17 @@ targets:
     platform: macOS
     sources:
       - path: Meepo
-        excludes: ["Resources/Monaco/**", "Resources/Mermaid/**", "Resources/meepo"]
+        excludes: ["Resources/Monaco/**", "Resources/Mermaid/**", "Resources/meepo", "Resources/MeepoMod/**"]
       # A folder reference keeps Monaco's vs/ tree intact in the bundle (its loader resolves by path).
       - path: Meepo/Resources/Monaco
         type: folder
         buildPhase: resources
       # Mermaid draws diagrams (database schemas, DRAW) in a web view, offline.
       - path: Meepo/Resources/Mermaid
+        type: folder
+        buildPhase: resources
+      # The Claude Code mod Meepo's sessions load (`--plugin-dir`), copied to ~/.meepo/mod at launch.
+      - path: Meepo/Resources/MeepoMod
         type: folder
         buildPhase: resources
       # The `meepo` command; the cask links it into PATH (keeps its executable bit in the bundle).

@@ -37,6 +37,8 @@ struct BridgeInstaller {
     #!/bin/bash
     # Meepo hook bridge: forwards Claude Code hook events to Meepo (https://github.com/Azamatfg/meepo).
     # Installed by Meepo; remove it from Meepo ("Remove Hook Bridge"), not by hand.
+    # A session running Meepo's mod (MEEPO_MOD) gets its events from the mod; the statusline still comes here.
+    [ -n "$MEEPO_MOD" ] && [ "$1" != "statusline" ] && exit 0
     if [ -z "$MEEPO_SESSION_ID" ] && [ "$1" != "statusline" ] && [ -d "$HOME/.meepo/attached" ]; then
       EVENT=$(cat)
       SID=$(printf '%s' "$EVENT" | grep -o '"session_id" *: *"[^"]*"' | head -1 | cut -d'"' -f4)
@@ -150,6 +152,28 @@ struct BridgeInstaller {
         try FileManager.default.createDirectory(at: scriptURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(Self.script.utf8).write(to: scriptURL, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+    }
+
+    /// The Claude Code mod Meepo's sessions load with `--plugin-dir` (Resources/MeepoMod): it forwards their hook
+    /// events instead of the script, and asks before servers and databases in important projects. A copy, not the
+    /// bundle's folder: an update (or a Debug build) replaces the bundle under running sessions.
+    var modURL: URL { meepoHome.appending(path: "mod") }
+
+    /// Failing leaves no copy, and sessions keep the bridge (`AppStore.modForSessions`).
+    func writeMod(from bundled: URL) throws {
+        try FileManager.default.createDirectory(at: meepoHome, withIntermediateDirectories: true)
+        try? FileManager.default.removeItem(at: modURL)
+        try FileManager.default.copyItem(at: bundled, to: modURL)
+    }
+
+    /// What the mod guards (see `AppStore.writeGuard`). Read on every tool call, so a toggle reaches running
+    /// sessions at once.
+    var guardURL: URL { meepoHome.appending(path: "guard.json") }
+
+    func writeGuard(_ important: [String: Any]) throws {
+        try FileManager.default.createDirectory(at: meepoHome, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: important, options: [.sortedKeys, .withoutEscapingSlashes])
+            .write(to: guardURL, options: .atomic)
     }
 
     /// Drops only handlers whose command is our script; groups/events left empty by that go too.
