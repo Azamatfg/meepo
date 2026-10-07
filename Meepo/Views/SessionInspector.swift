@@ -321,8 +321,8 @@ struct CIPanel: View {
 }
 
 /// CI of a repo that isn't a Meepo project: the default branch's pipeline, RUN for a manual step, the
-/// latest failed run. Shown, not acted on — autofix and notifications stay with projects.
-private struct RepoCI: View {
+/// latest failed run. No autofix: its failures are notified, and its sessions hear how runs end (`AppStore.refreshRepoCI`).
+struct RepoCI: View {
     @Environment(AppStore.self) private var store
     let repo: Repo
     let runs: [CIRun]
@@ -337,6 +337,10 @@ private struct RepoCI: View {
                 }
             } else if runs.isEmpty {
                 Text("No CI").font(.caption).foregroundStyle(Tokens.textDim)
+            } else {
+                // CI exists, just not on the main branch (st1_ocpp16: only on unify).
+                Text("No CI on the main branch — runs on \(Set(runs.map(\.headBranch)).sorted().joined(separator: ", "))")
+                    .font(.caption).foregroundStyle(Tokens.textDim)
             }
             if let failed = runs.first(where: \.failed) {
                 Link("✗ \(failed.workflowName) on \(failed.headBranch)", destination: URL(string: failed.url) ?? URL(string: "about:blank")!)

@@ -7,10 +7,15 @@ struct CIView: View {
     @State private var confirmation: PixelConfirmation?
     @State var showAll = false
     @State private var unfolded: Int64?
+    @State private var unfoldedRepo: String?
 
     var body: some View {
         let current = store.selectedSession.flatMap { store.project(for: $0) }
         let projects = store.projects.filter { store.ciRuns[$0.id!] != nil }
+        // Repos inside a plain project folder (alva → ocpi, tech-b…): a folder that isn't a repo has no CI of its own.
+        let repos = store.projects.flatMap { project in
+            (store.nestedRepos[project.path] ?? []).filter { store.repoCI[$0.path] != nil }.map { (project: project, repo: $0) }
+        }
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 4) {
                 Button("THIS") { showAll = false }.overlay { if !showAll { Bevel(raised: false) } }
@@ -21,16 +26,26 @@ struct CIView: View {
             .padding(8)
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
-                    if projects.isEmpty {
+                    if projects.isEmpty && repos.isEmpty {
                         Text("No CI yet. GitHub (gh) and GitLab (glab) projects are checked once a minute.")
                             .font(.caption).foregroundStyle(Tokens.textDim)
                     } else if showAll || current == nil {
                         ForEach(projects) { project in
-                            ProjectCISummary(project: project, isUnfolded: unfolded == project.id) {
+                            CISummary(name: project.name, pipeline: store.pipelines[project.id!], runs: store.ciRuns[project.id!] ?? [],
+                                      isUnfolded: unfolded == project.id) {
                                 unfolded = unfolded == project.id ? nil : project.id
                             }
                             if unfolded == project.id {
                                 ProjectCI(project: project, branch: nil, confirmation: $confirmation).padding(.leading, 8)
+                            }
+                        }
+                        ForEach(repos, id: \.repo.path) { item in
+                            CISummary(name: "\(item.project.name) · \(item.repo.name)", pipeline: store.repoCI[item.repo.path]?.pipeline,
+                                      runs: store.repoCI[item.repo.path]?.runs ?? [], isUnfolded: unfoldedRepo == item.repo.path) {
+                                unfoldedRepo = unfoldedRepo == item.repo.path ? nil : item.repo.path
+                            }
+                            if unfoldedRepo == item.repo.path, let ci = store.repoCI[item.repo.path] {
+                                RepoCI(repo: item.repo, runs: ci.runs, pipeline: ci.pipeline).padding(.leading, 8)
                             }
                         }
                     } else if let current {
@@ -48,19 +63,19 @@ struct CIView: View {
     }
 }
 
-/// ALL: name, one dot per pipeline step, RUN when a deploy can start.
-private struct ProjectCISummary: View {
-    @Environment(AppStore.self) private var store
-    let project: Project
+/// A project's or a repo's line in ALL: its name, why its last run didn't run, and each step's state.
+private struct CISummary: View {
+    let name: String
+    let pipeline: Pipeline?
+    let runs: [CIRun]
     let isUnfolded: Bool
     let onTap: () -> Void
 
     var body: some View {
-        let pipeline = store.pipelines[project.id!]
-        let head = store.ciRuns[project.id!]?.first { $0.headBranch == pipeline?.branch }
+        let head = runs.first { $0.headBranch == pipeline?.branch }
         HStack(spacing: 6) {
             Text(isUnfolded ? "▾" : "▸").font(Fonts.mono(12)).foregroundStyle(Tokens.textDim)
-            Text(project.name).foregroundStyle(Tokens.text).lineLimit(1)
+            Text(name).foregroundStyle(Tokens.text).lineLimit(1)
             Spacer()
             if let head, head.isInfraFailure {
                 Text(head.failureReason ?? "").font(.caption2).foregroundStyle(Tokens.warn).lineLimit(1)

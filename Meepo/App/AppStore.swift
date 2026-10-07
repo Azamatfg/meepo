@@ -290,6 +290,7 @@ final class AppStore {
     /// until meepo next opens, which restarts every session (claude --resume).
     func setGuidedMode(_ on: Bool) {
         guidedMode = on
+        writeGuard() // its asks reach sessions running the mod at once; the output style still needs a restart
         let states = turnStates
         let (now, later) = Self.guidedRestart(states, guided: on, hooks: isBridgeInstalled)
         let explaining = states.filter { state in
@@ -2023,6 +2024,28 @@ final class AppStore {
         for path in byFolder.keys where !path.isEmpty { await refreshWork(path) }
     }
 
+    /// News for sessions running the mod, which picks it up every 10 s (`EventServer.inbox`) and puts it in the
+    /// conversation for Claude to read on its next step.
+    private var inbox: [Int64: [String]] = [:]
+
+    /// The session's news as a JSON array of texts, once; nil when there's none.
+    func takeInbox(_ sessionId: Int64) -> String? {
+        guard let notes = inbox.removeValue(forKey: sessionId),
+              let data = try? JSONSerialization.data(withJSONObject: notes) else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// How a run's CI or deploy ended, for those of `ids` running the mod — named by the commit's message, as the
+    /// user knows commits; `repo` names a repo inside a project folder.
+    private func tellSessions(_ ids: [Int64], about run: CIRun, at path: String, repo: String? = nil) async {
+        let ids = ids.filter(modSessionIds.contains)
+        guard !ids.isEmpty else { return }
+        let sha = run.headSha
+        let subject = await Task.detached { GitService.output(["log", "-1", "--format=%s", sha], in: path) }.value
+        guard let note = CIGuard.sessionNote(run, commit: subject, repo: repo) else { return }
+        for id in ids { inbox[id, default: []].append(note) }
+    }
+
     /// The bridge's reply to a hook: the teammates note, handed over once, on the session's next prompt.
     func hookReply(sessionId: Int64, body: Data) -> String? {
         guard HookPayload(json: body)?.event == "UserPromptSubmit" else { return nil }
@@ -2043,8 +2066,9 @@ final class AppStore {
     private var fixAttempts: [String: Int] = [:] {
         didSet { defaults.set(fixAttempts, forKey: Self.fixAttemptsKey) }
     }
-    /// Run attempts already seen as failed, so each failure is handled once.
-    private var handledFailures: Set<String> = []
+    /// Run attempts already seen ended, so each is told and each failure handled once (the first pass after
+    /// launch only records them).
+    private var endedRuns: Set<String> = []
     private var isCIPrimed = false
     /// Injected in tests; otherwise GitHub Actions via `gh` and GitLab CI via `glab`, whichever is installed.
     var ciProviders: [any CIProvider] = []
@@ -2076,10 +2100,13 @@ final class AppStore {
             for run in latest.values {
                 let attemptsKey = "\(projectId)|\(run.key)"
                 if run.succeeded { fixAttempts[attemptsKey] = nil }
-                guard run.failed, handledFailures.insert("\(run.id)#\(run.attempt)").inserted, isCIPrimed else { continue }
+                guard isNewlyEnded(run) else { continue }
+                let ids = sessions.filter { $0.projectId == projectId && $0.branch == run.headBranch }.compactMap(\.id)
+                await tellSessions(ids, about: run, at: project.path)
                 let label = "\(project.name) · \(run.headBranch)"
-                switch CIGuard.action(for: run, fixAttempts: fixAttempts[attemptsKey] ?? 0,
-                                      autofix: autofixProjectIds.contains(projectId)) {
+                let action = CIGuard.action(for: run, fixAttempts: fixAttempts[attemptsKey] ?? 0,
+                                            autofix: autofixProjectIds.contains(projectId))
+                switch action {
                 case .rerun:
                     _ = await provider.rerunFailed(run, in: project.path)
                     onCINotice?("CI failed — rerunning once", "\(label): \(run.workflowName)")
@@ -2087,13 +2114,9 @@ final class AppStore {
                     await startCIFix(run, in: project, provider: provider)
                 case .giveUp:
                     onCINotice?("CI still failing — gave up", "\(label): \(run.workflowName) after \(CIGuard.maxFixAttempts) fixes")
-                case .reportInfra:
-                    onCINotice?("CI didn't run", "\(label): \(run.failureReason ?? "") — not a code failure")
-                case .reportDeploy:
-                    let logs = servers(of: projectId).contains { !$0.sources.isEmpty } ? " — Get server logs in the CI tab" : ""
-                    onCINotice?("Deploy failed", "\(label): \(run.workflowName) — not fixed automatically\(logs)")
-                case .none:
-                    onCINotice?("CI failed", "\(label): \(run.workflowName) — FIX in the CI tab")
+                case .none, .reportInfra, .reportDeploy:
+                    let logs = servers(of: projectId).contains { !$0.sources.isEmpty }
+                    if let notice = CIGuard.notice(action, for: run, label: label, serverLogs: logs) { onCINotice?(notice.title, notice.body) }
                 }
             }
         }
@@ -2101,8 +2124,14 @@ final class AppStore {
         isCIPrimed = true
     }
 
+    /// Ended and not seen before — and not on the first pass after launch, which only records what already ended.
+    private func isNewlyEnded(_ run: CIRun) -> Bool {
+        !run.isRunning && endedRuns.insert(run.attemptKey).inserted && isCIPrimed
+    }
+
     /// CI of repos that aren't Meepo projects themselves: the ones inside a plain project folder and "Also work
-    /// in" folders. Shown next to the project's CI; no autofix or notifications for them.
+    /// in" folders. Shown next to the project's CI; their sessions hear how runs end, and a failure inside a project
+    /// folder is notified like the project's own (no autofix: it opens a session in the project, not the repo).
     private(set) var repoCI: [String: (runs: [CIRun], pipeline: Pipeline?)] = [:]
 
     /// A step is running or queued somewhere: CI is polled more often.
@@ -2133,6 +2162,22 @@ final class AppStore {
             for run in runs where latest[run.key] == nil { latest[run.key] = run }
             let pipeline = await Pipeline.titled(await provider.pipeline(runs: runs, in: repo.path), in: repo.path)
             repoCI[repo.path] = (latest.values.sorted { $0.createdAt > $1.createdAt }, pipeline)
+            let ownerId = projectId(containing: repo.path)
+            for run in latest.values where isNewlyEnded(run) {
+                // The sessions working there hear it while the repo's checkout is on the run's branch.
+                let ids = sessions.filter { $0.projectId == ownerId || ($0.extraDirs ?? []).contains(repo.path) }.compactMap(\.id)
+                let path = repo.path
+                if ids.contains(where: modSessionIds.contains),
+                   await Task.detached(operation: { GitService.currentBranch(in: path) }).value == run.headBranch {
+                    await tellSessions(ids, about: run, at: repo.path, repo: repo.name)
+                }
+                // A failure inside a project folder is notified like the project's own, without autofix or FIX.
+                if let owner = projects.first(where: { $0.id == ownerId }), let notice = CIGuard.notice(
+                    CIGuard.action(for: run, fixAttempts: 0, autofix: false), for: run,
+                    label: "\(owner.name) · \(repo.name) · \(run.headBranch)", canFix: false) {
+                    onCINotice?(notice.title, notice.body)
+                }
+            }
         }
     }
 
@@ -2301,10 +2346,11 @@ final class AppStore {
         return Postgres.postgresServers(inMCP: mcp)
     }
 
-    /// What an important project's sessions ask before: reaching a server, or a database from the shell.
-    static let serverAndDatabaseAsks = ["Bash(ssh:*)", "Bash(scp:*)", "Bash(rsync:*)", "Bash(sftp:*)", "Bash(docker exec:*)",
-                                        "Bash(docker compose exec:*)", "Bash(kubectl:*)", "Bash(psql:*)", "Bash(pg_dump:*)",
-                                        "Bash(mysql:*)"]
+    /// What an important project's sessions ask before: reaching a server, or a database from the shell. The
+    /// commands are the source: Meepo's mod gets them as they are (`writeGuard`), claude as permission rules.
+    static let serverAndDatabaseCommands = ["ssh", "scp", "rsync", "sftp", "docker exec", "docker compose exec", "kubectl",
+                                            "psql", "pg_dump", "mysql"]
+    static let serverAndDatabaseAsks = serverAndDatabaseCommands.map { "Bash(\($0):*)" }
 
     /// Meepo's mod for new sessions: when this claude runs mods and the copy is in place, else nil (the bridge).
     var modForSessions: URL? {
@@ -2316,11 +2362,15 @@ final class AppStore {
     private(set) var modSessionIds: Set<Int64> = []
 
     /// guard.json for the mod, what `databaseAsks` gives an important project: the commands ("ssh", "docker exec")
-    /// and each important project's path → its Postgres MCP servers.
+    /// and each important project's path → its Postgres MCP servers; while guided mode is on, also what it asks
+    /// before: the commands ("git push") and the secrets files (".env").
     func writeGuard() {
-        let commands = Self.serverAndDatabaseAsks.map { $0.replacingOccurrences(of: "Bash(", with: "").replacingOccurrences(of: ":*)", with: "") }
         let projects = Dictionary(uniqueKeysWithValues: projects.filter(\.isImportant).map { ($0.path, postgresServers(of: $0)) })
-        try? bridge.writeGuard(["commands": commands, "projects": projects])
+        var contents: [String: Any] = ["commands": Self.serverAndDatabaseCommands, "projects": projects]
+        if guidedMode {
+            contents["guided"] = ["commands": ClaudeLauncher.guidedCommands, "files": ClaudeLauncher.guidedSecretFiles]
+        }
+        try? bridge.writeGuard(contents)
     }
 
     /// Important on or off. Sessions running the mod follow it at once; the others are offered a restart

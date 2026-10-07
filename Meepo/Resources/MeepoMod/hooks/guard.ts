@@ -1,16 +1,36 @@
 /** ~/.meepo/guard.json as Meepo writes it (AppStore.writeGuard): the commands an important project asks before
- *  ("ssh", "docker exec"), and each important project's path → its Postgres MCP servers. */
-export type Guard = { commands: string[], projects: Record<string, string[]> }
+ *  ("ssh", "docker exec"), each important project's path → its Postgres MCP servers, and while guided mode is on,
+ *  what it asks before everywhere: commands hard to take back ("git push") and secrets files (".env"). */
+export type Guard = { commands: string[], projects: Record<string, string[]>, guided?: { commands: string[], files: string[] } }
 
-/** Why an important project's session asks before this tool call, or undefined to let it through. A command
- *  counts anywhere in the line: after ; && | $( ` a quote or `bash -c`. `mcp`: the project's Postgres servers. */
+/** The tools that change files: guided mode asks before they touch a secrets file. */
+export const FILE_TOOLS = ['Edit', 'Write', 'MultiEdit']
+
+/** The first of `commands` a Bash call runs, anywhere in its line: after ; && | $( ` a quote or `bash -c`. */
+export function findCommand(tool: string, input: Record<string, unknown>, commands: string[]): string | undefined {
+  if (tool !== 'Bash' || commands.length === 0) return undefined
+  const line = String(input.command)
+  const words = commands.map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ +/g, '\\s+')).join('|')
+  return line.match(new RegExp(`(^|[\\s;&|(\`'"])(${words})(?=\\s|$|['"])`))?.[2]
+}
+
+/** Why an important project's session asks before this tool call, or undefined to let it through.
+ *  `mcp`: the project's Postgres servers. */
 export function askReason(tool: string, input: Record<string, unknown>, mcp: string[], commands: string[]): string | undefined {
-  if (tool === 'Bash' && commands.length > 0) {
-    const words = commands.map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ +/g, '\\s+')).join('|')
-    const found = String(input.command).match(new RegExp(`(^|[\\s;&|(\`'"])(${words})(?=\\s|$|['"])`))
-    if (found) return `Important project: this command reaches a server or a database (${found[2]}).`
-  }
+  const found = findCommand(tool, input, commands)
+  if (found) return `Important project: this command reaches a server or a database (${found}).`
   if (mcp.some(name => tool.startsWith(`mcp__${name}__`))) return `Important project: ${tool} queries its database.`
+  return undefined
+}
+
+/** Why guided mode asks before this tool call, or undefined to let it through. */
+export function guidedReason(tool: string, input: Record<string, unknown>, guided: { commands: string[], files: string[] }): string | undefined {
+  const found = findCommand(tool, input, guided.commands)
+  if (found) return `Guided mode: ${found} is hard to take back, so it asks first.`
+  const file = typeof input.file_path === 'string' ? input.file_path.split('/').at(-1) : undefined
+  if (FILE_TOOLS.includes(tool) && file && guided.files.some(prefix => file.startsWith(prefix))) {
+    return `Guided mode: ${file} holds secrets, so changing it asks first.`
+  }
   return undefined
 }
 

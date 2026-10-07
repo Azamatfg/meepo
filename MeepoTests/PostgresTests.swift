@@ -337,24 +337,41 @@ final class ImportantProjectTests: XCTestCase {
         XCTAssertEqual(store.databaseAsks(for: projectId), [])
     }
 
-    /// The mod reads guard.json on every tool call: a toggle reaches running sessions without a restart.
-    func testImportantToggleRewritesTheModsGuard() throws {
+    /// A store with its own ~/.meepo, and a reader of the guard.json it writes there.
+    private func makeGuardStore() throws -> (AppStore, () throws -> [String: Any]?) {
         let db = try DatabaseQueue()
         try AppDatabase.migrator.migrate(db)
         let tmp = FileManager.default.temporaryDirectory.appending(path: "guard-\(UUID().uuidString)")
         let bridge = BridgeInstaller(settingsURL: tmp.appending(path: "settings.json"), meepoHome: tmp)
         let store = AppStore(db: db, bridge: bridge, usageRoot: tmp, defaults: UserDefaults(suiteName: "meepo-tests-\(UUID().uuidString)")!)
+        return (store, { try JSONSerialization.jsonObject(with: Data(contentsOf: bridge.guardURL)) as? [String: Any] })
+    }
+
+    /// The mod reads guard.json on every tool call: a toggle reaches running sessions without a restart.
+    func testImportantToggleRewritesTheModsGuard() throws {
+        let (store, guardFile) = try makeGuardStore()
         let repo = try makeTempRepo()
         try store.addProject(at: repo)
         let project = store.projects[0]
         try #"{"mcpServers":{"postgres":{"args":["postgresql://u@127.0.0.1/app"]},"github":{"command":"gh"}}}"#
             .write(to: repo.appending(path: ".mcp.json"), atomically: true, encoding: .utf8)
-        let guardFile = { try JSONSerialization.jsonObject(with: Data(contentsOf: bridge.guardURL)) as? [String: Any] }
         store.setImportant(project.id!, true)
         XCTAssertEqual(try guardFile()?["projects"] as? [String: [String]], [project.path: ["postgres"]])
         let commands = try XCTUnwrap(try guardFile()?["commands"] as? [String])
         XCTAssertTrue(commands.contains("ssh") && commands.contains("docker compose exec"), "the asks' commands, bare: \(commands)")
         store.setImportant(project.id!, false)
         XCTAssertEqual(try guardFile()?["projects"] as? [String: [String]], [:])
+    }
+
+    /// Guided mode's asks reach the mod too, so `bash -c 'git push'` can't slip past them; off, they're gone.
+    func testGuidedModeWritesItsAsksToTheModsGuard() throws {
+        let (store, guardFile) = try makeGuardStore()
+        let guided = { try guardFile()?["guided"] as? [String: [String]] }
+        store.setGuidedMode(true)
+        let on = try XCTUnwrap(try guided())
+        XCTAssertTrue(on["commands"]?.contains("git push") == true && on["commands"]?.contains("rm -rf") == true, "\(on)")
+        XCTAssertEqual(on["files"], [".env"])
+        store.setGuidedMode(false)
+        XCTAssertNil(try guided())
     }
 }

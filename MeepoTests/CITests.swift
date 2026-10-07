@@ -63,6 +63,17 @@ private func ciRun(_ id: Int64, workflow: String = "CI", branch: String = "featu
 }
 
 final class CIGuardTests: XCTestCase {
+    /// The session hears the outcome by the commit's message; a failure also says where to look.
+    func testSessionNoteSaysHowTheRunEnded() {
+        XCTAssertEqual(CIGuard.sessionNote(ciRun(1, branch: "main", conclusion: "success"), commit: "feat: new icon"),
+                       "[Meepo] CI passed on main · “feat: new icon” — CI.")
+        XCTAssertEqual(CIGuard.sessionNote(ciRun(2, workflow: "Deploy prod", branch: "main"), commit: nil),
+                       "[Meepo] Deploy failed on main · abc123 — Deploy prod. See why: https://github.com/o/r/actions/runs/2")
+        XCTAssertNil(CIGuard.sessionNote(ciRun(3, conclusion: "cancelled"), commit: "x"), "neither passed nor failed: nothing to say")
+        XCTAssertEqual(CIGuard.sessionNote(ciRun(4, branch: "main", conclusion: "success"), commit: "fix: race", repo: "ocpi"),
+                       "[Meepo] CI passed on ocpi main · “fix: race” — CI.", "a repo inside the project folder is named")
+    }
+
     func testRulesFromTheSpec() {
         XCTAssertEqual(CIGuard.action(for: ciRun(1, conclusion: "success"), fixAttempts: 0, autofix: true), .none)
         XCTAssertEqual(CIGuard.action(for: ciRun(1), fixAttempts: 0, autofix: false), .none)          // notify only

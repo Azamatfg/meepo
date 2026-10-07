@@ -28,6 +28,8 @@ struct CIRun: Decodable, Equatable, Identifiable {
         workflowName.range(of: #"(?i)deploy|release|publish|push|\bcd\b"#, options: .regularExpression) != nil
     }
     var key: String { "\(workflowName)|\(headBranch)" }
+    /// This attempt of this run: what's handled once (a rerun is a new attempt).
+    var attemptKey: String { "\(databaseId)#\(attempt)" }
     /// Failed before running the code (no CI minutes, no runner…): rerunning or fixing code won't help.
     var isInfraFailure: Bool {
         failed && ["ci_quota_exceeded", "no_matching_runner", "runner_system_failure", "runner_unsupported",
@@ -90,7 +92,8 @@ struct Pipeline: Equatable {
     }
 
     /// "feat: new icon" — or the short hash when the subject isn't known.
-    var commitLabel: String { title.map { "“\($0)”" } ?? String(sha.prefix(7)) }
+    var commitLabel: String { Self.commitLabel(title: title, sha: sha) }
+    static func commitLabel(title: String?, sha: String) -> String { title.map { "“\($0)”" } ?? String(sha.prefix(7)) }
     /// For confirmations: "main · “feat: new icon” (d486833)".
     var commitDetail: String { "\(branch) · \(commitLabel) (\(sha.prefix(7)))" }
     /// The tooltip: "main @ d486833 — feat: new icon".
@@ -412,6 +415,30 @@ enum CIGuard {
         guard autofix else { return .none }
         if run.attempt < 2 { return .rerun }                  // flaky? try once more first
         return fixAttempts < maxFixAttempts ? .fix : .giveUp
+    }
+
+    /// What a session on the run's branch hears when the run ends — Meepo's mod puts it in the conversation:
+    /// "[Meepo] CI passed on main · “feat: x” — Build"; `repo` names one inside a project folder ("on ocpi main").
+    /// Nil while it runs, or when it ended otherwise (cancelled…).
+    static func sessionNote(_ run: CIRun, commit: String?, repo: String? = nil) -> String? {
+        guard let outcome = run.succeeded ? "passed" : run.failed ? "failed" : nil else { return nil }
+        let what = Pipeline.commitLabel(title: commit, sha: run.headSha)
+        let why = run.failed ? " See why: \(run.url)" : ""
+        let on = repo.map { "\($0) \(run.headBranch)" } ?? run.headBranch
+        return "[Meepo] \(run.isDeploy ? "Deploy" : "CI") \(outcome) on \(on) · \(what) — \(run.workflowName).\(why)"
+    }
+
+    /// The notification for a failure Meepo leaves to the user; nil for one it acts on (rerun, fix, give up) or
+    /// a run that didn't fail. `serverLogs`: the project reads its servers' logs; `canFix`: it has a FIX button.
+    static func notice(_ action: CIAction, for run: CIRun, label: String, serverLogs: Bool = false,
+                       canFix: Bool = true) -> (title: String, body: String)? {
+        switch action {
+        case .reportInfra: ("CI didn't run", "\(label): \(run.failureReason ?? "") — not a code failure")
+        case .reportDeploy: ("Deploy failed", "\(label): \(run.workflowName) — not fixed automatically"
+                                + (serverLogs ? " — Get server logs in the CI tab" : ""))
+        case .none: run.failed ? ("CI failed", "\(label): \(run.workflowName)" + (canFix ? " — FIX in the CI tab" : "")) : nil
+        case .rerun, .fix, .giveUp: nil
+        }
     }
 
     /// The fix session's first message: context in, guardrails on (never main/master, never force).

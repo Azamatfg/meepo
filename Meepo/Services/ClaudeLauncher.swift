@@ -26,8 +26,11 @@ enum ClaudeLauncher {
     /// turns hooks off, Meepo's bridge included. Read once, when claude starts (`--settings` is pinned then),
     /// so a running session changes mode only by restarting; /output-style would write the project's
     /// .claude/settings.local.json instead of switching only meepo's session.
-    static let guidedAsks = ["Bash(git push:*)", "Bash(git reset --hard:*)", "Bash(rm -rf:*)", "Bash(sudo:*)",
-                             "Bash(npm publish:*)", "Edit(**/.env*)"]
+    /// The commands and the secrets files (name prefixes) are the source: Meepo's mod gets them as they are
+    /// (`AppStore.writeGuard`), claude as permission rules.
+    static let guidedCommands = ["git push", "git reset --hard", "rm -rf", "sudo", "npm publish"]
+    static let guidedSecretFiles = [".env"]
+    static let guidedAsks = guidedCommands.map { "Bash(\($0):*)" } + guidedSecretFiles.map { "Edit(**/\($0)*)" }
 
     /// Mods (`--plugin-dir` hooks modules with `classic.*` events) — checked live on 2.1.291; older claude, or
     /// a version not known yet, keeps the hook bridge.

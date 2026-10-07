@@ -74,6 +74,34 @@ final class HTTPRequestTests: XCTestCase {
         var noSession = ok
         noSession.headers["x-meepo-session"] = nil
         XCTAssertEqual(EventServer.route(noSession, token: "t").status, 400)
+        var inbox = ok
+        inbox.path = "/inbox"
+        XCTAssertEqual(EventServer.route(inbox, token: "t").sessionId, 7, "the mod's pickup: same token and session")
+        XCTAssertEqual(EventServer.route(inbox, token: "other").status, 401)
+    }
+
+    /// The mod's pickup gets the session's news once, and isn't mistaken for a hook event.
+    @MainActor
+    func testInboxHandsNewsOnceAndIsNoEvent() async throws {
+        let port = UInt16.random(in: 49_000...59_000)
+        var events = 0
+        var news: [Int64: String] = [7: #"["[Meepo] CI passed"]"#]
+        let server = EventServer(token: "t") { _, _ in events += 1 }
+        server.inbox = { news.removeValue(forKey: $0) }
+        try server.start(port: port)
+        defer { server.stop() }
+        try await Task.sleep(for: .milliseconds(200))
+        func pickUp() async throws -> String {
+            var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/inbox")!)
+            request.httpMethod = "POST"
+            request.setValue("t", forHTTPHeaderField: "X-Meepo-Token")
+            request.setValue("7", forHTTPHeaderField: "X-Meepo-Session")
+            return String(decoding: try await URLSession.shared.data(for: request).0, as: UTF8.self)
+        }
+        let first = try await pickUp(), second = try await pickUp()
+        XCTAssertEqual(first, #"["[Meepo] CI passed"]"#)
+        XCTAssertEqual(second, "")
+        XCTAssertEqual(events, 0)
     }
 }
 
