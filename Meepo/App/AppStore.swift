@@ -80,7 +80,7 @@ final class AppStore {
     /// False when macOS refuses Meepo's notifications (turned off in System Settings).
     var notificationsAllowed = true
 
-    private static let eventRetention: TimeInterval = 7 * 24 * 3600
+    static let eventRetention: TimeInterval = 7 * 24 * 3600
     private static let feedLimit = 200
 
     init(db: DatabaseQueue, bridge: BridgeInstaller = BridgeInstaller(), usageRoot: URL = UsageScanner.defaultRoot,
@@ -600,12 +600,58 @@ final class AppStore {
     /// Reads history.jsonl off the main thread and finds chains and repeated requests.
     func refreshSuggestions() async {
         let known = Set(commandsByProject.values.flatMap { $0.map(\.name) } + CommandCatalog.builtIns.map(\.name))
+        // Repos meepo already shows, as their real folders: alva/ocpi is a link to ~/Projects/ocpi.
+        let shownRepos = Set((projects.map(\.path) + nestedRepos.values.flatMap { $0.map(\.path) }
+                              + sessions.flatMap { $0.extraDirs ?? [] }).map(Self.realPath))
+        let db = self.db
         suggestions = await Task.detached {
             let text = (try? String(contentsOf: Automations.historyFile, encoding: .utf8)) ?? ""
             let entries = Noticing.entries(historyLines: text.split(separator: "\n"))
             let since = Date.now.addingTimeInterval(-Noticing.window)
+            let events = (try? db.read { db in
+                try Row.fetchAll(db, sql: """
+                    SELECT project.path, project.name, hookEvent.summary FROM hookEvent
+                    JOIN session ON session.id = hookEvent.sessionId JOIN project ON project.id = session.projectId
+                    WHERE hookEvent.name = 'PreToolUse' AND (hookEvent.summary LIKE 'Bash:%cd %' OR hookEvent.summary LIKE 'Bash:%-C %'
+                      OR hookEvent.summary LIKE 'Read:%' OR hookEvent.summary LIKE 'Edit:%' OR hookEvent.summary LIKE 'Write:%'
+                      OR hookEvent.summary LIKE 'MultiEdit:%')
+                    """).map { (project: $0["path"] as String, name: $0["name"] as String, summary: ($0["summary"] as String?) ?? "") }
+            }) ?? []
+            // Thousands of events, a handful of folders: each resolved once.
+            var real: [String: String] = [:], roots: [String: String?] = [:]
+            let resolved = events.map { event in
+                (project: real[event.project] ?? { let path = Self.realPath(event.project); real[event.project] = path; return path }(),
+                 name: event.name, summary: event.summary)
+            }
             return Noticing.chains(entries, known: known, since: since) + Noticing.repeatedPrompts(entries, since: since)
+                + Noticing.neighborRepos(resolved, home: Self.realPath(NSHomeDirectory()), isKnown: shownRepos.contains) { path in
+                    if let known = roots[path] { return known }
+                    let root = Self.repoRoot(path)
+                    roots[path] = root
+                    return root
+                }
         }.value + usageSuggestions()
+    }
+
+    /// The folder with every symlink resolved, so a project folder's link and its target compare equal.
+    nonisolated static func realPath(_ path: String) -> String { URL(filePath: path).resolvingSymlinksInPath().path }
+
+    /// The git repo holding `path` (its real folder), if any.
+    nonisolated static func repoRoot(_ path: String) -> String? {
+        var url = URL(filePath: realPath(path))
+        while url.path != "/" {
+            if FileManager.default.fileExists(atPath: url.appending(path: ".git").path) { return url.path }
+            url = url.deletingLastPathComponent()
+        }
+        return nil
+    }
+
+    /// "Add to meepo" on a repo the project's sessions keep working in: a project of its own, with its CI,
+    /// Source Control and notifications.
+    func addNeighborRepo(_ suggestion: Noticing.Suggestion) throws {
+        guard case let .neighborRepo(repo, _) = suggestion.kind else { return }
+        try addProject(at: URL(filePath: repo))
+        markApplied(suggestion)
     }
 
     /// Panels in the layout and stages on the bar not used once in `UsageCounts.quietDays` (counting on that long).
@@ -2028,11 +2074,77 @@ final class AppStore {
     /// conversation for Claude to read on its next step.
     private var inbox: [Int64: [String]] = [:]
 
-    /// The session's news as a JSON array of texts, once; nil when there's none.
-    func takeInbox(_ sessionId: Int64) -> String? {
-        guard let notes = inbox.removeValue(forKey: sessionId),
-              let data = try? JSONSerialization.data(withJSONObject: notes) else { return nil }
-        return String(decoding: data, as: UTF8.self)
+    /// Meepo's mod asking (`EventServer.request`). `/inbox`: the session's news, once, and what waits for the
+    /// person there now — `{"notes": [text], "waiting": [{"key", "text"}]}`. `/run`: Run pressed on one of those in
+    /// the terminal — the CI panel's own confirmation, in meepo's window; nothing starts without it.
+    func modRequest(_ path: String, sessionId: Int64, body: Data) -> String? {
+        switch path {
+        case "/inbox":
+            let reply: [String: Any] = ["notes": inbox.removeValue(forKey: sessionId) ?? [],
+                                        "waiting": waiting(for: sessionId).map { ["key": $0.key, "text": $0.text, "canRun": $0.canRun] }]
+            return (try? JSONSerialization.data(withJSONObject: reply)).map { String(decoding: $0, as: UTF8.self) }
+        case "/run":
+            let key = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["key"] as? String
+            if let item = waiting(for: sessionId).first(where: { $0.key == key && $0.canRun }) {
+                confirmation = .run(item.step, of: item.pipeline, in: item.name) { Task { await item.start() } }
+            }
+            return nil
+        default:
+            return nil
+        }
+    }
+
+    /// A step the person should see in the terminal now: waiting for their click (a deploy), or one under way —
+    /// running, or queued once started — in the session's project or a repo inside its folder.
+    struct WaitingStep {
+        let key: String
+        let name: String
+        let step: Pipeline.Step
+        let pipeline: Pipeline
+        let start: @MainActor () async -> Void
+        var now = Date.now
+        var canRun: Bool { step.state == .manual }
+        /// One terminal line: "ocpi · Deploy waits for you — “fix: race in the fake Alva, lint…”",
+        /// "tech-b · Deploy is running · 2 min — …", "… is queued · 6 min, no runner has taken it — …".
+        var text: String {
+            let title = pipeline.title.map { $0.count > 40 ? String($0.prefix(39)) + "…" : $0 }
+            let minutes = step.started.map { max(0, Int(now.timeIntervalSince($0) / 60)) } ?? 0
+            let what = switch step.state {
+            case .running: "is running · \(minutes) min"
+            case .pending: "is queued · \(minutes) min" + (minutes >= 3 ? ", no runner has taken it" : "")
+            default: "waits for you"
+            }
+            return "\(name) · \(step.name) \(what) — \(Pipeline.commitLabel(title: title, sha: pipeline.sha))"
+        }
+    }
+
+    func waiting(for sessionId: Int64) -> [WaitingStep] {
+        guard let session = sessions.first(where: { $0.id == sessionId }), let project = project(for: session) else { return [] }
+        // A pending step counts once started (queued); one not started yet just waits behind earlier steps.
+        func shown(_ pipeline: Pipeline?) -> [Pipeline.Step] {
+            pipeline.map { pipeline in
+                pipeline.steps.filter { ($0.state == .manual && pipeline.canStart($0)) || $0.state == .running
+                    || ($0.state == .pending && $0.started != nil) }
+            } ?? []
+        }
+        var found: [WaitingStep] = []
+        if let pipeline = project.id.flatMap({ pipelines[$0] }) {
+            found += shown(pipeline).map { step in
+                WaitingStep(key: "\(project.path)|\(step.name)", name: project.name, step: step, pipeline: pipeline) { [weak self] in
+                    await self?.startPipelineStep(step, in: project)
+                }
+            }
+        }
+        let repos = (nestedRepos[project.path] ?? []) + (session.extraDirs ?? []).map { Repo(name: URL(filePath: $0).lastPathComponent, path: $0) }
+        for repo in repos {
+            guard let pipeline = repoCI[repo.path]?.pipeline else { continue }
+            found += shown(pipeline).map { step in
+                WaitingStep(key: "\(repo.path)|\(step.name)", name: repo.name, step: step, pipeline: pipeline) { [weak self] in
+                    await self?.startRepoPipelineStep(step, in: repo)
+                }
+            }
+        }
+        return found
     }
 
     /// How a run's CI or deploy ended, for those of `ids` running the mod — named by the commit's message, as the

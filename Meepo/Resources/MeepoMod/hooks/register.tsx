@@ -1,5 +1,10 @@
+import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
+import type { Waiting } from '../types'
 import { askReason, FILE_TOOLS, guidedReason, importantProject, type Guard } from './guard'
+
+/** What waits for the person's click in this session's project (a deploy), as of Meepo's last answer. */
+const waiting = atom({ plugin: 'meepo', key: 'waiting' } as const, [])
 
 // Loaded only into the sessions Meepo starts (`claude --plugin-dir ~/.meepo/mod`), which carry MEEPO_SESSION_ID.
 // It does what meepo-bridge.sh does for them (that script steps aside when MEEPO_MOD is set), plus the guard.
@@ -9,8 +14,9 @@ async function meepoFile($: any, name: string): Promise<string> {
   return $.fs.read(`${await $.env.get('HOME')}/.meepo/${name}`).catch(() => '')
 }
 
-/** Asks Meepo's EventServer: `/event` with a hook event, as meepo-bridge.sh does, or `/inbox`; returns its reply. */
-async function post($: any, path: '/event' | '/inbox', payload: object = {}) {
+/** Asks Meepo's EventServer: `/event` with a hook event, as meepo-bridge.sh does, `/inbox` or `/run`; returns its
+ *  reply. */
+async function post($: any, path: '/event' | '/inbox' | '/run', payload: object = {}) {
   const session = await $.env.get('MEEPO_SESSION_ID')
   const port = await $.env.get('MEEPO_PORT')
   if (!session || !port) return ''
@@ -24,7 +30,7 @@ async function post($: any, path: '/event' | '/inbox', payload: object = {}) {
 }
 
 /** Meepo's news for this session (CI and deploy of its branch, …), every 10 s: Claude reads each as context on
- *  its next step — a quiet session isn't woken — and the person sees it as a toast. */
+ *  its next step — a quiet session isn't woken — and the person sees it as a toast. Also what waits for them. */
 async function startInbox($: any, e: any, next: any) {
   const started = await next(e)
   $.clock.every(10_000, () => checkInbox($))
@@ -32,11 +38,38 @@ async function startInbox($: any, e: any, next: any) {
 }
 
 async function checkInbox($: any) {
-  const notes: string[] = JSON.parse((await post($, '/inbox')) || '[]')
-  for (const text of notes) {
+  const reply: { notes?: string[], waiting?: Waiting[] } = JSON.parse((await post($, '/inbox')) || '{}')
+  // Kept as it is when nothing changed: a write redraws the band in every session, every 10 s.
+  const fresh = reply.waiting ?? []
+  await update($, waiting, old => (JSON.stringify(old) === JSON.stringify(fresh) ? old : fresh))
+  for (const text of reply.notes ?? []) {
     $.ui.toast(text, { timeoutMs: 8000 })
     await $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })
   }
+}
+
+/** Above the prompt, only while there's something: "ocpi · Deploy waits for you — “…” [Run]", and once started
+ *  "… is running · 2 min" or "… is queued · 6 min, no runner has taken it". Run asks Meepo, which confirms in its
+ *  window as its CI panel does — nothing starts from the terminal alone. */
+async function waitingBand($: any, e: any, next: any) {
+  const items: Waiting[] = await read($, waiting)
+  if (items.length === 0 || e.props.hasSurvey) return next(e)
+  const { Box, Button, Text } = $.ui.resolve(e)
+  return (
+    <Box flexDirection="column">
+      {items.map(item => (
+        <Box>
+          <Text color={item.canRun ? 'yellow' : 'cyan'}>{item.text} </Text>
+          {item.canRun && (
+            <Button key={item.key} label="Run" onPress={async () => {
+              await post($, '/run', { key: item.key })
+              $.ui.toast('Confirm it in meepo’s window')
+            }} />
+          )}
+        </Box>
+      ))}
+    </Box>
+  )
 }
 
 async function forward($: any, e: any, next: any) {
@@ -52,6 +85,7 @@ async function readGuard($: any): Promise<Guard> {
 export const register: Register = on => {
   // Same events as BridgeInstaller.events; Meepo's reply to a prompt is context for Claude.
   on('session.start', startInbox)
+  on('ui.render', { component: 'AbovePrompt' }, waitingBand)
   on('classic.SessionStart', forward)
   on('classic.SessionEnd', forward)
   on('classic.PostToolUse', forward)

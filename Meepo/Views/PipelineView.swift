@@ -132,11 +132,7 @@ struct PipelineView: View {
     }
 
     private func confirm(_ step: Pipeline.Step) {
-        confirm(PixelConfirmation(
-            title: "Run \(step.name)?",
-            message: "\(name) · \(pipeline.commitDetail)" + (Pipeline.Step.purpose(of: step.name).map { " — it \($0)." } ?? ""),
-            action: "Run"
-        ) { Task { await start(step) } })
+        confirm(.run(step, of: pipeline, in: name) { Task { await start(step) } })
     }
 
     /// A step that puts things live is only ever started with a confirmation (Run), never by Rerun.
@@ -150,5 +146,15 @@ struct PipelineView: View {
         if total < 60 { return "\(total)s" }
         if total < 3600 { return "\(total / 60)m \(total % 60)s" }
         return "\(total / 3600)h \(total % 3600 / 60)m"
+    }
+}
+
+extension PixelConfirmation {
+    /// Run on a step that waits for a click (a deploy) — from the CI panel or the terminal's band alike.
+    static func run(_ step: Pipeline.Step, of pipeline: Pipeline, in name: String, perform: @escaping () -> Void) -> PixelConfirmation {
+        PixelConfirmation(
+            title: "Run \(step.name)?",
+            message: "\(name) · \(pipeline.commitDetail)" + (Pipeline.Step.purpose(of: step.name).map { " — it \($0)." } ?? ""),
+            action: "Run", perform: perform)
     }
 }

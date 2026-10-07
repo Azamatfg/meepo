@@ -40,8 +40,9 @@ final class EventServer {
     var onFailure: ((String) -> Void)?
     /// Text to hand back to the hook (Claude reads a UserPromptSubmit hook's stdout as extra context); nil = none.
     var reply: ((Int64, Data) -> String?)?
-    /// What Meepo's mod picks up for a session when it asks (`POST /inbox`, every few seconds); nil = nothing new.
-    var inbox: ((Int64) -> String?)?
+    /// Meepo's mod asking rather than reporting: `/inbox` (its news, every few seconds) or `/run` (a step's
+    /// Run pressed in the terminal) — path, session, body → reply text, nil for none.
+    var request: ((String, Int64, Data) -> String?)?
 
     /// `onEvent` gets the Meepo session id (from the bridge's header) and the raw hook JSON.
     init(token: String, onEvent: @escaping (Int64, Data) -> Void) {
@@ -74,7 +75,7 @@ final class EventServer {
 
     /// HTTP status for a request, plus the session it belongs to when accepted.
     nonisolated static func route(_ request: HTTPRequest, token: String) -> (status: Int, sessionId: Int64?) {
-        guard request.method == "POST", ["/event", "/inbox"].contains(request.path) else { return (404, nil) }
+        guard request.method == "POST", ["/event", "/inbox", "/run"].contains(request.path) else { return (404, nil) }
         guard request.headers["x-meepo-token"] == token else { return (401, nil) }
         guard let id = request.headers["x-meepo-session"].flatMap({ Int64($0) }) else { return (400, nil) }
         return (204, id)
@@ -103,10 +104,10 @@ final class EventServer {
 
     private func respond(_ connection: NWConnection, to request: HTTPRequest) {
         let (status, sessionId) = Self.route(request, token: token)
-        let isInbox = request.path == "/inbox"
-        let text = sessionId.flatMap { isInbox ? inbox?($0) : reply?($0, request.body) } ?? ""
+        let isEvent = request.path == "/event"
+        let text = sessionId.flatMap { isEvent ? reply?($0, request.body) : self.request?(request.path, $0, request.body) } ?? ""
         connection.send(content: Self.response(status: status, text: text), completion: .contentProcessed { _ in connection.cancel() })
-        if let sessionId, !isInbox { onEvent(sessionId, request.body) }
+        if let sessionId, isEvent { onEvent(sessionId, request.body) }
     }
 
     /// 204 without a body, 200 with the reply text, or the error status.

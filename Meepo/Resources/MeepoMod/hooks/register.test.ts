@@ -109,7 +109,7 @@ test('PreToolUse reaches Meepo in the shape meepo-bridge.sh sent', async ($, on)
 // The append into the conversation is checked live: the kit's test hooks don't answer a `$.session.append`
 // made from a timer (2.1.291).
 test("Meepo's news is picked up every 10 s and shown to the person", async ($, on) => {
-  const { posts } = world(on, '/work/app', JSON.stringify(['[Meepo] CI passed on main · “feat: x”: Build']))
+  const { posts } = world(on, '/work/app', JSON.stringify({ notes: ['[Meepo] CI passed on main · “feat: x”: Build'], waiting: [] }))
   const toasts: string[] = []
   on('ui.toast', ($: any, e: any) => { toasts.push(e.text); return { value: undefined } })
   on('session.start', ($: any, e: any) => ({ cwd: e.cwd }))

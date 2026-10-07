@@ -227,7 +227,7 @@ final class LiveServices {
             }
             server.onFailure = { [weak store] message in store?.bridgeError = message }
             server.reply = { [weak store] sessionId, body in store?.hookReply(sessionId: sessionId, body: body) }
-            server.inbox = { [weak store] sessionId in store?.takeInbox(sessionId) }
+            server.request = { [weak store] path, sessionId, body in store?.modRequest(path, sessionId: sessionId, body: body) }
             try server.start()
             self.server = server
         } catch {

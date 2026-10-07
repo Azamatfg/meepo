@@ -87,7 +87,7 @@ final class HTTPRequestTests: XCTestCase {
         var events = 0
         var news: [Int64: String] = [7: #"["[Meepo] CI passed"]"#]
         let server = EventServer(token: "t") { _, _ in events += 1 }
-        server.inbox = { news.removeValue(forKey: $0) }
+        server.request = { path, id, _ in path == "/inbox" ? news.removeValue(forKey: id) : nil }
         try server.start(port: port)
         defer { server.stop() }
         try await Task.sleep(for: .milliseconds(200))
@@ -460,5 +460,38 @@ final class BackgroundStopTests: XCTestCase {
     func testStopWithNothingLeftIsDone() {
         XCTAssertEqual(stop("[]").status, .waitingInput)
         XCTAssertEqual(HookPayload(json: Data(#"{"hook_event_name":"Stop","session_id":"s"}"#.utf8))?.status, .waitingInput)
+    }
+}
+
+@MainActor
+final class ModRequestTests: XCTestCase {
+    /// The mod's pickup always gets both lists; Run for something that isn't waiting asks nothing.
+    func testInboxShapeAndRunOnlyForWhatWaits() throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        let reply = try XCTUnwrap(store.modRequest("/inbox", sessionId: 42, body: Data()))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(reply.utf8)) as? [String: [Any]])
+        XCTAssertEqual(object["notes"]?.count, 0)
+        XCTAssertEqual(object["waiting"]?.count, 0)
+        XCTAssertNil(store.modRequest("/run", sessionId: 42, body: Data(#"{"key":"/x|Deploy"}"#.utf8)))
+        XCTAssertNil(store.confirmation, "a key that isn't waiting confirms nothing — and nothing ever starts without the confirmation")
+    }
+
+    /// What the terminal line says: waiting has Run; under way says how long; a long queue says nobody took it.
+    func testBandLineSaysWhereTheStepIs() {
+        let started = Date(timeIntervalSince1970: 1_000_000)
+        func line(_ state: Pipeline.Step.State, minutes: Double) -> AppStore.WaitingStep {
+            let step = Pipeline.Step(name: "Deploy", state: state, started: started)
+            return AppStore.WaitingStep(key: "k", name: "tech-b", step: step,
+                                        pipeline: Pipeline(branch: "main", sha: "abc1234", steps: [step], title: "ci: GitHub Actions"),
+                                        start: {}, now: started.addingTimeInterval(minutes * 60))
+        }
+        XCTAssertEqual(line(.manual, minutes: 0).text, "tech-b · Deploy waits for you — “ci: GitHub Actions”")
+        XCTAssertTrue(line(.manual, minutes: 0).canRun)
+        XCTAssertEqual(line(.running, minutes: 2).text, "tech-b · Deploy is running · 2 min — “ci: GitHub Actions”")
+        XCTAssertFalse(line(.running, minutes: 2).canRun, "under way: no Run")
+        XCTAssertEqual(line(.pending, minutes: 1).text, "tech-b · Deploy is queued · 1 min — “ci: GitHub Actions”")
+        XCTAssertEqual(line(.pending, minutes: 6).text, "tech-b · Deploy is queued · 6 min, no runner has taken it — “ci: GitHub Actions”")
     }
 }

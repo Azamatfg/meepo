@@ -40,6 +40,12 @@ struct NoticedRow: View {
                 Button("Hide it") { store.hideUnused(suggestion) }
                     .buttonStyle(PixelButtonStyle(compact: !isCard, isPrimary: true))
                     .help("Comes back any time: the rail for a panel, Edit stages for a stage")
+            case .neighborRepo:
+                Button("Add to meepo") {
+                    do { try store.addNeighborRepo(suggestion) } catch { self.error = error.localizedDescription }
+                }
+                .buttonStyle(PixelButtonStyle(compact: !isCard, isPrimary: true))
+                .help("A project of its own in meepo; remove it any time like any project")
             }
             Button("Not now") { store.dismissSuggestion(suggestion) }
                 .buttonStyle(PixelButtonStyle(compact: !isCard))
@@ -62,6 +68,8 @@ struct NoticedRow: View {
             let name = ShellLayout.Panel(rawValue: panel).map(PanelBox.title) ?? panel
             return "\(name) is in your layout, but you haven't clicked it in \(UsageCounts.quietDays) days"
         case let .unusedStage(stage): return "You haven't pressed \(stage.uppercased()) in \(UsageCounts.quietDays) days"
+        case let .neighborRepo(repo, project):
+            return "\(project)'s sessions keep working in \(URL(filePath: repo).lastPathComponent)"
         }
     }
 
@@ -84,6 +92,8 @@ struct NoticedRow: View {
         case .skill: return "In the last 8 weeks. A skill of your own does it with one command — Claude drafts it, you read and save it."
         case .unusedPanel: return "A calmer window: hide it, and bring it back from the rail when you need it. Counted on this Mac only."
         case .unusedStage: return "One button less on the bar; Edit stages puts it back. Counted on this Mac only."
+        case let .neighborRepo(repo, _):
+            return "In the last \(Int(AppStore.eventRetention / 86400)) days: cd into \(repo), git -C there, or its files read and edited. In meepo it gets its CI, deploys, Source Control and notifications. Counted on this Mac only."
         }
     }
 }

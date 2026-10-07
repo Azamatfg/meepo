@@ -167,3 +167,34 @@ final class MeasureTextTests: XCTestCase {
         XCTAssertEqual(AutomationsView.measureText("usage", (11, 3)), "You typed /usage 11× a week before, 3× a week since.")
     }
 }
+
+final class NeighborRepoTests: XCTestCase {
+    private let home = "/Users/me"
+    private let roots = ["/Users/me/Projects/ocpi", "/Users/me/Projects/tech-b", "/Users/me/Projects/alva-backend"]
+    private func root(_ path: String) -> String? { roots.first { path == $0 || path.hasPrefix($0 + "/") } }
+
+    /// Working there counts — cd, git -C, a file read or edited; a path only mentioned doesn't.
+    func testOnlyWorkingInAFolderCounts() {
+        XCTAssertEqual(Noticing.workedPaths("Bash: cd ~/Projects/ocpi/service && sed -n 95,107p x.go", home: home),
+                       ["/Users/me/Projects/ocpi/service"])
+        XCTAssertEqual(Noticing.workedPaths(#"Bash: git -C "/Users/me/Projects/tech-b" status"#, home: home), ["/Users/me/Projects/tech-b"])
+        XCTAssertEqual(Noticing.workedPaths("Edit: /Users/me/Projects/ocpi/main.go", home: home), ["/Users/me/Projects/ocpi/main.go"])
+        XCTAssertEqual(Noticing.workedPaths("Bash: sqlite3 db \"select … like '%Projects/ocpi%'\"", home: home), [])
+        XCTAssertEqual(Noticing.workedPaths("Bash: ls ~/Projects/ocpi", home: home), [], "listing it isn't working in it")
+    }
+
+    func testRepoWorkedInOftenIsSuggestedOnceForItsProject() {
+        let project = "/Users/me/Projects/alva-backend"
+        let events = Array(repeating: (project: project, name: "alva-backend", summary: "Bash: cd ~/Projects/ocpi && go test ./..."), count: 5)
+            + Array(repeating: (project: project, name: "alva-backend", summary: "Bash: cd ~/Projects/tech-b && make"), count: 4)
+            + Array(repeating: (project: project, name: "alva-backend", summary: "Edit: /Users/me/Projects/alva-backend/app.py"), count: 9)
+        let found = Noticing.neighborRepos(events, home: home, isKnown: { _ in false }, repoRoot: root)
+        XCTAssertEqual(found, [Noticing.Suggestion(kind: .neighborRepo(repo: "/Users/me/Projects/ocpi", project: "alva-backend"), count: 5)],
+                       "tech-b is under the threshold; the project's own repo never counts")
+    }
+
+    func testRepoMeepoAlreadyShowsIsNotSuggested() {
+        let events = Array(repeating: (project: "/Users/me/Projects/alva-backend", name: "alva-backend", summary: "Bash: cd ~/Projects/ocpi && make"), count: 9)
+        XCTAssertEqual(Noticing.neighborRepos(events, home: home, isKnown: { $0 == "/Users/me/Projects/ocpi" }, repoRoot: root), [])
+    }
+}

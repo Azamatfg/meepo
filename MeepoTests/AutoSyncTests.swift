@@ -194,7 +194,7 @@ final class BridgeReplyTests: XCTestCase {
     /// The mod forwards the events the bridge subscribes to — its `on()` names must be literals, so they're listed
     /// by hand there and checked here.
     func testModForwardsTheBridgesEvents() throws {
-        let source = try String(contentsOf: XCTUnwrap(Bundle.main.url(forResource: "MeepoMod/hooks/register", withExtension: "ts")), encoding: .utf8)
+        let source = try String(contentsOf: XCTUnwrap(Bundle.main.url(forResource: "MeepoMod/hooks/register", withExtension: "tsx")), encoding: .utf8)
         let hooked = Set(source.matches(of: /on\('classic\.(\w+)'/).map { String($0.1) })
         XCTAssertEqual(hooked, Set(BridgeInstaller.events))
     }

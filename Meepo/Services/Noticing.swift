@@ -20,6 +20,9 @@ enum Noticing {
             case unusedPanel(String)
             /// A stage on the bar never pressed in that time (its Stage name).
             case unusedStage(String)
+            /// A repo outside the project that the project's sessions keep working in (`project`: its name): worth
+            /// adding to meepo, so its CI, Source Control and notifications show up.
+            case neighborRepo(repo: String, project: String)
         }
 
         let kind: Kind
@@ -31,6 +34,7 @@ enum Noticing {
             case let .skill(phrase): "skill:" + phrase
             case let .unusedPanel(panel): "panel:" + panel
             case let .unusedStage(stage): "stage:" + stage
+            case let .neighborRepo(repo, project): "repo:" + project + ">" + repo
             }
         }
     }
@@ -92,6 +96,44 @@ enum Noticing {
               trimmed.count >= 12, trimmed.count <= 200 else { return nil }
         return lower.split(whereSeparator: \.isWhitespace).joined(separator: " ")
             .trimmingCharacters(in: CharacterSet(charactersIn: ".!?,;: "))
+    }
+
+    // MARK: Where the sessions work
+
+    /// Repos outside a project that its sessions keep working in — `cd` or `git -C` into them, or read and edit
+    /// their files (a path only mentioned doesn't count) — at least `threshold` times. `events`: a session's
+    /// project (its real folder and name) and a PreToolUse summary ("Bash: cd ~/x && …", "Edit: /x/a.go");
+    /// `isKnown`: a repo meepo already shows (a project, or one inside a project folder); `repoRoot`: the repo
+    /// holding a path, if any.
+    static func neighborRepos(_ events: [(project: String, name: String, summary: String)], home: String,
+                              isKnown: (String) -> Bool, repoRoot: (String) -> String?) -> [Suggestion] {
+        var counts: [Pair: Int] = [:]
+        for event in events {
+            for path in workedPaths(event.summary, home: home) {
+                guard let root = repoRoot(path), root != event.project, !root.hasPrefix(event.project + "/"),
+                      !isKnown(root) else { continue }
+                counts[Pair(name: event.name, repo: root), default: 0] += 1
+            }
+        }
+        return counts.filter { $0.value >= threshold }
+            .map { Suggestion(kind: .neighborRepo(repo: $0.key.repo, project: $0.key.name), count: $0.value) }
+            .sorted { ($0.count, $0.id) > ($1.count, $1.id) }
+    }
+
+    private struct Pair: Hashable { let name: String, repo: String }
+
+    /// The folders a tool call works in: a Bash `cd`/`pushd`/`-C` target, or a file tool's path.
+    static func workedPaths(_ summary: String, home: String) -> [String] {
+        guard let colon = summary.firstIndex(of: ":") else { return [] }
+        let tool = summary[..<colon], target = summary[summary.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+        let paths: [String]
+        switch tool {
+        case "Bash":
+            paths = target.matches(of: #/(?:\bcd|\bpushd|\s-C)\s+["']?((?:~|/)[^\s"';&|)]+)/#).map { String($0.1) }
+        case "Read", "Edit", "Write", "MultiEdit": paths = target.hasPrefix("/") || target.hasPrefix("~") ? [target] : []
+        default: paths = []
+        }
+        return paths.map { $0.hasPrefix("~") ? home + $0.dropFirst() : $0 }
     }
 
     // MARK: Measuring
