@@ -599,6 +599,7 @@ final class AppStore {
 
     /// Reads history.jsonl off the main thread and finds chains and repeated requests.
     func refreshSuggestions() async {
+        guard !isDemo else { return } // keeps the made-up ones loadDemo set
         let known = Set(commandsByProject.values.flatMap { $0.map(\.name) } + CommandCatalog.builtIns.map(\.name))
         // Repos meepo already shows, as their real folders: alva/ocpi is a link to ~/Projects/ocpi.
         let shownRepos = Set((projects.map(\.path) + nestedRepos.values.flatMap { $0.map(\.path) }
@@ -3496,7 +3497,37 @@ extension AppStore {
     /// Fills an empty store with Demo's made-up projects: real git folders in a temp directory (so Source
     /// Control and Explorer work), sessions in every state, an hour of events, live numbers, a summary and
     /// suggestions. Nothing of the user's is read or written.
+    /// `--demo-story`: fleet-api is Important from the start; the turns wait for `startDemoStory` (Option+Return).
+    private func playDemoStory() {
+        if let project = projects.first(where: { $0.name == Demo.importantProject }), let id = project.id { setImportant(id, true) }
+        confirmation = nil // setImportant may offer restarts: nothing to restart in a demo
+    }
+
+    /// The ad's turns, once: "login bug" asks its question, then fleet-api (Important) asks before ssh. Hook events
+    /// as a real session sends them, so every panel reacts as it would.
+    func startDemoStory() {
+        guard Demo.isStory, !Demo.isStoryStarted else { return }
+        Demo.isStoryStarted = true
+        func turn(_ name: String, after delay: Duration, _ event: @escaping (Session) -> HookPayload) {
+            guard let spec = Demo.sessions.first(where: { $0.name == name }),
+                  let session = sessions.first(where: { $0.name == name }), let id = session.id else { return }
+            Task { [weak self] in
+                try? await Task.sleep(for: delay)
+                self?.handleHookEvent(event(session), sessionId: id)
+                self?.terminals.feedText(Demo.storyTurn(spec), for: id)
+            }
+        }
+        turn("login bug", after: Demo.questionAt) {
+            HookPayload(event: "Stop", claudeSessionId: $0.claudeSessionId, lastAssistantMessage: "Should sessions last 30 days, or 24 hours?")
+        }
+        turn("poller retries", after: Demo.askAt) {
+            HookPayload(event: "PermissionRequest", claudeSessionId: $0.claudeSessionId, toolName: "Bash",
+                        toolTarget: "ssh deploy@fleet-prod 'systemctl restart poller'")
+        }
+    }
+
     func loadDemo() async {
+        if Demo.isStory { appearance = .light } // the ad's look: Paper, like its end card
         let root = FileManager.default.temporaryDirectory.appending(path: "Meepo Demo")
         // ~30 git runs and the files: off the main thread. The first push's commit per project, for its summary.
         let pushes = await Task.detached { () -> [String: String] in
@@ -3571,7 +3602,8 @@ extension AppStore {
                 }
                 for var event in events { try event.insert(db) }
             }
-            let event: HookPayload = switch spec.state {
+            // The story starts with everyone working; who needs the person turns later (`playDemoStory`).
+            let event: HookPayload = switch Demo.isStory ? "working" : spec.state {
             case "permission": HookPayload(event: "PermissionRequest", claudeSessionId: session.claudeSessionId, toolName: "Bash",
                                            toolTarget: "pytest tests/monitoring -q")
             case "question": HookPayload(event: "Stop", claudeSessionId: session.claudeSessionId,
@@ -3582,15 +3614,16 @@ extension AppStore {
                                  toolTarget: "src/admin/report.ts")
             }
             handleHookEvent(event, sessionId: id)
-            if spec.state == "ready" { // finished earlier: ready for the next task, not waiting on an answer
+            if spec.state == "ready", !Demo.isStory { // finished earlier: ready for the next task, not waiting on an answer
                 handleHookEvent(HookPayload(event: "SessionStart", claudeSessionId: session.claudeSessionId), sessionId: id)
             }
-            terminals.showText(spec.terminal, for: id)
+            terminals.showText(Demo.isStory ? Demo.storyTerminal(spec) : spec.terminal, for: id)
             runningSessionIds.insert(id)
             sessionUsage[id] = SessionUsage(tokensToday: spec.tokens, contextTokens: Int(spec.context * 10_000), model: spec.model)
             if let status = StatusLine(json: Demo.statusLine(for: spec)) { applyStatusLine(status, sessionId: id) }
         }
         elsewhere = Demo.agents { name in projects.first { $0.name == name }?.path }
+        if Demo.isStory { playDemoStory() }
         // Earlier requests behind the pushes, and Explain for users on storefront's Kaspi push, for What changed and Today.
         let ids = sessions.compactMap(\.id)
         var events: [HookEvent] = []

@@ -146,6 +146,46 @@ enum Demo {
     /// Explain for users on storefront's Kaspi push.
     static let summary = #"{"headline":"Shoppers can pay with Kaspi at checkout","changes":[{"kind":"new","what":"Kaspi is a payment option next to the card","where":"Checkout → Payment"},{"kind":"changed","what":"A paid order shows how it was paid","where":"Admin → Orders → Order details"},{"kind":"changed","what":"Kaspi payments get their own line in the daily report","where":"Admin → Finance → Daily report"}],"check":["Kaspi's test mode is still on — switch it off before the release?","What happens when a shopper closes Kaspi before paying?"],"how_to_try":"Put something in the cart, pick Kaspi at checkout and pay with the test account."}"#
 
+    // MARK: Story (`--demo --demo-story`): the 20-second ad, played by itself
+
+    /// Every session starts working; after `questionAt` s "login bug" asks its question, after `askAt` s
+    /// "poller retries" — fleet-api, marked Important — asks before ssh. storefront's deploy waits above its prompt.
+    /// It waits for Option+Return, pressed once the screen recording runs (⇧⌘5 → the window), so the turn is
+    /// filmed; always the light, Paper look.
+    static var isStory: Bool { CommandLine.arguments.contains("--demo-story") }
+    static let questionAt: Duration = .seconds(3)
+    static let askAt: Duration = .seconds(9)
+    static let importantProject = "fleet-api"
+    /// Option+Return was pressed: the turns play once.
+    @MainActor static var isStoryStarted = false
+
+    /// A session's page at the start of the story: working, whatever its state turns out to be.
+    static func storyTerminal(_ spec: SessionSpec) -> String {
+        let activity = ["poller retries": "Running the monitoring tests…", "welcome screen": "Rewriting the welcome copy…",
+                        "login bug": "Reading src/auth/session.ts…"][spec.name]
+        guard let activity else { return spec.terminal + band(spec) }
+        return [header(spec.project), "\(bold(">")) \(spec.request)", "", "\(orange("✻")) \(activity) \(dim("(esc)"))"]
+            .joined(separator: "\r\n")
+    }
+
+    /// The page once the session needs the person (the screen cleared first): its question, or the ssh ask.
+    static func storyTurn(_ spec: SessionSpec) -> String {
+        let page = spec.name == "poller retries" ? [
+            header(spec.project), "\(bold(">")) \(spec.request)", "",
+            "\(blue("⏺")) Tests pass. I'll restart the poller on the server so the fix takes effect.", "",
+            " \(bold("Bash command"))", "   ssh deploy@fleet-prod 'systemctl restart poller'", "",
+            " \(orange("Important project: this command reaches a server or a database (ssh)."))", "",
+            " Do you want to proceed?", " \(blue("❯ 1. Yes"))", "   2. No, and tell Claude what to do differently",
+        ].joined(separator: "\r\n") : spec.terminal
+        return "\(esc)2J\(esc)H" + page
+    }
+
+    /// The band Meepo's mod draws above the prompt while a deploy waits — storefront's Kaspi work.
+    private static func band(_ spec: SessionSpec) -> String {
+        guard spec.project == "storefront", spec.state == "working" else { return "" }
+        return "\r\n\r\n\(esc)33mstorefront · Deploy waits for you — “feat: pay with Kaspi at checkout”\(esc)0m  \(bold("[ Run ]"))"
+    }
+
     static func statusLine(for spec: SessionSpec) -> Data {
         Data(#"""
         {"session_id":"demo","session_name":"\#(spec.name)","model":{"id":"demo","display_name":"\#(spec.model)"},"effort":{"level":"\#(spec.effort)"},

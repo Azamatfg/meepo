@@ -34,7 +34,9 @@ enum Automations {
     }
 
     static let weeks = 8
-    static let historyFile = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude/history.jsonl")
+    /// Demo reads none: what the user typed into Claude Code never shows on a recording.
+    static let historyFile = Demo.isOn ? URL(filePath: "/dev/null")
+        : FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude/history.jsonl")
 
     /// Slash-command uses from history.jsonl lines (`{"display":"/qa …","timestamp":ms,…}`), by command name.
     static func usage(historyLines: some Sequence<Substring>, now: Date = .now) -> [String: Usage] {

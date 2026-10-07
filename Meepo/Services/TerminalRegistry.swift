@@ -121,6 +121,11 @@ final class TerminalRegistry: NSObject, LocalProcessTerminalViewDelegate {
         views[sessionId] = view
     }
 
+    /// Demo story: more of a fixed page, fed to the terminal already on screen.
+    func feedText(_ text: String, for sessionId: Int64) {
+        views[sessionId]?.feed(text: text)
+    }
+
     /// Types into the session's terminal as if the user did ("\r" = Enter).
     func send(_ text: String, to sessionId: Int64) {
         views[sessionId]?.send(txt: text)

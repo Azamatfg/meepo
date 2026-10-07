@@ -9,11 +9,17 @@ import AppKit
 @MainActor
 final class HotkeyMonitor {
     private static let tabKeyCode: UInt16 = 48
+    private static let returnKeyCode: UInt16 = 36
     private var monitor: Any?
 
     init(store: AppStore) {
         // Local monitor sees keys before SwiftTerm, which would otherwise send Option+Tab as ESC+Tab.
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak store] event in
+            // Demo story: Option+Return plays the ad's turns once the screen recording runs.
+            if Demo.isStory, event.keyCode == Self.returnKeyCode, event.modifierFlags.contains(.option) {
+                store?.startDemoStory()
+                return nil
+            }
             guard let store, event.keyCode == Self.tabKeyCode else { return event }
             let mods = event.modifierFlags.intersection([.shift, .control, .option, .command])
             switch mods {
