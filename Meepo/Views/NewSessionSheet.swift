@@ -9,6 +9,7 @@ struct NewSessionSheet: View {
     /// Other projects this session also works in (`claude --add-dir`).
     @State private var alsoIn: Set<String> = []
     @State private var effort = ""
+    @State private var size = Stage.Size.feature
     /// Worktrees need git; a plain folder project runs sessions in the folder itself. Read off the main
     /// thread when the project changes — never from `body` (running git there crashed, 2026-09-25).
     @State private var isGit = false
@@ -81,6 +82,16 @@ struct NewSessionSheet: View {
                     }
                 }
                 .help("How hard Claude thinks. ultracode also lets it run multi-agent workflows — slower and uses more of your limit")
+            }
+            if specCommand != nil {
+                FieldRow("Size") {
+                    PixelMenu(selection: size.rawValue) {
+                        ForEach(Stage.Size.allCases, id: \.self) { option in
+                            Button(option.rawValue) { size = option }.help(option.help)
+                        }
+                    }
+                    .help(size.help)
+                }
             }
             Text("First prompt (optional)").font(.caption).foregroundStyle(Tokens.textDim)
             TextEditor(text: $prompt)
@@ -159,11 +170,18 @@ struct NewSessionSheet: View {
         }
     }
 
+    /// What runs the spec interview in this project (`meepo:spec`, or the project's own /spec); nil hides Size.
+    private var specCommand: String? {
+        guard let projectId, let spec = store.stages.first(where: { $0.name == "spec" }) else { return nil }
+        return store.command(for: spec, in: projectId)
+    }
+
     private func create() {
         guard let projectId else { return }
         do {
             try store.createSession(projectId: projectId, model: model.isEmpty ? nil : model,
-                                    prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines),
+                                    prompt: Stage.firstPrompt(prompt.trimmingCharacters(in: .whitespacesAndNewlines),
+                                                              size: size, spec: specCommand),
                                     effort: effort.isEmpty ? nil : effort,
                                     worktree: useWorktree ? featureName : nil, name: name,
                                     extraDirs: store.projects.filter { alsoIn.contains($0.path) && $0.id != projectId }.map(\.path))

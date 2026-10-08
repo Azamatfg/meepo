@@ -7,6 +7,8 @@ enum Noticing {
         let display: String
         let date: Date
         let session: String?
+        /// The folder claude ran in.
+        var project: String? = nil
     }
 
     /// A pattern seen often enough to offer something for it.
@@ -46,7 +48,8 @@ enum Noticing {
         historyLines.compactMap { line in
             guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   let display = obj["display"] as? String, let ms = (obj["timestamp"] as? NSNumber)?.doubleValue else { return nil }
-            return Entry(display: display, date: Date(timeIntervalSince1970: ms / 1000), session: obj["sessionId"] as? String)
+            return Entry(display: display, date: Date(timeIntervalSince1970: ms / 1000), session: obj["sessionId"] as? String,
+                         project: obj["project"] as? String)
         }
         .sorted { $0.date < $1.date }
     }

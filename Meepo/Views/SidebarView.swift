@@ -146,6 +146,9 @@ struct SessionMenu: View {
         Button(important ? "✓ Important — asks before server & database commands" : "Mark Important — ask before server & database commands") {
             store.setImportant(session.projectId, !important)
         }
+        // Meepo's method, VERIFY: a turn that changed files ends only once the project's check passes.
+        let check = store.projects.first { $0.id == session.projectId }?.checkCommand
+        Button(check.map { "✓ Check Before Done — \($0)" } ?? "Check Before Done…") { store.editingCheckProjectId = session.projectId }
         Button("Open Terminal Here") {
             do { try store.openTerminal(projectId: session.projectId) } catch { store.bridgeError = error.localizedDescription }
         }

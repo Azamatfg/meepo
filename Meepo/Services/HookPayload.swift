@@ -99,6 +99,7 @@ struct HookPayload: Equatable {
     /// Something was refused or failed: highlighted in the feed.
     var isFailure: Bool {
         ["PermissionDenied", "PostToolUseFailure", "StopFailure"].contains(event)
+            || (event == "Verify" && Runs.check(message ?? "")?.passed == false)
     }
 
     /// One line for the feed and notification body.

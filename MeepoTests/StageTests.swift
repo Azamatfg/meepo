@@ -160,6 +160,49 @@ final class StageFlowTests: XCTestCase {
         XCTAssertNil(CommandCatalog.resolve("sync", available: builtIns), "no built-in does sync — the stage says so")
     }
 
+    /// Meepo's method in any project: spec, review and sync come from the mod's skills, named as Claude Code
+    /// names a plugin's (`/meepo:spec`, checked live in 2.1.293) — and only while sessions load the mod.
+    func testMethodStagesRunTheModsSkillsInAnyProject() throws {
+        let base = FileManager.default.temporaryDirectory.appending(path: "mod-\(UUID().uuidString)")
+        let mod = base.appending(path: "mod"), project = base.appending(path: "project")
+        for name in ["spec", "review", "sync"] {
+            let file = mod.appending(path: "skills/\(name)/SKILL.md")
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try "---\nname: \(name)\ndescription: \(name) it\ndisable-model-invocation: true\n---\n".write(to: file, atomically: true, encoding: .utf8)
+        }
+        let withMod = Set(CommandCatalog.commands(projectPath: project.path, home: base, mod: mod).map(\.name))
+        XCTAssertEqual(CommandCatalog.resolve("spec", available: withMod), "meepo:spec")
+        XCTAssertEqual(CommandCatalog.resolve("review", available: withMod), "meepo:review")
+        XCTAssertEqual(CommandCatalog.resolve("sync", available: withMod), "meepo:sync")
+        XCTAssertFalse(withMod.contains("spec"), "namespaced: a project's own /spec isn't shadowed")
+        let without = Set(CommandCatalog.commands(projectPath: project.path, home: base).map(\.name))
+        XCTAssertNil(CommandCatalog.resolve("spec", available: without), "no mod (older claude): the stage isn't offered")
+
+        try FileManager.default.createDirectory(at: project.appending(path: ".claude/commands"), withIntermediateDirectories: true)
+        try "---\ndescription: mine\n---\n".write(to: project.appending(path: ".claude/commands/sync.md"), atomically: true, encoding: .utf8)
+        let own = Set(CommandCatalog.commands(projectPath: project.path, home: base, mod: mod).map(\.name))
+        XCTAssertEqual(CommandCatalog.resolve("sync", available: own), "sync", "the project's own /sync wins over the mod's")
+    }
+
+    /// A bar saved before the method gets SPEC and REVIEW once, in their places; removing them later sticks.
+    func testASavedBarGetsTheMethodStagesOnce() throws {
+        let suite = "method-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let old = Stage.defaults.filter { !Stage.method.contains($0) && $0.name != "security" }
+        defaults.set(try JSONEncoder().encode(old), forKey: "stages")
+        let tmp = FileManager.default.temporaryDirectory.appending(path: suite)
+        func load() throws -> AppStore {
+            AppStore(db: try DatabaseQueue(), bridge: BridgeInstaller(settingsURL: tmp.appending(path: "s.json"), meepoHome: tmp),
+                     usageRoot: tmp, defaults: defaults)
+        }
+        let first = try load()
+        XCTAssertEqual(first.stages.map(\.name), ["spec", "plan", "code", "qa", "simplify", "review", "ship", "sync"],
+                       "added in place; the user's own hiding of security is kept")
+        first.stages.removeAll { $0.name == "review" }
+        XCTAssertFalse(try load().stages.contains { $0.name == "review" }, "not added back on the next launch")
+    }
+
     func testABuiltInStandInCountsAsItsStage() {
         send("UserPromptExpansion", prompt: "/verify", command: "verify")
         XCTAssertEqual(session.stage, "qa")
@@ -187,7 +230,7 @@ final class StageFlowTests: XCTestCase {
     }
 
     func testPlanHandsOffToFreshSessionOnCodeStageModel() throws {
-        store.stages[1].model = "haiku" // code stage
+        store.stages[store.stages.firstIndex { $0.name == "code" }!].model = "haiku"
         let planner = session.id!
         send("UserPromptExpansion", prompt: "/plan x", command: "plan")
         send("UserPromptSubmit", prompt: "/plan x")

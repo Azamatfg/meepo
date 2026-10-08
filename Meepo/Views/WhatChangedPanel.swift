@@ -288,6 +288,12 @@ private struct RequestRow: View {
                 if let line = outcome {
                     Text(line.text).font(.caption).foregroundStyle(line.color).lineLimit(3).fixedSize(horizontal: false, vertical: true)
                 }
+                if let check = run.check {
+                    Text(check.passed ? "✓ check passed · \(check.command)" : "✗ check failed · \(check.command)")
+                        .font(Fonts.mono(10)).foregroundStyle(check.passed ? Tokens.added : Tokens.danger).lineLimit(1)
+                        .help(check.passed ? "The project's check ran after Claude's changes and passed: the proof, not just \"done\""
+                                           : "The project's check failed after Claude's changes")
+                }
             }
         }
         .help(run.request)

@@ -214,6 +214,11 @@ enum AppDatabase {
             try db.alter(table: "project") { t in t.add(column: "isImportant", .boolean).notNull().defaults(to: false) }
         }
 
+        // Meepo's method: the project's check, run before a turn that changed files may end.
+        migrator.registerMigration("v21-project-check") { db in
+            try db.alter(table: "project") { t in t.add(column: "checkCommand", .text) }
+        }
+
         return migrator
     }
 }

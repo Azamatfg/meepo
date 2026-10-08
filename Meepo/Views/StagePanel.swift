@@ -208,6 +208,13 @@ struct StagePanel: View {
                     }
                     .help("New session on the code stage's model with this plan as its first message")
             }
+            if store.triesInARow(session) >= 3, store.look(of: session).ring == .idle {
+                Button("FRESH START") { store.relay(session.id!) }
+                    .buttonStyle(PixelButtonStyle())
+                    .overlay { Capsule().strokeBorder(Tokens.warn, lineWidth: 1.5) }
+                    .disabled(store.relayingSessionIds.contains(session.id!))
+                    .help("\(store.triesInARow(session)) tries in a row on the same files. After two corrections a fresh session usually does better: Claude writes down what was learned, and a new session starts with it")
+            }
             if let fraction = store.contextFraction(for: session.id!), fraction >= store.relayThreshold {
                 Button("RELAY") { store.relay(session.id!) }
                     .buttonStyle(PixelButtonStyle())

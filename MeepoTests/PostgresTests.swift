@@ -363,6 +363,19 @@ final class ImportantProjectTests: XCTestCase {
         XCTAssertEqual(try guardFile()?["projects"] as? [String: [String]], [:])
     }
 
+    /// Meepo's method, VERIFY: the project's check reaches the mod's guard; Turn Off takes it out.
+    func testProjectCheckReachesTheModsGuard() throws {
+        let (store, guardFile) = try makeGuardStore()
+        let repo = try makeTempRepo()
+        try store.addProject(at: repo)
+        let project = store.projects[0]
+        store.setCheck(project.id!, "  npm test \n")
+        XCTAssertEqual(try guardFile()?["checks"] as? [String: String], [project.path: "npm test"])
+        store.setCheck(project.id!, "")
+        XCTAssertEqual(try guardFile()?["checks"] as? [String: String], [:])
+        XCTAssertNil(store.projects[0].checkCommand)
+    }
+
     /// Guided mode's asks reach the mod too, so `bash -c 'git push'` can't slip past them; off, they're gone.
     func testGuidedModeWritesItsAsksToTheModsGuard() throws {
         let (store, guardFile) = try makeGuardStore()

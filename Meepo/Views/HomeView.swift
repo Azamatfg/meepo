@@ -20,6 +20,7 @@ struct HomeView: View {
                 }
                 if !store.claudeNews.isEmpty { ClaudeNewsCard() }
                 if let noticed = store.visibleSuggestions.first { NoticedRow(suggestion: noticed, isCard: true) }
+                if let stats = store.methodStats, let line = MethodLine.text(stats) { MethodLine(text: line) }
                 HStack(spacing: 2) {
                     ForEach([("deck", "Deck"), ("today", "Today")], id: \.0) { key, title in
                         Button(title) { mode = key }
@@ -49,6 +50,7 @@ struct HomeView: View {
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .task { await store.refreshMethodStats() } // each visit: git reflogs and the history file, off the main thread
     }
 }
 
@@ -187,6 +189,31 @@ private struct ClaudeNewsCard: View {
 
     /// Changelog lines use Markdown backticks; show them as plain text.
     static func plain(_ line: String) -> String { line.replacingOccurrences(of: "`", with: "") }
+}
+
+/// Meepo's method, measured: "METHOD · 14 days  5.2 requests per push, 7.9 before · 92% of turns proven by the check".
+private struct MethodLine: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text("METHOD").font(Fonts.ui(11, weight: .bold)).tracking(1.2).foregroundStyle(Tokens.work)
+            Text(text).foregroundStyle(Tokens.textDim)
+        }
+        .help("Your last \(MethodStats.days) days next to the \(MethodStats.days) before. Fewer requests per push = fewer corrections; turns proven = turns that changed files and ended with the project's check passing (Check Before Done in a project's menu).")
+    }
+
+    static func text(_ stats: (recent: MethodStats.Window, before: MethodStats.Window)) -> String? {
+        let number = { (value: Double) in value.formatted(.number.precision(.fractionLength(1))) }
+        var parts: [String] = []
+        if let now = stats.recent.requestsPerPush {
+            parts.append("\(number(now)) requests per push" + (stats.before.requestsPerPush.map { ", \(number($0)) before" } ?? ""))
+        }
+        if let share = stats.recent.checkedShare {
+            parts.append("\(Int((share * 100).rounded()))% of turns proven by the check")
+        }
+        return parts.isEmpty ? nil : "\(MethodStats.days) days · " + parts.joined(separator: " · ")
+    }
 }
 
 private struct ClaudeNewsSheet: View {

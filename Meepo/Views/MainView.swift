@@ -62,6 +62,11 @@ struct MainView: View {
                 RenameSheet(session: session)
             }
         }
+        .sheet(isPresented: Binding(get: { store.editingCheckProjectId != nil }, set: { if !$0 { store.editingCheckProjectId = nil } })) {
+            if let id = store.editingCheckProjectId, let project = store.projects.first(where: { $0.id == id }) {
+                CheckSheet(project: project)
+            }
+        }
         .sheet(isPresented: $isFirstRunShown) { OnboardingView(isFirstRun: true) }
         // Marked as seen once shown, not when closed: quitting with it open must not bring it back every launch.
         .onAppear { if !isOnboarded { isOnboarded = true; isFirstRunShown = true } }

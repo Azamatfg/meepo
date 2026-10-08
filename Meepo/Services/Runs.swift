@@ -11,10 +11,17 @@ struct Run: Identifiable, Equatable {
     var files: [String]
     /// Claude's answer; while background work still runs, what it has said so far.
     var reply: String?
+    /// The project's check at the end of this request (the mod's Verify event): the proof it works, not "done".
+    var check: Check?
     var id: String { "\(sessionId)-\(startedAt.timeIntervalSince1970)" }
     var isDone: Bool { endedAt != nil }
 
     enum Outcome { case working, askedYou, done, noReply }
+
+    struct Check: Equatable {
+        let passed: Bool
+        let command: String
+    }
 
     /// Still working, ended with a question for the user, done — or the user's next message (or the reply failing,
     /// or the session closing) came before Claude's answer. That isn't "stopped": the hook can't tell Esc from a
@@ -70,6 +77,8 @@ enum Runs {
                 current.reply = event.summary
                 runs.append(current)
                 open[id] = nil
+            case "Verify": // the last one counts: a failure Claude then fixed shows as passed
+                if open[id] != nil, let check = check(event.summary ?? "") { open[id]!.check = check }
             case "StopFailure", "SessionEnd":
                 // The reply failed, or the session closed mid-request: it ends here instead of "working" for days.
                 guard var current = open.removeValue(forKey: id) else { continue }
@@ -80,6 +89,30 @@ enum Runs {
             }
         }
         return (runs + open.values).sorted { $0.startedAt < $1.startedAt }
+    }
+
+    /// Tries in a row at the same thing: the session's last finished requests, each changing a file the one before
+    /// changed, within half an hour of it. 3 = two corrections — Anthropic: past that, a fresh session with what was
+    /// learned beats a longer thread of fixes.
+    static func triesInARow(_ runs: [Run]) -> Int {
+        let done = runs.filter { $0.isDone && !$0.files.isEmpty }.sorted { $0.startedAt < $1.startedAt }
+        guard var later = done.last else { return 0 }
+        var count = 1
+        for earlier in done.dropLast().reversed() {
+            guard !Set(earlier.files).isDisjoint(with: later.files),
+                  later.startedAt.timeIntervalSince(earlier.endedAt ?? earlier.startedAt) < 30 * 60 else { break }
+            count += 1
+            later = earlier
+        }
+        return count
+    }
+
+    /// The mod's Verify event, "passed: npm test" or "failed: npm test".
+    static func check(_ summary: String) -> Run.Check? {
+        for (prefix, passed) in [("passed: ", true), ("failed: ", false)] where summary.hasPrefix(prefix) {
+            return Run.Check(passed: passed, command: String(summary.dropFirst(prefix.count)))
+        }
+        return nil
     }
 
     /// "Edit: /path/to/file.swift" → "/path/to/file.swift".

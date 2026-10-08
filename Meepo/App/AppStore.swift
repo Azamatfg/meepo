@@ -90,7 +90,13 @@ final class AppStore {
         self.usageRoot = usageRoot
         self.defaults = defaults
         defaults.removeObject(forKey: "contextWindows") // sizes once set by hand; Claude Code reports the window now
-        stages = Self.load([Stage].self, Self.stagesKey, from: defaults) ?? Stage.defaults
+        var stages = Self.load([Stage].self, Self.stagesKey, from: defaults) ?? Stage.defaults
+        if !defaults.bool(forKey: Self.methodStagesKey) { // Meepo's method: SPEC before PLAN, REVIEW before SHIP, once
+            defaults.set(true, forKey: Self.methodStagesKey)
+            stages = Stage.method.reduce(stages) { Stage.adding($1, to: $0) }
+            defaults.set(try? JSONEncoder().encode(stages), forKey: Self.stagesKey) // didSet doesn't run in init
+        }
+        self.stages = stages
         guidedMode = defaults.bool(forKey: Self.guidedKey)
         Self.retireChains(from: defaults)
         suggestionStates = Self.load([String: SuggestionState].self, Self.suggestionsKey, from: defaults) ?? [:]
@@ -490,12 +496,8 @@ final class AppStore {
         guard !ids.isEmpty else { return }
         let marks = ids.map { _ in "?" }.joined(separator: ",")
         let (events, summaries) = (try? db.read { db -> ([HookEvent], [String: ProductSummary]) in
-            // Only what a run is made of: requests, answers, its end, and file edits (not every read and command).
             let events = try HookEvent.fetchAll(db, sql: """
-                SELECT * FROM hookEvent WHERE sessionId IN (\(marks))
-                AND (name IN ('UserPromptSubmit', 'UserPromptExpansion', 'Stop', 'StopFailure', 'SessionEnd')
-                OR (name = 'PostToolUse' AND (summary LIKE 'Edit:%' OR summary LIKE 'Write:%' OR summary LIKE 'MultiEdit:%'
-                OR summary LIKE 'NotebookEdit:%'))) ORDER BY createdAt, id
+                SELECT * FROM hookEvent WHERE sessionId IN (\(marks)) AND \(Self.runEvents) ORDER BY createdAt, id
                 """, arguments: StatementArguments(ids))
             var summaries: [String: ProductSummary] = [:]
             for row in try Row.fetchAll(db, sql: "SELECT unit, json FROM workSummary WHERE folder = ?", arguments: [folder]) {
@@ -508,6 +510,46 @@ final class AppStore {
         folderWork.runs = Runs.from(events)
         folderWork.summaries = summaries
         if work[folder] != folderWork { work[folder] = folderWork }
+    }
+
+    /// Only what a run is made of (Runs.from): requests, answers, its end, the check, and file edits.
+    nonisolated static let runEvents = """
+        (name IN ('UserPromptSubmit', 'UserPromptExpansion', 'Stop', 'StopFailure', 'SessionEnd', 'Verify')
+        OR (name = 'PostToolUse' AND (summary LIKE 'Edit:%' OR summary LIKE 'Write:%' OR summary LIKE 'MultiEdit:%'
+        OR summary LIKE 'NotebookEdit:%')))
+        """
+
+    /// Requests in a row this session spent on the same files (Runs.triesInARow); 3+ offers a fresh start.
+    func triesInARow(_ session: Session) -> Int {
+        guard let folder = workdir(of: session), let runs = work[folder]?.runs else { return 0 }
+        return Runs.triesInARow(runs.filter { $0.sessionId == session.id })
+    }
+
+    /// Meepo's method, measured (Home): the last two weeks and the two before; nil until counted.
+    private(set) var methodStats: (recent: MethodStats.Window, before: MethodStats.Window)?
+
+    func refreshMethodStats() async {
+        guard !isDemo else { return }
+        let paths = Array(Set((projects.map(\.path) + nestedRepos.values.flatMap { $0.map(\.path) }).map(Self.realPath)))
+        let db = self.db
+        let span = Double(MethodStats.days) * 86400, now = Date.now
+        methodStats = await Task.detached {
+            let text = (try? String(contentsOf: Automations.historyFile, encoding: .utf8)) ?? ""
+            var real: [String: String] = [:] // history.jsonl names the folder claude ran in; projects may be links
+            let entries = Noticing.entries(historyLines: text.split(separator: "\n")).map { entry in
+                var entry = entry
+                if let project = entry.project { entry.project = real[project] ?? { real[project] = Self.realPath(project); return real[project]! }() }
+                return entry
+            }
+            let repos = Set(paths.compactMap { GitService.output(["rev-parse", "--path-format=absolute", "--git-common-dir"], in: $0) })
+            let pushes = repos.flatMap { MethodStats.pushDates(in: URL(filePath: $0).deletingLastPathComponent().path) }
+            let events = (try? db.read { try HookEvent.fetchAll($0, sql: "SELECT * FROM hookEvent WHERE createdAt >= ? AND \(Self.runEvents) ORDER BY createdAt, id",
+                                                              arguments: [now - 2 * span]) }) ?? []
+            let window = { (start: Date, end: Date) in
+                MethodStats.window(from: start, to: end, entries: entries, pushes: pushes, projects: paths, events: events)
+            }
+            return (window(now - span, now), window(now - 2 * span, now - span))
+        }.value
     }
 
     /// What a unit changed for the product's users, from its commits, the user's requests, Claude's answers and
@@ -1459,6 +1501,7 @@ final class AppStore {
     // MARK: Stages and relay (SPEC module 4)
 
     private static let stagesKey = "stages"
+    private static let methodStagesKey = "methodStagesAdded"
     private static let relayThresholdKey = "relayThreshold"
 
     /// The user's workflow, set once for all projects.
@@ -2479,11 +2522,26 @@ final class AppStore {
     /// before: the commands ("git push") and the secrets files (".env").
     func writeGuard() {
         let projects = Dictionary(uniqueKeysWithValues: projects.filter(\.isImportant).map { ($0.path, postgresServers(of: $0)) })
-        var contents: [String: Any] = ["commands": Self.serverAndDatabaseCommands, "projects": projects]
+        let checks = Dictionary(uniqueKeysWithValues: self.projects.compactMap { p in p.checkCommand.map { (p.path, $0) } })
+        var contents: [String: Any] = ["commands": Self.serverAndDatabaseCommands, "projects": projects, "checks": checks]
         if guidedMode {
             contents["guided"] = ["commands": ClaudeLauncher.guidedCommands, "files": ClaudeLauncher.guidedSecretFiles]
         }
         try? bridge.writeGuard(contents)
+    }
+
+    /// Project "…" → Check before done…: the project whose check is being set.
+    var editingCheckProjectId: Int64?
+
+    /// Meepo's method, VERIFY: the project's check, or nil to stop checking. Sessions running the mod follow at once
+    /// (guard.json is read at every Stop).
+    func setCheck(_ projectId: Int64, _ command: String?) {
+        guard var project = projects.first(where: { $0.id == projectId }) else { return }
+        let command = command?.trimmingCharacters(in: .whitespacesAndNewlines)
+        project.checkCommand = command?.isEmpty == false ? command : nil
+        _ = try? db.write { try project.update($0) }
+        reload()
+        writeGuard()
     }
 
     /// Important on or off. Sessions running the mod follow it at once; the others are offered a restart
@@ -2986,7 +3044,7 @@ final class AppStore {
         let home = claudeHome.deletingLastPathComponent() // where meepo writes the user's skills, so it reads them there too
         for project in projects {
             guard let id = project.id else { continue }
-            commands[id] = CommandCatalog.commands(projectPath: project.path, home: home)
+            commands[id] = CommandCatalog.commands(projectPath: project.path, home: home, mod: modForSessions)
             workflows[id] = ownWorkflows + Recipes.savedWorkflows(in: [URL(filePath: project.path).appending(path: ".claude/workflows")])
             if GitService.hasUncommittedChanges(in: project.path) { dirty.insert(id) }
         }

@@ -28,7 +28,9 @@ enum CommandCatalog {
 
     /// A stage's own command → the built-in that does its job when a project has no such command,
     /// so a teammate without anyone's .claude folder still has working stages.
-    static let standIns = ["qa": "verify", "security": "security-review", "ship": "commit-push-pr"]
+    /// spec, review and sync are skills in Meepo's mod (`meepo:…`): there in every project, while sessions load it.
+    static let standIns = ["qa": "verify", "security": "security-review", "ship": "commit-push-pr",
+                           "spec": "meepo:spec", "review": "meepo:review", "sync": "meepo:sync"]
 
     /// The command a stage runs given the commands a project has: its own, else its built-in stand-in.
     static func resolve(_ command: String, available: Set<String>) -> String? {
@@ -39,11 +41,13 @@ enum CommandCatalog {
     /// What `/name` runs in this project, one per name, sorted by name. Claude Code takes the first it finds in this
     /// order (2.1.283, checked live): your skills, the project's skills, your commands, the project's commands, then
     /// its own. So your ~/.claude/commands/ship.md replaces a project's .claude/commands/ship.md — not the other way.
+    /// `mod`: Meepo's mod folder while sessions load it; its skills come namespaced, as `meepo:spec`.
     static func commands(projectPath: String,
-                         home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [SlashCommand] {
+                         home: URL = FileManager.default.homeDirectoryForCurrentUser, mod: URL? = nil) -> [SlashCommand] {
         let personal = home.appending(path: ".claude"), project = URL(filePath: projectPath).appending(path: ".claude")
+        let modSkills = mod.map { skills(in: $0).map { SlashCommand(name: "meepo:" + $0.name, description: $0.description, file: $0.file, isUserOnly: $0.isUserOnly) } } ?? []
         var seen: Set<String> = []
-        return (skills(in: personal) + skills(in: project) + commands(in: personal) + commands(in: project) + builtIns)
+        return (skills(in: personal) + skills(in: project) + commands(in: personal) + commands(in: project) + modSkills + builtIns)
             .filter { seen.insert($0.name).inserted }
             .sorted { $0.name < $1.name }
     }
@@ -123,14 +127,39 @@ struct Stage: Codable, Hashable, Identifiable {
 
     /// SPEC §10: plan on the strongest model with maximum reasoning, implementation on the default.
     static let defaults: [Stage] = [
+        Stage(name: "spec", command: "spec"),
         Stage(name: "plan", command: "plan", model: "opus", effort: "max"),
         Stage(name: "code", command: nil),
         Stage(name: "qa", command: "qa"),
         Stage(name: "security", command: "security"),
         Stage(name: "simplify", command: "simplify"),
+        Stage(name: "review", command: "review"),
         Stage(name: "ship", command: "ship"),
         Stage(name: "sync", command: "sync"),
     ]
+
+    /// How big the task is decides its path (Anthropic: skip the plan when the diff fits in one sentence).
+    enum Size: String, CaseIterable {
+        case small = "Small", feature = "Feature", big = "Big"
+
+        var help: String {
+            switch self {
+            case .small: "The change fits in one sentence: straight to code"
+            case .feature: "Claude asks what you need, writes a spec, then you plan it"
+            case .big: "A spec, then a plan in phases that each ship on their own"
+            }
+        }
+    }
+
+    /// A new session's first prompt for a task this size: a feature starts with the spec interview (`spec` = the
+    /// command that runs it here, nil when nothing does — then the prompt goes as typed).
+    static func firstPrompt(_ prompt: String, size: Size, spec: String?) -> String {
+        guard !prompt.isEmpty, size != .small, let spec else { return prompt }
+        return "/\(spec) \(prompt)" + (size == .big ? "\n\nIt's big: the plan after this spec goes in phases, each shippable on its own." : "")
+    }
+
+    /// The stages Meepo's method added; a bar saved before it gets them once.
+    static let method = defaults.filter { ["spec", "review"].contains($0.name) }
 
     /// A hidden default stage back in the bar, where it stands in the default order.
     static func adding(_ stage: Stage, to stages: [Stage]) -> [Stage] {
@@ -143,13 +172,17 @@ struct Stage: Codable, Hashable, Identifiable {
 }
 
 extension Stage {
-    /// The one stage worth pressing now, or nil: Claude is between turns and there's uncommitted work — tidy it
-    /// (simplify), then ship; once shipped, save what was learned (sync). Only stages on the bar are offered.
+    /// The one stage worth pressing now, or nil: Claude is between turns. A spec is written → plan it; uncommitted
+    /// work → tidy it (simplify), review it, then ship; once shipped, save what was learned (sync). Only stages on
+    /// the bar are offered.
     static func nextStep(after last: String?, isReady: Bool, hasUncommitted: Bool, bar: [String]) -> String? {
         guard isReady else { return nil }
+        if last == "spec" { return bar.contains("plan") ? "plan" : nil } // the spec file is uncommitted: not "tidy it"
         if hasUncommitted {
-            if last != "simplify", bar.contains("simplify") { return "simplify" }
-            return bar.contains("ship") ? "ship" : nil
+            let out = ["simplify", "review", "ship"].filter(bar.contains)
+            guard let first = out.first else { return nil }
+            let after = out.firstIndex { $0 == last }.map { $0 + 1 } ?? 0
+            return after < out.count ? out[after] : first // changed again after ship: start over
         }
         return last == "ship" && bar.contains("sync") ? "sync" : nil
     }

@@ -103,8 +103,10 @@ final class ShellStoreTests: XCTestCase {
 
     func testAHiddenStageComesBackInItsPlace() {
         let without = Stage.defaults.filter { $0.name != "qa" && $0.name != "sync" }
-        XCTAssertEqual(Stage.adding(Stage.defaults[2], to: without).map(\.name), ["plan", "code", "qa", "security", "simplify", "ship"])
-        XCTAssertEqual(Stage.adding(Stage.defaults[6], to: without).map(\.name).last, "sync")
+        let stage = { name in Stage.defaults.first { $0.name == name }! }
+        XCTAssertEqual(Stage.adding(stage("qa"), to: without).map(\.name),
+                       ["spec", "plan", "code", "qa", "security", "simplify", "review", "ship"])
+        XCTAssertEqual(Stage.adding(stage("sync"), to: without).map(\.name).last, "sync")
     }
 
     func testOnlyTerminalsOnScreenCountAsSeen() throws {

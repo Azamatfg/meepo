@@ -1,5 +1,5 @@
 import { test, expect, mock } from 'claude-code/testing'
-import { askReason, guidedReason, importantProject } from './guard'
+import { askReason, checkFailure, guidedReason, importantProject, projectCheck } from './guard'
 
 const HOME = '/Users/me'
 // As AppStore.writeGuard writes it from serverAndDatabaseAsks.
@@ -127,4 +127,19 @@ test("Meepo's reply to a prompt becomes context for Claude", async ($, on) => {
   const result: any = await ($ as any).classic.UserPromptSubmit({ prompt: 'hi' })
   expect(result.additionalContext).toEqual(['[Meepo] Teammates pushed 1 new commit'])
   expect(posts[0].body.hook_event_name).toBe('UserPromptSubmit')
+})
+
+test('a worktree runs its project check; a project without one checks nothing', () => {
+  const checks = { '/work/app': 'npm test' }
+  expect(projectCheck(checks, '/work/app')).toBe('npm test')
+  expect(projectCheck(checks, '/work/app/.claude/worktrees/feat')).toBe('npm test')
+  expect(projectCheck(checks, '/work/app-old')).toBeUndefined()
+})
+
+test('a failed check tells Claude the command and the end of its output, where the error is', () => {
+  const output = Array.from({ length: 100 }, (_, i) => `line ${i}`).join('\n') + '\nerror: x is undefined\n'
+  const reason = checkFailure('npm test', output)
+  expect(reason).toContain('npm test')
+  expect(reason).toContain('error: x is undefined')
+  expect(reason).not.toContain('line 50')
 })

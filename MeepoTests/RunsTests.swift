@@ -11,6 +11,34 @@ final class RunsTests: XCTestCase {
                          createdAt: start.addingTimeInterval(second))
     }
 
+    /// The mod's Verify events: the last one before the answer is the proof — a failure Claude then fixed shows passed.
+    func testTheLastCheckOfARequestIsItsProof() {
+        let runs = Runs.from([
+            event("UserPromptSubmit", "add login", 0), event("PostToolUse", "Edit: /repo/a.ts", 1),
+            event("Verify", "failed: npm test", 2), event("PostToolUse", "Edit: /repo/a.ts", 3),
+            event("Verify", "passed: npm test", 4), event("Stop", "Login works.", 5),
+            event("UserPromptSubmit", "what's next?", 10), event("Stop", "Ship it.", 11),
+        ])
+        XCTAssertEqual(runs[0].check, Run.Check(passed: true, command: "npm test"))
+        XCTAssertNil(runs[1].check, "no files changed: nothing was checked, and nothing claims it was")
+        XCTAssertNil(Runs.check("Bash: npm test"))
+        XCTAssertTrue(HookPayload(event: "Verify", claudeSessionId: "c", message: "failed: npm test").isFailure)
+        XCTAssertFalse(HookPayload(event: "Verify", claudeSessionId: "c", message: "passed: npm test").isFailure)
+    }
+
+    /// Two corrections on the same files: the third try offers a fresh start; other files or a long pause start over.
+    func testTriesInARowOnTheSameFiles() {
+        func run(_ minute: Double, _ files: [String]) -> Run {
+            Run(sessionId: 1, startedAt: start.addingTimeInterval(minute * 60), endedAt: start.addingTimeInterval(minute * 60 + 60),
+                request: "fix", files: files)
+        }
+        XCTAssertEqual(Runs.triesInARow([run(0, ["/a"]), run(5, ["/a", "/b"]), run(10, ["/b"])]), 3)
+        XCTAssertEqual(Runs.triesInARow([run(0, ["/a"]), run(5, ["/c"]), run(10, ["/c"])]), 2, "another file: another thing")
+        XCTAssertEqual(Runs.triesInARow([run(0, ["/a"]), run(90, ["/a"])]), 1, "an hour and a half later: a new attempt")
+        XCTAssertEqual(Runs.triesInARow([run(0, ["/a"]), run(5, ["/a"]), run(10, [])]), 2, "a question in between changes nothing")
+        XCTAssertEqual(Runs.triesInARow([]), 0)
+    }
+
     func testARunGoesFromTheRequestToTheRealEnd() {
         let runs = Runs.from([
             event("UserPromptExpansion", "/qa", 0), event("UserPromptSubmit", "/qa", 1),       // one request
