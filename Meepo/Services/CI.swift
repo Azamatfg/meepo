@@ -27,6 +27,8 @@ struct CIRun: Decodable, Equatable, Identifiable {
     var isDeploy: Bool {
         workflowName.range(of: #"(?i)deploy|release|publish|push|\bcd\b"#, options: .regularExpression) != nil
     }
+    /// Started by the branch itself; a pull_request(_target) or schedule run only reports the branch it ran against.
+    var isBranchRun: Bool { ["push", "workflow_run", "workflow_dispatch"].contains(event ?? "push") }
     var key: String { "\(workflowName)|\(headBranch)" }
     /// This attempt of this run: what's handled once (a rerun is a new attempt).
     var attemptKey: String { "\(databaseId)#\(attempt)" }
@@ -171,7 +173,7 @@ struct GitHubActions: CIProvider {
     /// Workflows on the branch's latest commit in start order (CI → Build → …), then deploy workflows
     /// not yet run on it as manual steps. Pull requests and schedules aren't part of the chain.
     static func pipeline(runs: [CIRun], workflows: [Workflow], branch: String) -> Pipeline? {
-        let chain = runs.filter { $0.headBranch == branch && ["push", "workflow_run", "workflow_dispatch"].contains($0.event ?? "push") }
+        let chain = runs.filter { $0.headBranch == branch && $0.isBranchRun }
         guard let head = (chain.filter { $0.event == "push" }.max { $0.createdAt < $1.createdAt }
                           ?? chain.max { $0.createdAt < $1.createdAt }) else { return nil }
         var latest: [String: CIRun] = [:]

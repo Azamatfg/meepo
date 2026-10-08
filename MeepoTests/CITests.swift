@@ -232,6 +232,19 @@ final class PipelineTests: XCTestCase {
         XCTAssertFalse(blocked.canStart(blocked.steps[2]))
     }
 
+    /// career-ops, 2026-10: every fork PR starts pull_request_target runs that GitHub reports as main @ main's sha.
+    func testOnlyRunsTheBranchStartedAreBranchRuns() {
+        for event in ["push", "workflow_run", "workflow_dispatch"] {
+            XCTAssertTrue(run(1, "CI", event: event, sha: "s", minute: 0).isBranchRun, event)
+        }
+        var old = run(1, "CI", event: "push", sha: "s", minute: 0)
+        old.event = nil
+        XCTAssertTrue(old.isBranchRun)
+        for event in ["pull_request_target", "pull_request", "schedule"] {
+            XCTAssertFalse(run(1, "PR triage", event: event, sha: "s", minute: 0).isBranchRun, event)
+        }
+    }
+
     /// alva-backend's .gitlab-ci.yml: build → test (test + lint) → release → deploy (manual on master).
     func testGitLabStagesInOrderWithManualDeploy() {
         func job(_ id: Int64, _ name: String, _ stage: String, _ status: String, allowFailure: Bool = false) -> GitLabCI.APIJob {

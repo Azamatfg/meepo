@@ -2319,7 +2319,8 @@ final class AppStore {
             let pipeline = await Pipeline.titled(await provider.pipeline(runs: runs, in: repo.path), in: repo.path)
             repoCI[repo.path] = (latest.values.sorted { $0.createdAt > $1.createdAt }, pipeline)
             let ownerId = projectId(containing: repo.path)
-            for run in latest.values where isNewlyEnded(run) {
+            // Only runs the branch started: a fork PR's pull_request_target run reports main and its sha too.
+            for run in latest.values where run.isBranchRun && isNewlyEnded(run) {
                 // The sessions working there hear it while the repo's checkout is on the run's branch.
                 let ids = sessions.filter { $0.projectId == ownerId || ($0.extraDirs ?? []).contains(repo.path) }.compactMap(\.id)
                 let path = repo.path
