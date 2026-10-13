@@ -2246,10 +2246,11 @@ final class AppStore {
         if ciProviders.isEmpty {
             ciProviders = [toolPath("gh").map { GitHubActions(gh: $0) }, toolPath("glab").map { GitLabCI(glab: $0) }].compactMap { $0 }
         }
-        for project in projects {
-            guard let projectId = project.id, let provider = ciProvider(for: project) else { continue }
-            let runs = await provider.runs(in: project.path).sorted { $0.createdAt > $1.createdAt }
-            pipelines[projectId] = await Pipeline.titled(await provider.pipeline(runs: runs, in: project.path), in: project.path)
+        let tracked = projects.compactMap { project in ciProvider(for: project).map { (project: project, provider: $0) } }
+        let fetched = await Self.fetchCI(tracked.map { (path: $0.project.path, provider: $0.provider) })
+        for (project, provider) in tracked {
+            guard let projectId = project.id, let (runs, pipeline) = fetched[project.path] else { continue }
+            pipelines[projectId] = pipeline
             var latest: [String: CIRun] = [:]
             for run in runs where latest[run.key] == nil { latest[run.key] = run }
             ciRuns[projectId] = latest.values.sorted { $0.createdAt > $1.createdAt }
@@ -2278,6 +2279,23 @@ final class AppStore {
         }
         await refreshRepoCI()
         isCIPrimed = true
+    }
+
+    /// Each repo's runs (newest first) and pipeline, fetched side by side: a repo costs ~4 s of gh, so one by one
+    /// a pass over every project and project-folder repo took over a minute.
+    private nonisolated static func fetchCI(_ repos: [(path: String, provider: any CIProvider)]) async
+        -> [String: (runs: [CIRun], pipeline: Pipeline?)] {
+        await withTaskGroup(of: (String, [CIRun], Pipeline?).self) { group in
+            for repo in repos {
+                group.addTask {
+                    let runs = await repo.provider.runs(in: repo.path).sorted { $0.createdAt > $1.createdAt }
+                    return (repo.path, runs, await Pipeline.titled(await repo.provider.pipeline(runs: runs, in: repo.path), in: repo.path))
+                }
+            }
+            var fetched: [String: (runs: [CIRun], pipeline: Pipeline?)] = [:]
+            for await (path, runs, pipeline) in group { fetched[path] = (runs, pipeline) }
+            return fetched
+        }
     }
 
     /// Ended and not seen before — and not on the first pass after launch, which only records what already ended.
@@ -2310,13 +2328,14 @@ final class AppStore {
             Set(folders.flatMap(Repos.find)).filter { !projectPaths.contains($0.path) }
                 .map { (repo: $0, remote: GitService.remoteURL(in: $0.path)) }
         }.value
-        for (repo, remote) in repos {
-            let stand = Project(name: repo.name, path: repo.path, remote: remote)
-            guard let provider = ciProvider(for: stand) else { continue }
-            let runs = await provider.runs(in: repo.path).sorted { $0.createdAt > $1.createdAt }
+        let tracked = repos.compactMap { repo, remote in
+            ciProvider(for: Project(name: repo.name, path: repo.path, remote: remote)).map { (repo: repo, provider: $0) }
+        }
+        let fetched = await Self.fetchCI(tracked.map { (path: $0.repo.path, provider: $0.provider) })
+        for (repo, _) in tracked {
+            guard let (runs, pipeline) = fetched[repo.path] else { continue }
             var latest: [String: CIRun] = [:]
             for run in runs where latest[run.key] == nil { latest[run.key] = run }
-            let pipeline = await Pipeline.titled(await provider.pipeline(runs: runs, in: repo.path), in: repo.path)
             repoCI[repo.path] = (latest.values.sorted { $0.createdAt > $1.createdAt }, pipeline)
             let ownerId = projectId(containing: repo.path)
             // Only runs the branch started: a fork PR's pull_request_target run reports main and its sha too.
@@ -3031,27 +3050,32 @@ final class AppStore {
 
     /// Commands and uncommitted changes per project; cheap, refreshed with usage.
     func refreshProjects() {
-        var merged: Set<Int64> = []
-        for session in sessions {
+        // git off the main thread: a status per project and session worktree froze the UI on every pass.
+        let worktrees = sessions.compactMap { session -> (id: Int64, branch: String, base: String, path: String)? in
             guard let id = session.id, let name = session.worktreeName, let base = session.worktreeBase,
-                  let project = project(for: session) else { continue }
-            if GitService.isMerged(branch: "worktree-\(name)", startedAt: base, in: project.path) { merged.insert(id) }
+                  let project = project(for: session) else { return nil }
+            return (id, "worktree-\(name)", base, project.path)
         }
-        mergedWorktreeSessionIds = merged
+        let repos = projects.compactMap { project in project.id.map { (id: $0, path: project.path) } }
+        Task {
+            let (merged, dirty) = await Task.detached {
+                (Set(worktrees.filter { GitService.isMerged(branch: $0.branch, startedAt: $0.base, in: $0.path) }.map(\.id)),
+                 Set(repos.filter { GitService.hasUncommittedChanges(in: $0.path) }.map(\.id)))
+            }.value
+            if merged != mergedWorktreeSessionIds { mergedWorktreeSessionIds = merged }
+            if dirty != dirtyProjectIds { dirtyProjectIds = dirty }
+        }
         var commands: [Int64: [SlashCommand]] = [:]
         var workflows: [Int64: [Recipes.SavedWorkflow]] = [:]
         let ownWorkflows = Recipes.savedWorkflows(in: [claudeHome.appending(path: "workflows")])
-        var dirty: Set<Int64> = []
         let home = claudeHome.deletingLastPathComponent() // where meepo writes the user's skills, so it reads them there too
         for project in projects {
             guard let id = project.id else { continue }
             commands[id] = CommandCatalog.commands(projectPath: project.path, home: home, mod: modForSessions)
             workflows[id] = ownWorkflows + Recipes.savedWorkflows(in: [URL(filePath: project.path).appending(path: ".claude/workflows")])
-            if GitService.hasUncommittedChanges(in: project.path) { dirty.insert(id) }
         }
         commandsByProject = commands
         workflowsByProject = workflows
-        dirtyProjectIds = dirty
         buttonSteps = Dictionary(uniqueKeysWithValues: skillButtons.map { name in
             (name, (try? String(contentsOf: skillFile(name), encoding: .utf8)).map(Recipes.steps(inSkill:)) ?? [])
         })

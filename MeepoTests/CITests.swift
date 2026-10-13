@@ -104,8 +104,9 @@ final class CIGuardTests: XCTestCase {
 private final class FakeCI: CIProvider, @unchecked Sendable {
     var runs: [CIRun] = []
     var reruns: [Int64] = []
+    var delay: Duration = .zero // how long gh takes per repo
     func handles(_ project: Project) -> Bool { true }
-    func runs(in path: String) async -> [CIRun] { runs }
+    func runs(in path: String) async -> [CIRun] { try? await Task.sleep(for: delay); return runs }
     func failedLog(_ run: CIRun, in path: String) async -> String { "KeyError: 'since'" }
     func rerunFailed(_ run: CIRun, in path: String) async -> Bool { reruns.append(run.id); return true }
     var reviewRequest: String { GitHubActions(gh: "").reviewRequest }
@@ -132,6 +133,17 @@ final class CIWatcherTests: XCTestCase {
     }
 
     private var projectId: Int64 { store.projects[0].id! }
+
+    /// A pass asks every repo at once: one by one, ~4 s of gh each kept a project folder's CI empty for minutes.
+    func testReposAreAskedSideBySide() async throws {
+        for _ in 1...4 { try store.addProject(at: try makeTempRepo(remote: "git@github.com:me/app.git")) }
+        ci.delay = .milliseconds(500)
+        ci.runs = [ciRun(1, minutesAgo: 60)]
+        let started = ContinuousClock.now
+        await store.refreshCI()
+        XCTAssertLessThan(ContinuousClock.now - started, .milliseconds(1500)) // one by one: 5 × 0.5 s = 2.5 s
+        XCTAssertEqual(store.projects.compactMap { store.ciRuns[$0.id!] }.count, 5)
+    }
 
     /// SPEC module 9 "done when": a failed CI turns into a fix PR session without the user, or a clear notice why not.
     func testFailureIsRerunThenFixedThenGivenUp() async {

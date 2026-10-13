@@ -283,6 +283,7 @@ struct CIPanel: View {
             }
         }
         .sheet(isPresented: $isCIShown) { CISheet() }
+        .task { await store.refreshCI() } // opening CI shows it now, not at the next once-a-minute pass
     }
 
     private func repoHeader(_ repo: Repo) -> some View {
