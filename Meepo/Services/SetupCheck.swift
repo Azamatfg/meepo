@@ -25,6 +25,26 @@ enum SetupCheck {
     /// `topModel`: the model the user uses most (from usage). `commands`: their own skills and commands.
     static func findings(settings: [String: Any], topModel: String?, commands: [(url: URL, text: String)]) -> [Finding] {
         effort(settings, topModel) + hookTimeouts(settings) + broadPermissions(settings) + unguardedShipping(commands)
+            + transcriptCleanup(settings)
+    }
+
+    /// Days of sessions worth keeping: stats, import and past answers are read from them. Not a year: since 2.1.300
+    /// every API request is recorded too, ~185 MB a day on a busy day (2026-10-17).
+    static let keptDays = 90
+
+    /// Without `cleanupPeriodDays` Claude Code deletes session transcripts after 30 days (found 2026-10-17: the oldest
+    /// left was exactly 30 days old).
+    static func transcriptCleanup(_ settings: [String: Any]) -> [Finding] {
+        let days = (settings["cleanupPeriodDays"] as? NSNumber)?.intValue
+        guard (days ?? 30) < 90 else { return [] }
+        return [Finding(
+            id: "cleanup-days",
+            title: "Claude Code deletes your sessions after \(days ?? 30) days",
+            detail: "Older conversations are removed from ~/.claude/projects, and with them what you and meepo could learn from past work.",
+            fixTitle: "Keep 3 months",
+            fix: .settings(apply: { $0["cleanupPeriodDays"] = keptDays },
+                           undo: { $0["cleanupPeriodDays"] = days })
+        )]
     }
 
     /// Claude Code 2.1.280: an `effortLevel` saved before effort became per-model doesn't apply to newer models

@@ -78,7 +78,7 @@ enum CommandCatalog {
                             isUserOnly: Automations.frontmatterValue("disable-model-invocation", in: text) == "true")
     }
 
-    /// Names Claude Code itself answers to (its commands and bundled skills, 2.1.283). A command of yours with one of
+    /// Names Claude Code itself answers to (its commands and bundled skills, 2.1.302). A command of yours with one of
     /// these names would hide Claude Code's own or never run, so meepo doesn't make one.
     static let claudeCodeNames: Set<String> = [
         "add-dir", "advisor", "agents", "artifacts", "autocompact", "batch", "branch", "btw", "bug", "chrome", "claude-api",
@@ -86,11 +86,11 @@ enum CommandCatalog {
         "debug", "desktop", "diff", "doctor", "effort", "exit", "export", "fast", "feedback", "fewer-permission-prompts",
         "focus", "fork", "goal", "help", "hooks", "ide", "import", "init", "insights", "install-github-app",
         "keybindings", "keybindings-help", "login", "logout", "loop", "loops", "mcp", "memory", "mobile", "model",
-        "output-style", "permissions", "plan", "plugin", "pr", "privacy-settings", "recap",
+        "output-style", "permissions", "plan", "plugin", "pr", "privacy-settings", "rate-limit-options", "recap",
         "release-notes", "reload-plugins", "reload-skills", "remote-control", "remote-env", "rename", "resume", "review",
-        "rewind", "run", "sandbox", "schedule", "security-review", "session", "simplify", "skills", "stats", "status",
+        "rewind", "run", "sandbox", "schedule", "security-review", "session", "settings", "simplify", "skill-doctor", "skills", "stats", "status",
         "statusline", "stickers", "tasks", "teleport", "terminal-setup", "theme", "todos", "ultraplan", "ultrareview",
-        "update", "update-config", "upgrade", "usage", "verify", "voice", "workflows",
+        "update", "update-config", "upgrade", "usage", "usage-credits", "verify", "voice", "workflows",
     ]
 
     /// `description:` from YAML frontmatter; without it, the first line of the body (as Claude Code does),

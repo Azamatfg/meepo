@@ -117,6 +117,7 @@ final class AppStore {
         fixAttempts = (defaults.dictionary(forKey: Self.fixAttemptsKey) as? [String: Int]) ?? [:]
         screenshotHotKey = defaults.string(forKey: Self.shotHotKeyKey) ?? "⌘⇧6"
         autoUpdate = defaults.object(forKey: Self.autoUpdateKey) as? Bool ?? true
+        headlessModel = defaults.string(forKey: Self.headlessModelKey) ?? ClaudeHeadless.defaultModel
         updateChannel = defaults.string(forKey: Self.channelKey).flatMap(Updater.Channel.init(rawValue:))
             ?? (Updater.currentVersion?.isPrerelease ?? true ? .beta : .stable)
         defaults.removeObject(forKey: "libraryFolder") // Tools → Practices is gone: ~/.claude already serves every project
@@ -560,7 +561,8 @@ final class AppStore {
         defer { explainingUnits.remove(unit.key) }
         let material = await Task.detached { Work.material(of: unit, in: repo) }.value
         let prompt = Work.prompt(runs: unit.runs, commits: material.commits, diff: material.diff, language: GitPanel.userLanguage)
-        let data = try await ClaudeHeadless.askJSON(prompt, schema: Work.schema, claude: login.claudePath, environment: login.environment)
+        let data = try await ClaudeHeadless.askJSON(prompt, schema: Work.schema, claude: login.claudePath, environment: login.environment,
+                                                    model: headlessModel)
         _ = try JSONDecoder().decode(ProductSummary.self, from: data)
         let json = String(decoding: data, as: UTF8.self)
         try await db.write { db in
@@ -804,7 +806,8 @@ final class AppStore {
             Claude in the user's language. Don't invent project details you can't see.
             """
         guard let login = loginEnvironment else { throw ClaudeHeadless.Failure(errorDescription: "claude isn't found in the login shell") }
-        let draft = try await ClaudeHeadless.run(prompt, claude: login.claudePath, environment: login.environment)
+        let draft = try await ClaudeHeadless.run(prompt, claude: login.claudePath, environment: login.environment,
+                                                 arguments: ClaudeHeadless.arguments(model: headlessModel))
         // A model may wrap the file in a code fence; the file is what's inside.
         return draft.replacingOccurrences(of: #"^```[a-z]*\n|\n```$"#, with: "", options: .regularExpression)
     }
@@ -1493,6 +1496,14 @@ final class AppStore {
     /// Aliases `claude --model` documents (latest of each family), then full names the user has actually used.
     static let modelAliases = ["fable", "opus", "sonnet", "haiku"]
 
+    private static let headlessModelKey = "headlessModel"
+
+    /// The model for meepo's own one-off `claude -p` — EXPLAIN, Explain for users, DRAW, skill drafts, release
+    /// notes; "" = Claude Code's default.
+    var headlessModel: String {
+        didSet { defaults.set(headlessModel, forKey: Self.headlessModelKey) }
+    }
+
     /// ("" = Claude Code's default, value for --model, title).
     func modelChoices() -> [(value: String, title: String)] {
         [("", "Default")] + Self.modelAliases.map { ($0, $0.capitalized) } + recentModels().map { ($0, $0) }
@@ -2050,7 +2061,7 @@ final class AppStore {
         }
         let prompt = Diagram.prompt(request, material: material, language: GitPanel.userLanguage)
         let data = try await ClaudeHeadless.askJSON(prompt, schema: Diagram.schema, claude: login.claudePath, environment: login.environment,
-                                                    tools: Diagram.tools(for: request), directory: URL(filePath: folder))
+                                                    tools: Diagram.tools(for: request), model: headlessModel, directory: URL(filePath: folder))
         let answer = try JSONDecoder().decode(Diagram.Result.self, from: data)
         count("draw")
         return Diagram.Result(title: answer.title, mermaid: Diagram.cleaned(answer.mermaid), caption: answer.caption)
@@ -2061,7 +2072,8 @@ final class AppStore {
         guard let login = loginEnvironment else { throw ClaudeHeadless.Failure(errorDescription: "claude isn't found in the login shell") }
         let diff = await Task.detached { GitPanel.fullDiff(from: from, to: to, in: path) }.value
         let prompt = GitPanel.explainPrompt(diff: diff, newFiles: newFiles, whose: whose, language: GitPanel.userLanguage)
-        return try await ClaudeHeadless.run(prompt, claude: login.claudePath, environment: login.environment)
+        return try await ClaudeHeadless.run(prompt, claude: login.claudePath, environment: login.environment,
+                                            arguments: ClaudeHeadless.arguments(model: headlessModel))
     }
 
     // MARK: Auto-sync with teammates (2026-09-24)
@@ -2828,7 +2840,8 @@ final class AppStore {
         writingNotes.insert(projectId)
         defer { writingNotes.remove(projectId) }
         do {
-            let text = try await ClaudeHeadless.run(prompt, claude: login.claudePath, environment: login.environment)
+            let text = try await ClaudeHeadless.run(prompt, claude: login.claudePath, environment: login.environment,
+                                                    arguments: ClaudeHeadless.arguments(model: headlessModel))
             let note = ReleaseNote(projectId: projectId, sha: head, text: text)
             _ = try await db.write { try note.inserted($0) }
             reloadReleaseNotes()

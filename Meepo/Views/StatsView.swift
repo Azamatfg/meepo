@@ -157,6 +157,15 @@ struct SettingsView: View {
                         }
                         .buttonStyle(PixelButtonStyle())
                     }
+                    FieldRow("Model for explanations") {
+                        let choices = store.modelChoices()
+                        PixelMenu(selection: choices.first { $0.value == store.headlessModel }?.title ?? store.headlessModel) {
+                            ForEach(choices, id: \.value) { option in
+                                Button(option.title) { store.headlessModel = option.value }
+                            }
+                        }
+                        .help("EXPLAIN, Explain for users, DRAW, skill drafts and release notes. Haiku is about 5× cheaper than Opus for the same explanation.")
+                    }
                     FieldRow("Remote Control for new sessions") {
                         Button(store.remoteControlForNewSessions ? "ON" : "OFF") { store.remoteControlForNewSessions.toggle() }
                             .buttonStyle(PixelButtonStyle())

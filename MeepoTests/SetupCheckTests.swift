@@ -32,6 +32,19 @@ final class SetupCheckTests: XCTestCase {
         XCTAssertEqual(apply(findings[0], to: fixed, undo: true) as NSDictionary, settings as NSDictionary)
     }
 
+    /// Unset means 30 days; 90 or more the user chose is left alone.
+    func testSessionsDeletedAfterAMonth() throws {
+        for settings: [String: Any] in [["effortLevel": "high"], ["cleanupPeriodDays": 14]] {
+            let finding = try XCTUnwrap(SetupCheck.transcriptCleanup(settings).first)
+            let fixed = apply(finding, to: settings)
+            XCTAssertEqual(fixed["cleanupPeriodDays"] as? Int, 90)
+            XCTAssertTrue(SetupCheck.transcriptCleanup(fixed).isEmpty)
+            XCTAssertEqual(apply(finding, to: fixed, undo: true) as NSDictionary, settings as NSDictionary, "undo puts it back exactly")
+        }
+        XCTAssertEqual(SetupCheck.transcriptCleanup([:]).first?.title, "Claude Code deletes your sessions after 30 days")
+        XCTAssertTrue(SetupCheck.transcriptCleanup(["cleanupPeriodDays": 120]).isEmpty)
+    }
+
     func testBroadAllowRulesButNotNarrowOnes() {
         let settings: [String: Any] = ["permissions": ["allow": ["Bash(sudo:*)", "Bash(npm test:*)", "Read"]]]
         let findings = SetupCheck.broadPermissions(settings)

@@ -50,6 +50,22 @@ final class ReleaseNotesTests: XCTestCase {
         XCTAssertFalse(ClaudeHeadless.arguments.contains("--bare"))
     }
 
+    /// The model picked in Settings reaches claude; Default leaves it to Claude Code; Haiku until one is picked.
+    @MainActor
+    func testHeadlessRunsOnTheChosenModel() throws {
+        XCTAssertEqual(Array(ClaudeHeadless.arguments(model: "fable").suffix(2)), ["--model", "fable"])
+        XCTAssertFalse(ClaudeHeadless.arguments(model: "").contains("--model"))
+        XCTAssertEqual(Array(ClaudeHeadless.jsonArguments(schema: "{}", model: "opus").suffix(6).prefix(2)), ["--model", "opus"])
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "meepo-tests-\(UUID().uuidString)"))
+        let tmp = FileManager.default.temporaryDirectory.appending(path: "headless-\(UUID().uuidString)")
+        let store = AppStore(db: try DatabaseQueue(), bridge: BridgeInstaller(settingsURL: tmp.appending(path: "s.json"), meepoHome: tmp),
+                             usageRoot: tmp, defaults: defaults)
+        XCTAssertEqual(store.headlessModel, "haiku")
+        store.headlessModel = "opus"
+        XCTAssertEqual(AppStore(db: try DatabaseQueue(), bridge: BridgeInstaller(settingsURL: tmp.appending(path: "s.json"), meepoHome: tmp),
+                                usageRoot: tmp, defaults: defaults).headlessModel, "opus", "kept across launches")
+    }
+
     /// Explain for users is one short call of its own, not a fork of the session's conversation.
     func testExplainIsNotAFork() {
         let args = ClaudeHeadless.jsonArguments(schema: Work.schema)

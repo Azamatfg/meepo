@@ -1,11 +1,20 @@
 import Foundation
 
 /// One-off `claude -p` outside any session (release notes, EXPLAIN): the prompt goes in on stdin, the answer
-/// comes back as text. Uses the default model and the user's own login.
+/// comes back as text. Uses the model chosen in Settings and the user's own login.
 enum ClaudeHeadless {
     /// No tools, nothing saved, no settings files (so no hooks reach Meepo's bridge).
     /// `--bare` would also skip the keychain, i.e. the subscription login.
     static let arguments = ["-p", "--tools", "", "--no-session-persistence", "--setting-sources", ""]
+
+    /// Until the user picks another: the same EXPLAIN of a real commit cost $0.012 on Haiku against Opus's $0.067,
+    /// in the same 10 s (2026-10-17).
+    static let defaultModel = "haiku"
+
+    /// `model`: a `--model` value; "" = Claude Code's default.
+    static func arguments(model: String) -> [String] {
+        arguments + (model.isEmpty ? [] : ["--model", model])
+    }
 
     struct Failure: LocalizedError {
         let errorDescription: String?
@@ -14,17 +23,17 @@ enum ClaudeHeadless {
     /// A JSON answer checked against `schema`. A fresh, empty conversation — never a fork of a session's, which
     /// re-read the whole conversation (~600k tokens a click on a long day) and after /clear explained the wrong one.
     /// `tools`: built-in tools it may use ("" = none); a DRAW question reads the project with read-only ones.
-    static func jsonArguments(schema: String, tools: String = "") -> [String] {
-        var args = arguments
+    static func jsonArguments(schema: String, tools: String = "", model: String = "") -> [String] {
+        var args = arguments(model: model)
         if let flag = args.firstIndex(of: "--tools") { args[flag + 1] = tools }
         return args + ["--output-format", "json", "--json-schema", schema]
     }
 
     /// Returns the JSON of the answer (`structured_output`).
     static func askJSON(_ prompt: String, schema: String, claude: String, environment: [String: String],
-                        tools: String = "", directory: URL? = nil) async throws -> Data {
+                        tools: String = "", model: String, directory: URL? = nil) async throws -> Data {
         let output = try await run(prompt, claude: claude, environment: environment,
-                                   arguments: jsonArguments(schema: schema, tools: tools), directory: directory)
+                                   arguments: jsonArguments(schema: schema, tools: tools, model: model), directory: directory)
         guard let object = try? JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any],
               let structured = object["structured_output"],
               let data = try? JSONSerialization.data(withJSONObject: structured) else {
@@ -36,7 +45,7 @@ enum ClaudeHeadless {
     /// Runs off the main thread; the login shell's environment carries PATH (nvm) and no CLAUDE_* leftovers.
     /// `directory`: where claude runs (a DRAW question reads the project there); ~/.meepo otherwise.
     static func run(_ prompt: String, claude: String, environment: [String: String],
-                    arguments: [String] = arguments, directory: URL? = nil) async throws -> String {
+                    arguments: [String], directory: URL? = nil) async throws -> String {
         try await Task.detached {
             let process = Process()
             process.executableURL = URL(filePath: claude)

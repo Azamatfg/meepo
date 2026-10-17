@@ -25,6 +25,13 @@ final class HookPayloadTests: XCTestCase {
         XCTAssertNil(HookPayload(json: Data("not json".utf8)))
     }
 
+    /// A waiting session compacted while the user is away (2.1.299) is still waiting: no Stop would end "working".
+    func testCompactionDoesNotStartATurn() {
+        for event in ["PreCompact", "PostCompact"] {
+            XCTAssertNil(HookPayload(event: event, claudeSessionId: "s").status, event)
+        }
+    }
+
     func testUnknownEventIsKeptButDoesNotChangeStatus() throws {
         let p = try XCTUnwrap(HookPayload(json: Data(#"{"session_id":"s","hook_event_name":"FutureEvent"}"#.utf8)))
         XCTAssertNil(p.status)

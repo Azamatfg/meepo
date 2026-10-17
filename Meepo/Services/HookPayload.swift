@@ -78,9 +78,12 @@ struct HookPayload: Equatable {
     /// Status the event puts the session in; nil when the event says nothing about it.
     var status: SessionStatus? {
         switch event {
-        case "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
-             "SubagentStart", "SubagentStop", "PreCompact", "PostCompact":
+        case "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "SubagentStart", "SubagentStop":
             .thinking
+        // Mid-turn the session is already working; between turns (/compact, idle compaction since 2.1.299) no
+        // Stop follows, and "working" would stick.
+        case "PreCompact", "PostCompact":
+            nil
         case "PermissionRequest":
             isQuestion ? .waitingInput : .waitingPermission
         case "Notification":
