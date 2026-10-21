@@ -1,9 +1,11 @@
 import SwiftUI
 
 /// Token usage of every Claude Code session on this Mac: today / this week / all time, by project and by model.
+/// IMPACT: is development getting more effective with meepo, week by week.
 struct StatsView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("statsImpact") private var isImpact = false
     @State private var period = Period.today
     /// Counted when the period changes, not on every hook event that redraws the sheet (All time: two ~14 ms queries).
     @State private var stats = AppStore.UsageStats()
@@ -26,8 +28,13 @@ struct StatsView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("STATS").font(Fonts.title(18)).foregroundStyle(Tokens.text)
+                ForEach([false, true], id: \.self) { impact in
+                    Button(impact ? "Impact" : "Tokens") { isImpact = impact }
+                        .buttonStyle(PixelButtonStyle())
+                        .overlay { if impact == isImpact { Bevel(raised: false) } }
+                }
                 Spacer()
-                ForEach(Period.allCases, id: \.self) { p in
+                ForEach(isImpact ? [] : Period.allCases, id: \.self) { p in
                     Button(p.rawValue) { period = p }
                         .buttonStyle(PixelButtonStyle())
                         .overlay { if p == period { Bevel(raised: false) } }
@@ -36,6 +43,9 @@ struct StatsView: View {
                     .buttonStyle(PixelButtonStyle())
                     .keyboardShortcut(.cancelAction)
             }
+            if isImpact {
+                ImpactPanel()
+            } else {
             HStack(alignment: .firstTextBaseline) {
                 Text(TokenFormat.short(stats.total.total))
                     .font(Fonts.mono(28).bold())
@@ -61,6 +71,7 @@ struct StatsView: View {
                     UsageTable(title: "By model", rows: stats.byModel)
                 }
             }
+            }
         }
         .padding(16)
         .frame(width: 640)
@@ -70,6 +81,113 @@ struct StatsView: View {
         .task(id: period) {
             stats = store.usageStats(since: period.start())
             if period == .all { since = store.usageHistoryStart() }
+        }
+    }
+}
+
+/// Weeks side by side: BEFORE meepo, with MEEPO, in a plain TERMINAL — then each week.
+private struct ImpactPanel: View {
+    @Environment(AppStore.self) private var store
+    @State private var weeks: [Impact.Week]?
+    @State private var isFetchingCI = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("""
+                Your weeks in meepo's projects. A week is MEEPO or TERMINAL by where most of its hours went — work a \
+                week in a plain terminal and it shows here on its own. Small numbers swing: compare several weeks.\
+                \(isFetchingCI ? " Asking GitHub for CI…" : "")
+                """)
+                .font(.caption)
+                .foregroundStyle(Tokens.textDim)
+                .fixedSize(horizontal: false, vertical: true)
+            if let weeks {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        let modes = Impact.Mode.allCases.compactMap { mode -> (String, Impact.Mode?, Impact.Totals)? in
+                            let picked = weeks.filter { $0.mode == mode }
+                            return picked.isEmpty ? nil : ("\(picked.count) wk", mode, picked.map(\.totals).reduce(Impact.Totals(), +))
+                        }
+                        ImpactTable(title: "Overall", rows: modes)
+                        ImpactTable(title: "By week", rows: weeks.map {
+                            ($0.start.formatted(.dateTime.month(.abbreviated).day()), $0.mode, $0.totals)
+                        })
+                    }
+                }
+            } else {
+                Text("Counting… (git, history, transcripts)").foregroundStyle(Tokens.textDim)
+            }
+        }
+        .task {
+            let folders = Array(Set((store.projects.map(\.path) + store.nestedRepos.values.flatMap { $0.map(\.path) }).map(AppStore.realPath)))
+            let local = await Impact.local(folders: folders, since: Impact.since())
+            weeks = Impact.weeks(local, ci: [])
+            guard let gh = store.ciProviders.lazy.compactMap({ ($0 as? GitHubActions)?.gh }).first else { return }
+            isFetchingCI = true
+            let ci = await Impact.ci(repos: local.repos, gh: gh)
+            isFetchingCI = false
+            weeks = Impact.weeks(local, ci: ci)
+        }
+    }
+}
+
+private struct ImpactTable: View {
+    let title: String
+    let rows: [(label: String, mode: Impact.Mode?, totals: Impact.Totals)]
+
+    private static let columns: [(String, String)] = [
+        ("hours", "Hours with at least one request you typed"),
+        ("shipped/h", "Your commits on the default branch per active hour"),
+        ("rework", "Of those commits, fixes and reverts touching a file changed in the 48 hours before"),
+        ("CI failed", "GitHub Actions runs you started that failed"),
+        ("wait/day", "Minutes a day sessions sat finished until you answered, summed over sessions (two waiting 10 min = 20); each pause up to \(Int(Impact.maxPause / 60)) min. Permission prompts aren't in transcripts, so real waiting is a little longer"),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased()).font(Fonts.title(16)).foregroundStyle(Tokens.text)
+            Grid(alignment: .trailing, horizontalSpacing: 14, verticalSpacing: 4) {
+                GridRow {
+                    Text("").gridColumnAlignment(.leading)
+                    Text("").gridColumnAlignment(.leading)
+                    ForEach(Self.columns, id: \.0) { name, help in
+                        Text(name).font(.caption).foregroundStyle(Tokens.textDim).help(help)
+                    }
+                }
+                if rows.isEmpty {
+                    GridRow { Text("Nothing yet").foregroundStyle(Tokens.textDim).gridCellColumns(7) }
+                }
+                ForEach(rows, id: \.label) { row in
+                    let t = row.totals
+                    GridRow {
+                        Text(row.label).foregroundStyle(Tokens.text)
+                        Text(row.mode?.rawValue ?? "").font(Fonts.ui(11, weight: .bold)).foregroundStyle(Self.color(row.mode))
+                        cell("\(t.hours)")
+                        cell(t.shippedPerHour.map { $0.formatted(.number.precision(.fractionLength(2))) }, help: "\(t.shipped) commits")
+                        cell(t.reworkShare.map(Self.percent), help: "\(t.rework) of \(t.shipped)")
+                        cell(t.ciFailedShare.map(Self.percent), help: "\(t.ciFailed) of \(t.ciRuns) runs")
+                        cell(t.waitingMinutesPerDay.map { "\(Int($0.rounded())) min" }, help: "over \(t.waitingDays) days")
+                    }
+                }
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Tokens.dirt)
+            .sunken()
+        }
+    }
+
+    private func cell(_ text: String?, help: String = "") -> some View {
+        Text(text ?? "—").font(Fonts.mono(12)).foregroundStyle(text == nil ? Tokens.textDim : Tokens.text).help(help)
+    }
+
+    private static func percent(_ share: Double) -> String { "\(Int((share * 100).rounded()))%" }
+
+    private static func color(_ mode: Impact.Mode?) -> Color {
+        switch mode {
+        case .meepo: Tokens.work
+        case .terminal: Tokens.screen
+        case .before, nil: Tokens.textDim
         }
     }
 }

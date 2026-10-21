@@ -139,9 +139,10 @@ struct GitHubActions: CIProvider {
 
     var reviewRequest: String { "a PR into %@ with `gh pr create`" }
 
+    static let runFields = "databaseId,workflowName,headBranch,headSha,status,conclusion,createdAt,startedAt,updatedAt,attempt,url,event"
+
     func runs(in path: String) async -> [CIRun] {
-        let fields = "databaseId,workflowName,headBranch,headSha,status,conclusion,createdAt,startedAt,updatedAt,attempt,url,event"
-        guard let data = await CLI.run(gh, ["run", "list", "-L", "30", "--json", fields], in: path) else { return [] }
+        guard let data = await CLI.run(gh, ["run", "list", "-L", "30", "--json", Self.runFields], in: path) else { return [] }
         return (try? Self.decoder.decode([CIRun].self, from: data)) ?? []
     }
 

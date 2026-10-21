@@ -11,8 +11,9 @@ enum UsageScanner {
     static let defaultRoot = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude/projects")
 
     /// Blocking; call off the main thread. Returns how many new responses were recorded.
+    /// `launched`: where meepo's own sessions are listed for IMPACT.
     @discardableResult
-    static func scan(root: URL = defaultRoot, into db: DatabaseQueue) throws -> Int {
+    static func scan(root: URL = defaultRoot, into db: DatabaseQueue, launched: URL = Impact.launchedFile) throws -> Int {
         guard let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
         let offsets = try db.read { db in
             try Dictionary(uniqueKeysWithValues: Row.fetchAll(db, sql: "SELECT path, offset FROM scanState")
@@ -24,12 +25,12 @@ enum UsageScanner {
             var offset = offsets[url.path] ?? 0
             if offset > size { offset = 0 } // file was rewritten; message ids keep this from double counting
             guard size > offset else { continue }
-            added += try scanFile(url, from: offset, into: db)
+            added += try scanFile(url, from: offset, into: db, launched: launched)
         }
         return added
     }
 
-    private static func scanFile(_ url: URL, from offset: Int, into db: DatabaseQueue) throws -> Int {
+    private static func scanFile(_ url: URL, from offset: Int, into db: DatabaseQueue, launched: URL) throws -> Int {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         try handle.seek(toOffset: UInt64(offset))
@@ -38,15 +39,21 @@ enum UsageScanner {
         if parsed.badLines > 0 { log.notice("\(url.lastPathComponent, privacy: .public): skipped \(parsed.badLines) unreadable lines") }
         guard parsed.consumed > 0 else { return 0 }
         let blocks = parseBlocks(data.prefix(parsed.consumed))
-        return try db.write { db in
+        let ids = Array(Set(parsed.records.map(\.claudeSessionId)))
+        let (added, own) = try db.write { db in
             let before = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM usageRecord") ?? 0
             for record in parsed.records { try upsert(record, db) }
             for block in blocks { try insert(block, db) }
             let added = (try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM usageRecord") ?? 0) - before
             try db.execute(sql: "INSERT OR REPLACE INTO scanState (path, offset) VALUES (?, ?)",
                            arguments: [url.path, offset + parsed.consumed])
-            return added
+            // Meepo's sessions, `/clear`'s new ids included, while they're still open here.
+            let own = ids.isEmpty ? [] : try String.fetchAll(db, sql: "SELECT claudeSessionId FROM session WHERE claudeSessionId IN (\(ids.map { _ in "?" }.joined(separator: ",")))",
+                                                              arguments: StatementArguments(ids))
+            return (added, own)
         }
+        Impact.remember(Set(own), file: launched)
+        return added
     }
 
     /// A response is written in several lines as it streams; later lines carry the final (larger) usage,
