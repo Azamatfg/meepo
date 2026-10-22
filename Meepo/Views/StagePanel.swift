@@ -152,7 +152,7 @@ struct StagePanel: View {
                       ? "Talk instead of typing: turns on Claude Code's voice dictation (/voice) in every session. The first time, macOS asks whether meepo may use the microphone."
                       : listening
                       ? "Listening. Click STOP when you're done — the words go into the prompt, not sent yet."
-                      : "Click SPEAK and talk, STOP when done: the words land in the prompt, unsent — fix them, SPEAK again to add more, SEND when it's right. Holding Space in the terminal does the same. Right-click to turn voice off.")
+                      : "Click SPEAK and talk, STOP when done: the words land in the prompt, unsent — fix them, SPEAK again to add more, SEND when it's right. Holding fn+Control (or Space in the terminal) does the same. Right-click to turn voice off.")
                 .contextMenu {
                     if store.isVoiceOn {
                         Button("Turn voice off") { Task { _ = await store.toggleVoice() } }
@@ -161,7 +161,7 @@ struct StagePanel: View {
                 .popover(isPresented: $isVoiceHintShown, arrowEdge: .top) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Voice is on").font(Fonts.ui(14, weight: .bold))
-                        Text("Click SPEAK and talk, STOP when you're done — the words go into the prompt, not sent. Fix them, SPEAK again to add more, then SEND. Holding Space in a terminal does the same. It's Claude Code's /voice: it works in every session, in meepo and outside it; the language is in /config.")
+                        Text("Click SPEAK and talk, STOP when you're done — the words go into the prompt, not sent. Fix them, SPEAK again to add more, then SEND. Or hold fn+Control while you talk. Holding Space in a terminal does the same. It's Claude Code's /voice: it works in every session, in meepo and outside it; the language is in /config.")
                             .font(Fonts.ui(13)).foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(14)
