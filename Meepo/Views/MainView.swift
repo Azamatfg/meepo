@@ -322,6 +322,7 @@ private struct PresetPicker: View {
 
     private func help(_ preset: ShellLayout.Preset) -> String {
         switch preset {
+        case .solo: "Only the terminal, no panels (⌘⇧↩ turns it on and off)"
         case .focus: "One terminal; what changed for users and who waits on the right"
         case .deck: "Four terminals at once, sessions on the left"
         case .full: "Explorer and Source Control on the left, two terminals, events and CI below"

@@ -132,6 +132,10 @@ struct MeepoApp: App {
                     .disabled(store.projects.isEmpty)
             }
             CommandGroup(replacing: .appSettings) { SettingsCommand(store: store) }
+            CommandGroup(before: .windowSize) {
+                Button("Solo — Only the Terminal") { store.toggleSolo() }
+                    .keyboardShortcut(.return, modifiers: [.command, .shift])
+            }
             CommandMenu("Sessions") {
                 ForEach(1...9, id: \.self) { number in
                     Button("Session \(number)") { store.selectSession(number: number) }

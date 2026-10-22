@@ -1552,6 +1552,13 @@ final class AppStore {
         shell = editedLayouts[preset] ?? ShellLayout.preset(preset)
     }
 
+    /// ⌘⇧↩: Solo, and back to the preset it was opened from.
+    private var presetBeforeSolo: ShellLayout.Preset = .focus
+
+    func toggleSolo() {
+        if shellPreset == .solo { applyPreset(presetBeforeSolo) } else { presetBeforeSolo = shellPreset; applyPreset(.solo) }
+    }
+
     /// Moves, hides or opens panels by hand: the current preset keeps it — set up once, it stays that way.
     func editShell(_ change: (inout ShellLayout) -> Void) {
         var layout = shell

@@ -61,6 +61,17 @@ final class ShellStoreTests: XCTestCase {
         XCTAssertNil(store.editedLayouts[.focus])
     }
 
+    func testSoloShowsOnlyOneTerminalAndTheKeyGoesBackToWhereYouWere() {
+        XCTAssertEqual(ShellLayout.preset(.solo), ShellLayout(left: [], right: [], bottom: [], split: 1))
+        store.applyPreset(.full)
+        store.editShell { $0.split = 4 }
+        store.toggleSolo()
+        XCTAssertEqual(store.shellPreset, .solo)
+        store.toggleSolo()
+        XCTAssertEqual(store.shellPreset, .full, "back to the preset before Solo, not the default one")
+        XCTAssertEqual(store.shell.split, 4, "with your changes to it")
+    }
+
     func testChangingBackToTheDefaultIsNotAnEdit() {
         store.applyPreset(.full)
         store.editShell { $0.split = 4 }

@@ -11,7 +11,7 @@ struct ShellLayout: Codable, Equatable {
     enum Zone: String, Codable, CaseIterable { case left, right, bottom }
 
     enum Preset: String, Codable, CaseIterable, Identifiable {
-        case focus, deck, full
+        case solo, focus, deck, full
         var id: String { rawValue }
         var title: String { rawValue.capitalized }
     }
@@ -27,6 +27,8 @@ struct ShellLayout: Codable, Equatable {
     /// A preset as it comes, before the user changes it.
     static func preset(_ preset: Preset) -> ShellLayout {
         switch preset {
+        // Solo: the terminal and nothing around it (⌘⇧↩).
+        case .solo: ShellLayout(left: [], right: [], bottom: [], split: 1)
         // Focus is the simplest view: what changed for users first, then who waits.
         case .focus: ShellLayout(left: [], right: [.product, .waiting], bottom: [], split: 1)
         // Side zones on both sides leave ~780 pt at 1440 wide — one terminal. Presets with several keep one side.
