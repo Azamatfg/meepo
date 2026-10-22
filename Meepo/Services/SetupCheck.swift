@@ -36,7 +36,7 @@ enum SetupCheck {
     /// left was exactly 30 days old).
     static func transcriptCleanup(_ settings: [String: Any]) -> [Finding] {
         let days = (settings["cleanupPeriodDays"] as? NSNumber)?.intValue
-        guard (days ?? 30) < 90 else { return [] }
+        guard (days ?? 30) < keptDays else { return [] }
         return [Finding(
             id: "cleanup-days",
             title: "Claude Code deletes your sessions after \(days ?? 30) days",
