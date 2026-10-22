@@ -2,7 +2,7 @@
 # PreToolUse hook: block editing .env files and secrets
 
 INPUT=$(cat)
-FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
+FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty') || exit 1
 
 BLOCKED_PATTERNS=(".env" "secrets" "credentials" ".jks" "keystore")
 

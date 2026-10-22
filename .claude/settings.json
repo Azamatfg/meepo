@@ -6,12 +6,12 @@
     "PreToolUse": [
       {
         "matcher": "Edit|Write",
-        "hooks": [ { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/protect-env.sh" } ]
+        "hooks": [ { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/protect-env.sh", "onFailure": "block" } ]
       },
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-bash-safety.sh" },
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-bash-safety.sh", "onFailure": "block" },
           { "type": "command", "if": "Bash(git commit*)", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/commit-msg-validate.sh" }
         ]
       }

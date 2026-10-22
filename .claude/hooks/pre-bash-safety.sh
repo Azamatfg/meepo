@@ -2,7 +2,7 @@
 # PreToolUse hook for Bash: block dangerous commands
 
 INPUT=$(cat)
-COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
+COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty') || exit 1
 
 # Block destructive git commands
 if echo "$COMMAND" | grep -qE 'git (push --force|reset --hard|clean -fd)'; then
