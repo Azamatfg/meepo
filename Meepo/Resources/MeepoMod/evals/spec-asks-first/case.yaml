@@ -1,0 +1,22 @@
+schema_version: "1.1"
+name: spec-asks-first
+description: An eval run has nobody to answer, and no AskUserQuestion in claude -p, so this grades the start of the interview.
+tags: [spec]
+context:
+  scaffold_script: fixture.sh
+execution:
+  prompt: "/meepo:spec promo codes at checkout"
+  max_turns: 10
+  allowed_tools: [Read, Glob, Grep, Skill, AskUserQuestion, Write]
+graders:
+  - name: one-question
+    type: llm
+    criteria: "The reply opens the interview with one question on one topic about promo codes, offering options with its own recommendation marked and placed first. A short follow-up on the same topic is fine; a questionnaire of several topics is not. It does not write the spec yet."
+  - name: no-spec-yet
+    type: file_exists
+    path: "docs/specs/*.md"
+    exists: false
+  - name: no-code
+    type: file_exists
+    path: "**/*.{js,ts,py}"
+    exists: false

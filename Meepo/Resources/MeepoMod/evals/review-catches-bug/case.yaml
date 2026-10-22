@@ -1,0 +1,20 @@
+schema_version: "1.1"
+name: review-catches-bug
+tags: [review]
+context:
+  scaffold_script: fixture.sh
+execution:
+  prompt: "/meepo:review"
+  max_turns: 15
+  allowed_tools: [Read, Glob, Grep, Skill, Agent, Bash, Edit]
+graders:
+  - name: names-the-bug
+    type: llm
+    criteria: "Among its Critical findings the reply says the discount raises the total instead of lowering it (the sign in the formula is wrong). Reporting it as found and already fixed counts."
+  - name: fresh-eyes
+    type: tool_used
+    tool: Agent
+  - name: fixed
+    type: regex
+    target: { source: file, path: cart.py }
+    pattern: "1 - discount"

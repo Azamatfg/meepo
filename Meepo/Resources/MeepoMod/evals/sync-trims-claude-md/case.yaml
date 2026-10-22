@@ -1,0 +1,30 @@
+schema_version: "1.1"
+name: sync-trims-claude-md
+tags: [sync]
+context:
+  scaffold_script: fixture.sh
+  history_file: history.jsonl
+execution:
+  prompt: "/meepo:sync"
+  max_turns: 12
+  allowed_tools: [Read, Glob, Grep, Skill, Edit, Write]
+graders:
+  - name: keeps-the-rule
+    type: regex
+    target: { source: file, path: CLAUDE.md }
+    pattern: "tiyn"
+  - name: learns-the-trap
+    type: regex
+    target: { source: file, path: CLAUDE.md }
+    pattern: "--run"
+  - name: drops-the-outdated
+    type: regex
+    target: { source: file, path: CLAUDE.md }
+    # The command, not the word: "moved from jest to vitest" is a fair note to keep.
+    pattern: "Tests: `npm run jest"
+    match: not_contains
+  - name: drops-the-obvious
+    type: regex
+    target: { source: file, path: CLAUDE.md }
+    pattern: "has a package.json"
+    match: not_contains

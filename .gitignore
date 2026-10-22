@@ -22,3 +22,8 @@ Meepo.xcodeproj/
 
 # Written by `claude plugin validate/test` (types for the editor)
 Meepo/Resources/MeepoMod/tsconfig.json
+
+# claude plugin eval results
+Meepo/Resources/MeepoMod/evals/results/
+# A resumed history_file case writes its session (named by the session id) next to the case
+Meepo/Resources/MeepoMod/evals/*/????????-????-????-????-????????????.jsonl

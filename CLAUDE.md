@@ -45,6 +45,8 @@ Subagents: `code-reviewer`, `security-auditor`.
 - Генерация: `xcodegen generate` (после изменения `project.yml` или добавления файлов)
 - Сборка: `xcodebuild -project Meepo.xcodeproj -scheme Meepo -skipPackagePluginValidation build`
 - Тесты: `xcodebuild -project Meepo.xcodeproj -scheme Meepo -destination 'platform=macOS,arch=arm64' -skipPackagePluginValidation test`
+- Перед push (и как check проекта в meepo): `scripts/check.sh` — тесты мода и ключевые классы, ~20 с; весь набор — перед релизом
+- Evals скиллов мода: `Meepo/Resources/MeepoMod/evals/README.md`
 - `-skipPackagePluginValidation` — у SwiftTerm build-плагин (генерирует build info); в Xcode GUI нажать «Trust & Enable»
 - SwiftTerm содержит Metal-шейдеры: один раз `xcodebuild -downloadComponent MetalToolchain`
 - `claude` запускается через `$SHELL -l -i -c` — чтобы подхватить PATH из `.zshrc` (nvm)

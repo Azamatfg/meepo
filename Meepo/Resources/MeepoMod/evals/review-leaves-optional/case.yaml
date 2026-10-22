@@ -1,0 +1,17 @@
+schema_version: "1.1"
+name: review-leaves-optional
+tags: [review]
+context:
+  scaffold_script: fixture.sh
+execution:
+  prompt: "/meepo:review"
+  max_turns: 15
+  allowed_tools: [Read, Glob, Grep, Skill, Agent, Bash, Edit]
+graders:
+  - name: nothing-critical
+    type: llm
+    criteria: "The reply finds no Critical problem in the change. Anything it mentions (such as the 1.12 tax rate) is listed as Optional, for the user to decide."
+  - name: code-left-alone
+    type: regex
+    target: { source: file, path: cart.py }
+    pattern: "return total\\(prices\\) \\* 1\\.12"

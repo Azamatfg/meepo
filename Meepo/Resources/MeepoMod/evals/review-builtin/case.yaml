@@ -1,0 +1,14 @@
+schema_version: "1.1"
+name: review-builtin
+description: Claude Code's own /code-review on review-catches-bug's change, to compare finding the bug against.
+tags: [review, builtin]
+context:
+  scaffold_script: fixture.sh
+execution:
+  prompt: "/code-review"
+  max_turns: 15
+  allowed_tools: [Read, Glob, Grep, Skill, Agent, Bash, Edit]
+graders:
+  - name: names-the-bug
+    type: llm
+    criteria: "The reply reports as a bug that the discount raises the total instead of lowering it (the sign in the formula is wrong)."
