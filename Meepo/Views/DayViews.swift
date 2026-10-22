@@ -185,11 +185,18 @@ struct MorningView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var pasted = ""
     @State private var selected: Set<Int64> = []
+    /// Nil while it's read: it fetches every project and runs git, never from the body.
+    @State private var brief: [Brief.Item]?
 
     var body: some View {
         let open = store.tasks.filter { !$0.isDone }
         VStack(alignment: .leading, spacing: 10) {
             Text("MORNING").font(Fonts.title(18)).foregroundStyle(Tokens.text)
+            if let brief {
+                if !brief.isEmpty { BriefSection(items: brief) }
+            } else {
+                Text("Reading what happened since your last answer…").font(.caption).foregroundStyle(Tokens.textDim)
+            }
             Text("One task per line. Projects are guessed by name — check them before starting.")
                 .font(.caption).foregroundStyle(Tokens.textDim)
             HStack(alignment: .bottom, spacing: 6) {
@@ -232,6 +239,63 @@ struct MorningView: View {
         .pixelFrame(6)
         // Open tasks from yesterday are in by default: "evening list → tomorrow's sessions".
         .onAppear { selected = Set(open.filter { $0.projectId != nil }.compactMap(\.id)) }
+        .task { brief = await store.brief() }
+    }
+}
+
+/// SINCE LAST ANSWER: per project, what failed, what waits and who pushed while the person was away.
+private struct BriefSection: View {
+    @Environment(AppStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    let items: [Brief.Item]
+
+    var body: some View {
+        let projects = items.map(\.project).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+        VStack(alignment: .leading, spacing: 4) {
+            Text("SINCE LAST ANSWER").font(Fonts.title(12)).foregroundStyle(Tokens.text)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(projects, id: \.self) { project in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(project).font(Fonts.mono(11)).foregroundStyle(Tokens.textDim)
+                            ForEach(items.filter { $0.project == project }) { row($0) }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 180)
+            .padding(6)
+            .background(Tokens.dirt)
+            .sunken()
+        }
+    }
+
+    private func row(_ item: Brief.Item) -> some View {
+        let (mark, color): (String, Color) = switch item.kind {
+        case .ciFailed: ("✗", Tokens.danger)
+        case .waitsForYou, .session: ("!", Tokens.need)
+        case .teammates: ("↓", Tokens.screen)
+        }
+        return VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 6) {
+                Text(mark).font(Fonts.mono(12)).foregroundStyle(color)
+                Text(item.text).foregroundStyle(Tokens.text).lineLimit(1)
+                Spacer()
+                if let url = item.url.flatMap(URL.init(string:)) {
+                    Link("↗", destination: url).foregroundStyle(Tokens.screen)
+                }
+                if let id = item.sessionId {
+                    Button("OPEN") { store.selectedSessionId = id; dismiss() }.buttonStyle(PixelButtonStyle())
+                }
+            }
+            ForEach(Array(item.lines.prefix(3).enumerated()), id: \.offset) { _, line in
+                Text(line).font(Fonts.mono(11)).foregroundStyle(Tokens.textDim).lineLimit(1).padding(.leading, 18)
+            }
+            if item.lines.count > 3 {
+                Text("+\(item.lines.count - 3) more").font(.caption).foregroundStyle(Tokens.textDim).padding(.leading, 18)
+            }
+        }
     }
 }
 

@@ -1043,6 +1043,15 @@ final class AppStore {
             + elsewhere.filter(\.needsYou).count
     }
 
+    private static let lastAnswerKey = "lastAnswerAt"
+
+    /// When Claude last finished a turn the person was there for: MORNING's brief counts from there. Kept apart
+    /// from the sessions' events, which go with a closed session; a CI fix meepo started alone doesn't move it.
+    func lastAnswerAt() -> Date? { defaults.object(forKey: Self.lastAnswerKey) as? Date }
+
+    /// Sessions meepo started on its own (CI autofix) in this run.
+    private var unattendedSessionIds: Set<Int64> = []
+
     // MARK: Quitting without cutting agents off
 
     /// Sessions in the middle of a turn: quitting now would cut them off.
@@ -1111,6 +1120,7 @@ final class AppStore {
     func handleHookEvent(_ payload: HookPayload, sessionId: Int64) -> Attention? {
         interruptedSessionIds.remove(sessionId)
         if payload.event == "UserPromptSubmit" { holds[sessionId] = nil } // what was said reached claude
+        if payload.event == "Stop", !unattendedSessionIds.contains(sessionId) { defaults.set(Date.now, forKey: Self.lastAnswerKey) }
         defer {
             if quitWhenIdle, workingSessionIds.isEmpty {
                 quitWhenIdle = false
@@ -2399,6 +2409,7 @@ final class AppStore {
         let name = "ci-fix-\(ClaudeLauncher.worktreeSlug(run.headBranch))-\(run.databaseId % 100_000)"
         do {
             try createSession(projectId: projectId, model: nil, prompt: CIGuard.fixPrompt(run, log: log, reviewRequest: provider.reviewRequest), worktree: name)
+            if let id = selectedSessionId { unattendedSessionIds.insert(id) }
             onCINotice?("Fixing CI", "\(project.name) · \(run.headBranch): \(run.workflowName) — new session \(name)")
         } catch {
             bridgeError = error.localizedDescription
