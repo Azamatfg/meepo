@@ -112,6 +112,9 @@ final class AppStore {
         shellsBeside = defaults.object(forKey: Self.shellsBesideKey) as? Bool ?? true
         learnsUsage = defaults.object(forKey: Self.learnsUsageKey) as? Bool ?? true
         tabOrder = (defaults.array(forKey: Self.tabOrderKey) as? [Int64]) ?? []
+        collapsedGroups = Set((defaults.array(forKey: Self.collapsedGroupsKey) as? [String]) ?? [])
+        tabGroupNames = Dictionary(uniqueKeysWithValues: ((defaults.dictionary(forKey: Self.tabGroupNamesKey) as? [String: String]) ?? [:])
+            .compactMap { key, name in Int64(key).map { ($0, name) } })
         appearance = defaults.string(forKey: Self.appearanceKey).flatMap(Appearance.init) ?? .system
         autofixProjectIds = Set((defaults.array(forKey: Self.autofixKey) as? [Int64]) ?? [])
         fixAttempts = (defaults.dictionary(forKey: Self.fixAttemptsKey) as? [String: Int]) ?? [:]
@@ -231,6 +234,8 @@ final class AppStore {
 
     /// The session whose Rename box is open.
     var renamingSessionId: Int64?
+    /// The session New Group… was picked on: the sheet asks for the group's name.
+    var groupingSessionId: Int64?
 
     /// Renames in Meepo, and in Claude Code too when the session is running (`/rename` works mid-turn).
     func rename(_ sessionId: Int64, to name: String) {
@@ -3129,7 +3134,59 @@ final class AppStore {
     /// Tabs left to right. By project, oldest first, until the user drags a tab; then their order, and a session
     /// not in it yet (new since) goes last, so the arranged tabs and grid stay put — except a shell, which comes
     /// right after the one before it in the project order: the session it was opened beside.
+    /// A project's tabs always stand together: groups in the order their first tab has, so an old order still holds.
     var orderedSessions: [Session] {
+        tabGroups.flatMap(\.sessions)
+    }
+
+    struct TabGroup: Identifiable {
+        /// A project's tabs, or a group the user named (sessions of any projects, e.g. "support").
+        enum Kind: Hashable { case project(Int64), named(String) }
+        let kind: Kind
+        let sessions: [Session]
+        var id: Kind { kind }
+        /// How it's kept in UserDefaults.
+        var key: String {
+            switch kind {
+            case .project(let id): "project:\(id)"
+            case .named(let name): "named:\(name)"
+            }
+        }
+    }
+
+    var tabGroups: [TabGroup] {
+        var groups: [TabGroup] = []
+        for session in arrangedSessions {
+            let kind = session.id.flatMap { tabGroupNames[$0] }.map(TabGroup.Kind.named) ?? .project(session.projectId)
+            if let index = groups.firstIndex(where: { $0.kind == kind }) {
+                groups[index] = TabGroup(kind: kind, sessions: groups[index].sessions + [session])
+            } else {
+                groups.append(TabGroup(kind: kind, sessions: [session]))
+            }
+        }
+        return groups
+    }
+
+    private static let tabGroupNamesKey = "tabGroupNames"
+
+    /// Sessions the user put in a group of their own: session id → the group's name. The rest go by project.
+    private(set) var tabGroupNames: [Int64: String] = [:] {
+        didSet { defaults.set(Dictionary(uniqueKeysWithValues: tabGroupNames.map { (String($0), $1) }), forKey: Self.tabGroupNamesKey) }
+    }
+
+    /// The user's groups in use, by name.
+    var groupNames: [String] {
+        Set(sessions.compactMap { $0.id.flatMap { tabGroupNames[$0] } }).sorted()
+    }
+
+    /// Into the group `name`, made if it's new; nil or blank: back to its project's group.
+    func setGroup(_ sessionId: Int64, to name: String?) {
+        let clean = name?.trimmingCharacters(in: .whitespaces) ?? ""
+        tabGroupNames[sessionId] = clean.isEmpty ? nil : clean
+    }
+
+    /// `tabOrder` applied as it is, projects possibly mixed; `tabGroups` gathers them.
+    private var arrangedSessions: [Session] {
         let base = projects.flatMap { project in sessions.filter { $0.projectId == project.id } }
         guard !tabOrder.isEmpty else { return base }
         let rank = Dictionary(tabOrder.enumerated().map { ($1, $0) }) { first, _ in first }
@@ -3151,12 +3208,35 @@ final class AppStore {
     }
 
     /// A tab dropped on another: it takes that tab's place, pushing it right (or left, when dragged from its left).
+    /// Dropped on another project's tab, its whole group goes there instead — a tab never leaves its group.
     func moveTab(_ id: Int64, onto target: Int64) {
-        var ids = orderedSessions.compactMap(\.id)
-        guard id != target, let from = ids.firstIndex(of: id), let to = ids.firstIndex(of: target) else { return }
-        ids.remove(at: from)
-        ids.insert(id, at: to)
-        tabOrder = ids
+        var groups = tabGroups
+        guard id != target, let from = groupIndex(of: id, in: groups), let to = groupIndex(of: target, in: groups) else { return }
+        if from == to {
+            var ids = groups[from].sessions.compactMap(\.id)
+            guard let a = ids.firstIndex(of: id), let b = ids.firstIndex(of: target) else { return }
+            ids.remove(at: a)
+            ids.insert(id, at: b)
+            tabOrder = groups.flatMap { $0.kind == groups[from].kind ? ids : $0.sessions.compactMap(\.id) }
+        } else {
+            groups.insert(groups.remove(at: from), at: to)
+            tabOrder = groups.flatMap { $0.sessions.compactMap(\.id) }
+        }
+    }
+
+    private func groupIndex(of id: Int64, in groups: [TabGroup]) -> Int? {
+        groups.firstIndex { $0.sessions.contains { $0.id == id } }
+    }
+
+    private static let collapsedGroupsKey = "collapsedTabGroupKeys"
+
+    /// Groups (`TabGroup.key`) whose tabs show as one chip; the panes stay in the grid.
+    var collapsedGroups: Set<String> = [] {
+        didSet { defaults.set(Array(collapsedGroups), forKey: Self.collapsedGroupsKey) }
+    }
+
+    func toggleGroup(_ key: String) {
+        if collapsedGroups.contains(key) { collapsedGroups.remove(key) } else { collapsedGroups.insert(key) }
     }
 
     /// Closed this run, still holding their place in `tabOrder`: closed id → its project.
@@ -3171,11 +3251,29 @@ final class AppStore {
     }
 
     /// A terminal pane dropped on another by its header: the two trade places, in the grid and in the tabs.
+    /// Panes of two projects: their groups trade places, since a tab never leaves its group.
     func swapTabs(_ id: Int64, _ other: Int64) {
-        var ids = orderedSessions.compactMap(\.id)
-        guard id != other, let a = ids.firstIndex(of: id), let b = ids.firstIndex(of: other) else { return }
-        ids.swapAt(a, b)
-        tabOrder = ids
+        var groups = tabGroups
+        guard id != other, let a = groupIndex(of: id, in: groups), let b = groupIndex(of: other, in: groups) else { return }
+        if a == b {
+            var ids = orderedSessions.compactMap(\.id)
+            guard let x = ids.firstIndex(of: id), let y = ids.firstIndex(of: other) else { return }
+            ids.swapAt(x, y)
+            tabOrder = ids
+        } else {
+            // Whole groups move, so the two can't always both stay on screen: the dragged one does, selected, in
+            // the window that keeps most of what was shown.
+            let shown = Set(visibleSessionIds)
+            groups.swapAt(a, b)
+            tabOrder = groups.flatMap { $0.sessions.compactMap(\.id) }
+            selectedSessionId = id
+            let ids = orderedSessions.compactMap(\.id)
+            guard shown.count < ids.count, let at = ids.firstIndex(of: id) else { return }
+            let starts = max(0, at - shown.count + 1)...min(at, ids.count - shown.count)
+            let kept = { (start: Int) in ids[start..<start + shown.count].filter(shown.contains).count }
+            paneAnchor = starts.max { kept($0) < kept($1) }.map { ids[$0] }
+            return
+        }
         // The grid starts at the anchor: it moves with its slot, so the other panes stay where they were.
         if paneAnchor == id { paneAnchor = other } else if paneAnchor == other { paneAnchor = id }
     }

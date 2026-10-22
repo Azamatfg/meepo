@@ -62,6 +62,11 @@ struct MainView: View {
                 RenameSheet(session: session)
             }
         }
+        .sheet(isPresented: Binding(get: { store.groupingSessionId != nil }, set: { if !$0 { store.groupingSessionId = nil } })) {
+            if let id = store.groupingSessionId, let session = store.sessions.first(where: { $0.id == id }) {
+                GroupNameSheet(session: session)
+            }
+        }
         .sheet(isPresented: Binding(get: { store.editingCheckProjectId != nil }, set: { if !$0 { store.editingCheckProjectId = nil } })) {
             if let id = store.editingCheckProjectId, let project = store.projects.first(where: { $0.id == id }) {
                 CheckSheet(project: project)
@@ -154,8 +159,12 @@ private struct TitleBar: View {
                         Text("Home")
                     }
                     .help("All sessions at a glance")
-                    ForEach(store.orderedSessions) { session in
-                        SessionTab(session: session)
+                    ForEach(store.tabGroups) { group in
+                        if group.sessions.count == 1, case .project = group.kind {
+                            SessionTab(session: group.sessions[0])
+                        } else {
+                            TabGroupView(group: group)
+                        }
                     }
                     Menu {
                         Button("New Session…") { store.presentNewSession() }.disabled(store.projects.isEmpty)
@@ -210,6 +219,8 @@ private struct TitleBar: View {
 private struct SessionTab: View {
     @Environment(AppStore.self) private var store
     let session: Session
+    /// Under its project's name: the session alone, without the project again.
+    var isGrouped = false
     @State private var isHovered = false
     @State private var isDropTarget = false
 
@@ -219,7 +230,7 @@ private struct SessionTab: View {
         TabButton(isOn: !store.isHomeShown && store.selectedSessionId == session.id,
                   action: { store.selectedSessionId = session.id }) {
             SelectionRing(kind: look.ring)
-            Text(store.tabLabel(of: session))
+            Text(isGrouped ? store.groupedTabLabel(of: session) : store.tabLabel(of: session))
                 .lineLimit(1).truncationMode(.middle).frame(maxWidth: 200)
             Color.clear.frame(width: 14, height: 14) // room for the ×, laid over the tab below
         }
@@ -259,12 +270,80 @@ private struct SessionTab: View {
     }
 }
 
+/// A project's tabs, or a group the user named, behind its name; collapsed, one chip with the count and the most
+/// urgent state inside.
+private struct TabGroupView: View {
+    @Environment(AppStore.self) private var store
+    let group: AppStore.TabGroup
+    @State private var isDropTarget = false
+
+    var body: some View {
+        let isCollapsed = store.collapsedGroups.contains(group.key)
+        let name = switch group.kind {
+        case .project(let id): store.projects.first { $0.id == id }?.name ?? "?"
+        case .named(let name): name
+        }
+        HStack(spacing: 4) {
+            if isCollapsed {
+                TabButton(isOn: !store.isHomeShown && group.sessions.contains { $0.id == store.selectedSessionId },
+                          action: { store.toggleGroup(group.key) }) {
+                    SelectionRing(kind: urgentRing)
+                    Text(name).lineLimit(1).truncationMode(.middle).frame(maxWidth: 200)
+                    Text("\(group.sessions.count)").foregroundStyle(Tokens.textDim)
+                }
+                .help("\(name) · \(group.sessions.count) tabs — click to expand")
+            } else {
+                Button { store.toggleGroup(group.key) } label: {
+                    HStack(spacing: 4) {
+                        Text(name).lineLimit(1).truncationMode(.middle).frame(maxWidth: 140)
+                        Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
+                    }
+                    .font(Fonts.ui(12, weight: .semibold))
+                    .foregroundStyle(Tokens.textDim)
+                    .padding(.horizontal, 6)
+                    .frame(height: 32)
+                    .contentShape(Rectangle())
+                    .fixedSize()
+                }
+                .buttonStyle(.plain)
+                .help("Collapse \(name)'s tabs into one")
+                // In a group of the user's, sessions of several projects: each tab keeps its project's name.
+                ForEach(group.sessions) { session in
+                    if case .project = group.kind { SessionTab(session: session, isGrouped: true) } else { SessionTab(session: session) }
+                }
+            }
+        }
+        .padding(.horizontal, 2)
+        .overlay(RoundedRectangle(cornerRadius: 11).stroke(Tokens.line))
+        // The chip carries the group: dropped on another tab, the whole group goes there.
+        .draggable(AppStore.tabDragPrefix + String(group.sessions[0].id ?? -1))
+        .dropDestination(for: String.self) { items, _ in
+            guard let id = AppStore.draggedTab(items), let target = group.sessions[0].id else { return false }
+            store.moveTab(id, onto: target)
+            return true
+        } isTargeted: { isDropTarget = $0 }
+        .overlay(alignment: .leading) { if isDropTarget { Capsule().fill(Tokens.work).frame(width: 3).padding(.vertical, 6) } }
+    }
+
+    /// Waiting on you first, then errors, work, sync; nil only when none runs.
+    private var urgentRing: SelectionRing.Kind? {
+        let rings = group.sessions.compactMap { store.look(of: $0).ring }
+        return [.waiting, .error, .working, .sync, .idle].first { rings.contains($0) }
+    }
+}
+
 extension AppStore {
     /// A session tab's caption: the project, plus the session's name when the project has several.
     func tabLabel(of session: Session) -> String {
         let name = project(for: session)?.name ?? "?"
         if session.sshHost != nil { return "\(name) · \(session.isLocalTerminal ? "terminal" : "ssh " + displayName(of: session))" } // told apart from claude at a glance
         return sessions.filter { $0.projectId == session.projectId && $0.sshHost == nil }.count > 1 ? "\(name) · \(displayName(of: session))" : name
+    }
+
+    /// A tab's caption inside its project's group.
+    func groupedTabLabel(of session: Session) -> String {
+        if session.sshHost != nil { return session.isLocalTerminal ? "terminal" : "ssh " + displayName(of: session) }
+        return displayName(of: session)
     }
 }
 

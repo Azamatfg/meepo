@@ -123,6 +123,18 @@ struct SessionMenu: View {
     var body: some View {
         let place = session.worktreeName.map { "worktree \($0)" } ?? session.branch ?? "this folder"
         Button("Rename…") { store.renamingSessionId = session.id }
+        // Sessions of different projects doing one kind of work (support, a release) side by side in the tabs.
+        Menu("Group") {
+            let current = session.id.flatMap { store.tabGroupNames[$0] }
+            ForEach(store.groupNames, id: \.self) { name in
+                Button(name == current ? "✓ \(name)" : name) { store.setGroup(session.id!, to: name) }
+            }
+            if !store.groupNames.isEmpty { Divider() }
+            Button("New Group…") { store.groupingSessionId = session.id }
+            if current != nil {
+                Button("Back to \(store.project(for: session)?.name ?? "its project")") { store.setGroup(session.id!, to: nil) }
+            }
+        }
         // Where VS Code users look for a terminal to the server: next to the session they work in.
         Menu("Server Shell") {
             ForEach(store.servers(of: session.projectId)) { server in

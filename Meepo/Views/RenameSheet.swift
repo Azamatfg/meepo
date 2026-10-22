@@ -37,3 +37,40 @@ struct RenameSheet: View {
         dismiss()
     }
 }
+
+/// Names a new tab group and puts the session in it; other sessions join it from their own Group menu.
+struct GroupNameSheet: View {
+    @Environment(AppStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    let session: Session
+    @State private var name = ""
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("New tab group").font(Fonts.ui(20, weight: .bold))
+            Text("Sessions of any projects can be in it; add others from their tab's Group menu.")
+                .foregroundStyle(Tokens.textDim)
+            TextField("e.g. support, release", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .focused($isFocused)
+                .onSubmit(save)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).buttonStyle(PixelButtonStyle())
+                Button("Create", action: save).keyboardShortcut(.defaultAction).buttonStyle(PixelButtonStyle(isPrimary: true))
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(22)
+        .frame(width: 420)
+        .paperSheet()
+        .onAppear { isFocused = true }
+    }
+
+    private func save() {
+        guard !name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        store.setGroup(session.id!, to: name)
+        dismiss()
+    }
+}
