@@ -123,6 +123,7 @@ private struct TitleBar: View {
     @State private var isAutomationsShown = false
     @State private var isWelcomeShown = false
     @State private var isGuideShown = false
+    @State private var isReplayShown = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -133,6 +134,7 @@ private struct TitleBar: View {
                 Button("Stats") { isStatsShown = true }
                 Button("Tools — Docker space, ports, servers, meepo's edits") { store.toolsTab = .docker }
                 Button("Notes — release notes") { isNotesShown = true }
+                Button("Replay — your past tasks on other setups") { isReplayShown = true }
                 Divider()
                 Toggle("Guided mode — Claude explains, asks first", isOn: Binding(get: { store.guidedMode }, set: { store.setGuidedMode($0) }))
                 Button("How meepo works…") { isGuideShown = true }
@@ -207,6 +209,7 @@ private struct TitleBar: View {
         .background(WindowDragArea())
         .sheet(isPresented: $isSetupShown) { SetupView() }
         .sheet(isPresented: $isAutomationsShown) { AutomationsView() }
+        .sheet(isPresented: $isReplayShown) { ReplaySheet() }
         .sheet(isPresented: $isWelcomeShown) { OnboardingView() }
         .sheet(isPresented: $isGuideShown) { GuideSheet() }
         .overlay(alignment: .bottom) { Rectangle().fill(Tokens.line).frame(height: 1) }

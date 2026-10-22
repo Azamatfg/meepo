@@ -219,6 +219,33 @@ enum AppDatabase {
             try db.alter(table: "project") { t in t.add(column: "checkCommand", .text) }
         }
 
+        // Replay: past commits redone by Claude on other setups, graded by the tests they added.
+        migrator.registerMigration("v22-replay") { db in
+            try db.create(table: "replayTask") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.belongsTo("project", onDelete: .cascade).notNull()
+                t.column("sha", .text).notNull()
+                t.column("subject", .text).notNull()
+                t.column("instruction", .text).notNull()
+                t.column("checkCommand", .text).notNull()
+                t.column("tests", .text).notNull()
+                t.column("isValid", .boolean)
+                t.column("createdAt", .datetime).notNull()
+            }
+            try db.create(table: "replayRun") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.belongsTo("task", inTable: "replayTask", onDelete: .cascade).notNull()
+                t.column("model", .text).notNull()
+                t.column("effort", .text).notNull()
+                t.column("passed", .boolean)
+                t.column("costUsd", .double).notNull()
+                t.column("seconds", .double).notNull()
+                t.column("turns", .integer).notNull()
+                t.column("error", .text)
+                t.column("createdAt", .datetime).notNull()
+            }
+        }
+
         return migrator
     }
 }

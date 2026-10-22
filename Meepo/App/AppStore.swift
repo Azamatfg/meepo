@@ -2887,6 +2887,138 @@ final class AppStore {
         }
     }
 
+    // MARK: Replay (evals from sessions)
+
+    private(set) var replayTasks: [ReplayTask] = []
+    private(set) var replayRuns: [ReplayRun] = []
+    /// What Replay is busy with, in words; nil when idle. One job at a time: runs share the machine and the limits.
+    private(set) var replayActivity: String?
+    private var replayJob: Task<Void, Never>?
+
+    func reloadReplay() {
+        replayTasks = (try? db.read { try ReplayTask.order(Column("createdAt").desc).fetchAll($0) }) ?? []
+        replayRuns = (try? db.read { try ReplayRun.order(Column("createdAt")).fetchAll($0) }) ?? []
+    }
+
+    func replayCandidates(for project: Project) async -> [Replay.Candidate] {
+        let taken = Set(replayTasks.map(\.sha))
+        return await Task.detached { Replay.candidates(in: project.path) }.value.filter { !taken.contains($0.sha) }
+    }
+
+    /// Makes a task of the commit with a drafted instruction, for the user to read and correct before validating.
+    func addReplayTask(_ candidate: Replay.Candidate, in project: Project) {
+        startReplayJob("Drafting “\(candidate.subject)”") { [self] login in
+            let sha = candidate.sha, path = project.path
+            let (prompt, check) = await Task.detached { () -> (String, String) in
+                let git = { (args: [String]) in GitService.output(args, in: path) ?? "" }
+                let start = (try? Date(git(["log", "-1", "--format=%cI", "\(sha)^"]), strategy: .iso8601)) ?? .distantPast
+                let prompt = Replay.instructionPrompt(message: git(["log", "-1", "--format=%B", sha]),
+                                                      requests: Replay.requests(in: path, from: start, to: candidate.date),
+                                                      testDiff: git(["diff", "\(sha)^", sha, "--"] + candidate.tests))
+                let sources = Dictionary(uniqueKeysWithValues: candidate.tests.filter { $0.hasSuffix(".swift") }.map { ($0, git(["show", "\(sha):\($0)"])) })
+                // The whole test command first: the project's own check may be a quick few (scripts/check.sh) that
+                // never runs the commit's tests.
+                let base = ProjectCheck.detect(in: path) ?? project.checkCommand ?? ""
+                let hasSpec = FileManager.default.fileExists(atPath: URL(filePath: path).appending(path: "project.yml").path)
+                return (prompt, Replay.checkCommand(base: base, tests: sources, hasProjectSpec: hasSpec))
+            }.value
+            let instruction = try await ClaudeHeadless.run(prompt, claude: login.claudePath, environment: login.environment,
+                                                           arguments: ClaudeHeadless.arguments(model: headlessModel))
+            let task = ReplayTask(projectId: project.id!, sha: sha, subject: candidate.subject, instruction: instruction,
+                                  checkCommand: check, tests: candidate.tests)
+            _ = try await db.write { try task.inserted($0) }
+        }
+    }
+
+    /// Edited instruction or check: it has to be validated again.
+    func updateReplayTask(_ task: ReplayTask) {
+        var edited = task
+        edited.isValid = nil
+        try? db.write { try edited.update($0) }
+        reloadReplay()
+    }
+
+    func deleteReplayTask(_ id: Int64) {
+        _ = try? db.write { try ReplayTask.deleteOne($0, id: id) }
+        reloadReplay()
+    }
+
+    /// A task grades fairly only if doing nothing fails its check and the commit itself passes it three times
+    /// (a flaky test would score luck).
+    func validateReplayTask(_ task: ReplayTask, in project: Project) {
+        startReplayJob("Validating “\(task.subject)”") { [self] login in
+            let nop = Replay.workURL.appending(path: UUID().uuidString), oracle = Replay.workURL.appending(path: UUID().uuidString)
+            defer { for folder in [nop, oracle] { try? FileManager.default.removeItem(at: folder) } }
+            try await Task.detached {
+                try Replay.snapshot("\(task.sha)^", of: project.path, to: nop)
+                try Replay.putTests(task.tests, of: task.sha, from: project.path, into: nop)
+                try Replay.snapshot(task.sha, of: project.path, to: oracle)
+            }.value
+            var valid = await !Replay.check(task.checkCommand, in: nop, environment: login.environment)
+            for _ in 0..<3 where valid { valid = await Replay.check(task.checkCommand, in: oracle, environment: login.environment) }
+            var checked = task
+            checked.isValid = valid
+            // A task of its own: in the job, GRDB's write throws once STOP cancelled it, and the verdict would be lost.
+            try await Task { [db, checked] in try await db.write { try checked.update($0) } }.value
+        }
+    }
+
+    /// Every valid task × every setup × `attempts`, one run at a time.
+    func runReplay(_ tasks: [ReplayTask], setups: [Replay.Setup], attempts: Int) {
+        let plan = tasks.filter { $0.isValid == true }.flatMap { task in setups.flatMap { setup in Array(repeating: (task, setup), count: attempts) } }
+        guard !plan.isEmpty else { return }
+        startReplayJob("Run 1 of \(plan.count)") { [self] login in
+            for (index, (task, setup)) in plan.enumerated() {
+                try Task.checkCancellation()
+                replayActivity = "Run \(index + 1) of \(plan.count) · \(setup.title) · \(task.subject)"
+                guard let project = projects.first(where: { $0.id == task.projectId }) else { continue }
+                let run = await replayOnce(task, in: project, setup: setup, login: login)
+                // A task of its own: in the job, GRDB's write throws after STOP before writing, and the paid run would be lost.
+                _ = try await Task { [db] in try await db.write { try run.inserted($0) } }.value
+                reloadReplay()
+            }
+        }
+    }
+
+    func stopReplay() {
+        replayJob?.cancel()
+    }
+
+    private func replayOnce(_ task: ReplayTask, in project: Project, setup: Replay.Setup,
+                            login: ClaudeLauncher.LoginEnvironment) async -> ReplayRun {
+        var run = ReplayRun(taskId: task.id!, model: setup.model, effort: setup.effort)
+        let folder = Replay.workURL.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        do {
+            try await Task.detached { try Replay.snapshot("\(task.sha)^", of: project.path, to: folder) }.value
+            let output = try await ClaudeHeadless.run(task.instruction, claude: login.claudePath,
+                                                      environment: Replay.agentEnvironment(login.environment),
+                                                      arguments: Replay.agentArguments(setup, project: project.path),
+                                                      directory: folder, timeout: Replay.timeout)
+            guard let usage = Replay.usage(fromJSON: output) else {
+                throw ClaudeHeadless.Failure(errorDescription: "claude -p gave no result: \(output.prefix(300))")
+            }
+            (run.costUsd, run.seconds, run.turns) = (usage.cost, usage.seconds, usage.turns)
+            try await Task.detached { try Replay.putTests(task.tests, of: task.sha, from: project.path, into: folder) }.value
+            run.passed = await Replay.check(task.checkCommand, in: folder, environment: login.environment)
+        } catch {
+            run.error = error.localizedDescription
+        }
+        return run
+    }
+
+    private func startReplayJob(_ activity: String, _ work: @escaping (ClaudeLauncher.LoginEnvironment) async throws -> Void) {
+        guard replayJob == nil else { return }
+        guard let login = loginEnvironment else { bridgeError = "claude isn't found in the login shell"; return }
+        replayActivity = activity
+        replayJob = Task {
+            do { try await work(login) } catch where !(error is CancellationError) { bridgeError = error.localizedDescription } catch {}
+            replayActivity = nil
+            replayJob = nil
+            reloadReplay()
+        }
+    }
+
     // MARK: Tasks, morning and evening (SPEC module 7)
 
     private(set) var tasks: [TaskItem] = []

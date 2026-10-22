@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// One-off `claude -p` outside any session (release notes, EXPLAIN): the prompt goes in on stdin, the answer
 /// comes back as text. Uses the model chosen in Settings and the user's own login.
@@ -45,7 +46,7 @@ enum ClaudeHeadless {
     /// Runs off the main thread; the login shell's environment carries PATH (nvm) and no CLAUDE_* leftovers.
     /// `directory`: where claude runs (a DRAW question reads the project there); ~/.meepo otherwise.
     static func run(_ prompt: String, claude: String, environment: [String: String],
-                    arguments: [String], directory: URL? = nil) async throws -> String {
+                    arguments: [String], directory: URL? = nil, timeout: TimeInterval? = nil) async throws -> String {
         try await Task.detached {
             let process = Process()
             process.executableURL = URL(filePath: claude)
@@ -57,6 +58,14 @@ enum ClaudeHeadless {
             process.standardOutput = out
             process.standardError = err
             try process.run()
+            let timedOut = OSAllocatedUnfairLock(initialState: false)
+            if let timeout {
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                    guard process.isRunning else { return }
+                    timedOut.withLock { $0 = true }
+                    process.terminate()
+                }
+            }
             // stderr read alongside stdout: a full stderr pipe would block claude while we wait on stdout.
             let stderr = err.fileHandleForReading
             let reading = Task.detached { stderr.readDataToEndOfFile() }
@@ -66,6 +75,9 @@ enum ClaudeHeadless {
             let data = out.fileHandleForReading.readDataToEndOfFile()
             let errors = await reading.value
             process.waitForExit()
+            if timedOut.withLock({ $0 }), let timeout {
+                throw Failure(errorDescription: "claude -p was stopped after \(Int(timeout / 60)) min")
+            }
             let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
             guard process.terminationStatus == 0, !text.isEmpty else {
                 let message = String(decoding: errors.isEmpty ? data : errors, as: UTF8.self)
