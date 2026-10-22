@@ -10,7 +10,7 @@ meepo doesn't write code and isn't another agent. Claude Code does the work, wit
 
 ## What it does
 
-**Every session in one window.** Tabs for each Claude session across your projects, up to four terminals side by side, `Ctrl+Tab` to the session that needs you. Claude Code sessions running outside meepo — background agents (`claude --bg`) and ones in another terminal — show up under *Elsewhere*: open one here, read its output, stop it, or continue an ended one. Home answers the questions you'd otherwise check tab by tab: *Deck* — for each session, is it waiting on me, how did the last request end, what isn't sent yet; *Today* — what you sent today, project by project, and what's still left (a file not committed, a deploy waiting for your click, a question Claude asked).
+**Every session in one window.** Tabs for each Claude session across your projects, up to four terminals side by side, `Ctrl+Tab` to the session that needs you. A project's tabs stand together and collapse into one chip; sessions of different projects doing one kind of work (support, a release) go in a group of your own — right-click a tab → Group. Claude Code sessions running outside meepo — background agents (`claude --bg`) and ones in another terminal — show up under *Elsewhere*: open one here, read its output, stop it, or continue an ended one. Home answers the questions you'd otherwise check tab by tab: *Deck* — for each session, is it waiting on me, how did the last request end, what isn't sent yet; *Today* — what you sent today, project by project, and what's still left (a file not committed, a deploy waiting for your click, a question Claude asked).
 
 ![Four sessions: working, waiting for a permission, waiting for an answer, ready](docs/screenshots/deck.png)
 
@@ -20,7 +20,7 @@ meepo doesn't write code and isn't another agent. Claude Code does the work, wit
 
 ![What changed: a run explained for users](docs/screenshots/focus.png)
 
-**Your layout, set once.** Focus (one terminal and what changed), Deck (four sessions), Full (Explorer, Source Control and two terminals, like VS Code). Move, hide or add panels and that layout keeps it; right-click to reset. Every panel names its project and has a **?**.
+**Your layout, set once.** Solo (only the terminal — `⌘⇧↩` in and back), Focus (one terminal and what changed), Deck (four sessions), Full (Explorer, Source Control and two terminals, like VS Code). Move, hide or add panels and that layout keeps it; right-click to reset. Every panel names its project and has a **?**.
 
 ![Full: Explorer, Source Control, two terminals, events and CI](docs/screenshots/full.png)
 
@@ -28,9 +28,17 @@ meepo doesn't write code and isn't another agent. Claude Code does the work, wit
 
 **Files in, screenshots in.** Drop a screenshot on a terminal and Claude gets it as an image; drop or paste (⌘V) files into Explorer to copy them into the project.
 
-**Talk instead of typing.** VOICE turns on Claude Code's own dictation: click SPEAK and talk, STOP to read it and fix a word, SPEAK again to add more, then SEND — no key to hold.
+**Talk instead of typing.** VOICE turns on Claude Code's own dictation: click SPEAK and talk, STOP to read it and fix a word, SPEAK again to add more, then SEND. Or hold `fn+Control` while you talk — the words land in the prompt, unsent.
 
-**CI and deploys.** GitHub Actions and GitLab CI as the steps of your latest commit — what each step does, how long it took, a live clock while it runs, and one line on what's up to you. Run for a deploy (always confirmed), Fix with Claude for a failure, Rerun, and the log.
+**CI and deploys.** GitHub Actions and GitLab CI as the steps of your latest commit — what each step does, how long it took, a live clock while it runs, and one line on what's up to you. Run for a deploy (always confirmed), Fix with Claude for a failure, Rerun, and the log. The session working on a branch hears how its CI and deploy ended, and a deploy waiting for your click shows right above Claude's prompt with a Run button.
+
+**A method that checks the work.** *Check Before Done*: give a project its check (`npm test`, your test script) and a turn that changed files ends only once it passes — a failure goes back to Claude with the output. A push of something the check didn't pass on asks first. `/meepo:spec`, `/meepo:review` and `/meepo:sync` stand in for those stages in projects without their own commands, and after three tries at the same files meepo offers a FRESH START. Home's METHOD line shows whether it helps: requests per push and turns proven by the check, the last 14 days next to the 14 before.
+
+**Mornings.** TASKS → MORNING START turns open tasks into sessions, and first shows what happened since Claude's last answer: CI that failed, deploys waiting for you, teammates' commits, sessions asking you something.
+
+**Servers and databases.** SSH terminals to your servers, and their logs (journalctl, docker logs, a file — read, never changed) to paste into a session. Your Postgres for Claude to read only: meepo makes a role that can only `SELECT`, points Claude's server in `.mcp.json` at it and draws the schema. *Mark Important* on a production project, and every server, container or database command asks you first — even inside `bash -c`.
+
+**Is it helping?** STATS → IMPACT counts your weeks before meepo, with it and in a plain terminal: active hours, commits per hour, rework, failed CI, time sessions sat waiting for you. *Replay* redoes a past commit that added tests on the code before it, on setups you pick (model, effort), and its tests grade each run — so you see what a cheaper model or lower effort would have cost you.
 
 **Knows Claude Code.**
 - Plan limits (5 hours, 7 days) with reset times, the real model and effort of each session, context as Claude Code counts it.
@@ -52,7 +60,7 @@ meepo doesn't write code and isn't another agent. Claude Code does the work, wit
 Everything meepo shows comes from Claude Code itself, and everything it does goes through it:
 
 - the real `claude` CLI in each terminal, with your login, settings, skills, hooks and memory
-- Claude Code's own hooks and statusline for what each session is doing, its plan limits and effort
+- Claude Code's own hooks and statusline for what each session is doing, its plan limits and effort; in the sessions meepo starts, a Claude Code plugin of its own (`--plugin-dir`) carries the method, the Important guard and the line above the prompt — nothing is installed into your `~/.claude`
 - Claude Code's built-in commands and features where they exist — `/verify`, `/security-review`, `/commit-push-pr`, `/rewind`, worktrees, `--add-dir`, Remote Control, output styles, `skillOverrides`
 - Claude Code's own changelog, to point out what a new release means for your setup
 
@@ -95,7 +103,7 @@ meepo is the control panel on your Mac. On your phone, use the Claude app throug
 - Everything stays on your Mac: `~/.meepo/meepo.sqlite`, backups in `~/.meepo/backups`. No telemetry. A crash report is shown to you to copy, never sent.
 - meepo talks to Claude Code through hooks and a statusline, posted to a server on `127.0.0.1` only, with a local token.
 - It stores no API keys or passwords; GitHub, GitLab and Claude use their own CLIs and logins.
-- `claude -p` runs only when you click (Explain, drafts, release notes) — one short call, never with tools or your hooks.
+- `claude -p` runs only when you click (Explain, drafts, release notes) — one short call, never with tools or your hooks. Replay's runs are the one place it works with tools, and only when you press RUN: on a copy of the code, in Claude Code's sandbox with no network, with the real repo and your key folders (`~/.ssh`, `~/.aws`, `gh`) closed to it, at most 30 minutes each.
 - A button never answers for you: while Claude asks for a permission or asks a question, meepo types nothing that ends in Enter.
 - Push, pull and deploy happen on your click with a confirmation; meepo never force-pushes. Quitting while an agent works asks first.
 - Every change meepo makes to your files is backed up and can be undone (≡ → Tools → Changes); team files under git are never edited.
