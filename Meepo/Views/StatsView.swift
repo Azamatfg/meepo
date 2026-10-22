@@ -112,6 +112,14 @@ private struct ImpactPanel: View {
                         ImpactTable(title: "By week", rows: weeks.map {
                             ($0.start.formatted(.dateTime.month(.abbreviated).day()), $0.mode, $0.totals)
                         })
+                        Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 4) {
+                            ForEach(ImpactTable.columns, id: \.0) { name, meaning in
+                                GridRow {
+                                    Text(name).font(Fonts.mono(12)).foregroundStyle(Tokens.text)
+                                    Text(meaning).font(.caption).foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
                     }
                 }
             } else {
@@ -135,12 +143,13 @@ private struct ImpactTable: View {
     let title: String
     let rows: [(label: String, mode: Impact.Mode?, totals: Impact.Totals)]
 
-    private static let columns: [(String, String)] = [
+    /// Name (with which way is better), and what it counts — shown under the table, not only on hover.
+    static let columns: [(String, String)] = [
         ("hours", "Hours with at least one request you typed"),
-        ("shipped/h", "Your commits on the default branch per active hour"),
-        ("rework", "Of those commits, fixes and reverts touching a file changed in the 48 hours before"),
-        ("CI failed", "GitHub Actions runs you started that failed"),
-        ("wait/day", "Minutes a day sessions sat finished until you answered, summed over sessions (two waiting 10 min = 20); each pause up to \(Int(Impact.maxPause / 60)) min. Permission prompts aren't in transcripts, so real waiting is a little longer"),
+        ("shipped/h ↑", "Your commits on the default branch per active hour"),
+        ("rework ↓", "Of those commits, fixes and reverts touching a file changed in the 48 hours before: work done twice"),
+        ("CI failed ↓", "GitHub Actions runs you started that failed"),
+        ("wait/day", "Minutes a day at least one session sat finished until you answered — sessions waiting at once count once; each pause up to \(Int(Impact.maxPause / 60)) min. Permission prompts aren't in transcripts, so real waiting is a little longer"),
     ]
 
     var body: some View {
@@ -157,7 +166,8 @@ private struct ImpactTable: View {
                 if rows.isEmpty {
                     GridRow { Text("Nothing yet").foregroundStyle(Tokens.textDim).gridCellColumns(7) }
                 }
-                ForEach(rows, id: \.label) { row in
+                // Not by label: Overall labels are "3 wk", the same for two modes with as many weeks.
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                     let t = row.totals
                     GridRow {
                         Text(row.label).foregroundStyle(Tokens.text)

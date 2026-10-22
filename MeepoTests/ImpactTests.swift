@@ -43,6 +43,34 @@ final class ImpactTests: XCTestCase {
         XCTAssertEqual(pauses.first?.cwd, "/work/app")
     }
 
+    /// A repo and its worktree are one repo: its commits and CI aren't counted twice.
+    func testAWorktreeIsItsRepo() throws {
+        let repo = try makeTempRepo()
+        try git(["commit", "-q", "--allow-empty", "-m", "init"], in: repo)
+        let worktree = repo.deletingLastPathComponent().appending(path: "wt-\(UUID().uuidString)")
+        try git(["worktree", "add", "-q", worktree.path], in: repo)
+        XCTAssertEqual(Impact.repos(of: [repo.path, AppStore.realPath(worktree.path)]), [repo.path])
+    }
+
+    /// A session opened through a link to the project (~/Projects/taxi) waits in the project too; old transcripts
+    /// aren't read.
+    func testPausesThroughALinkCountForTheRealFolder() throws {
+        let tmp = URL(filePath: AppStore.realPath(FileManager.default.temporaryDirectory.appending(path: "pauses-\(UUID().uuidString)").path))
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let real = tmp.appending(path: "app"), link = tmp.appending(path: "link")
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        let root = tmp.appending(path: "projects/-link")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let lines = [ended(0), typed(2).replacingOccurrences(of: "/work/app", with: link.path)].joined(separator: "\n")
+        let transcript = root.appending(path: "s.jsonl")
+        try Data(lines.utf8).write(to: transcript)
+
+        XCTAssertEqual(Impact.pauses(in: [real.path], root: tmp.appending(path: "projects")).map(\.seconds), [120])
+        try FileManager.default.setAttributes([.modificationDate: at(-60 * 24 * 200)], ofItemAtPath: transcript.path)
+        XCTAssertEqual(Impact.pauses(in: [real.path], since: at(-60 * 24 * 7), root: tmp.appending(path: "projects")).count, 0)
+    }
+
     /// Rework = a fix or revert touching a file one of the commits changed within 48 hours before.
     func testReworkIsAFixOfAFileChangedInTheFortyEightHoursBefore() {
         let hour = { (h: Double) in self.start.addingTimeInterval(h * 3600) }
@@ -87,6 +115,20 @@ final class ImpactTests: XCTestCase {
         XCTAssertEqual(weeks[0].totals.shippedPerHour ?? 0, 1.0 / 3, accuracy: 0.001)
         XCTAssertEqual(weeks[0].totals.ciFailedShare ?? 0, 1.0 / 3, accuracy: 0.001, "a cancelled run isn't a result")
         XCTAssertEqual(weeks[0].totals.waitingMinutesPerDay, 10)
+    }
+
+    /// Waiting is the time at least one session waited for you: sessions waiting side by side count once.
+    func testSessionsWaitingAtTheSameTimeCountOnce() {
+        let day = 86400.0
+        let attribution = Impact.Attribution(installed: at(0), listedSince: nil, launched: [])
+        let pause = { (session: String, endMinute: Double, minutes: Double) in
+            Impact.Pause(session: session, cwd: "/work/app", date: self.at(endMinute), seconds: minutes * 60)
+        }
+        // a: 0–10, b: 5–15 (overlap 5) → 15; c: 30–40 apart → 10. Summed would be 30.
+        let weeks = Impact.weeks(now: at(0) + day, count: 1, entries: [], commits: [], ci: [],
+                                 pauses: [pause("a", 10, 10), pause("b", 15, 10), pause("c", 40, 10)],
+                                 attribution: attribution, calendar: calendar)
+        XCTAssertEqual(weeks.first?.totals.waitingMinutesPerDay, 25)
     }
 
     func testTheListKeepsEachSessionOnce() throws {

@@ -1307,8 +1307,9 @@ final class AppStore {
         guard !isScanning else { return }
         isScanning = true
         defer { isScanning = false }
-        let (db, root) = (self.db, usageRoot)
-        _ = try? await Task.detached { try UsageScanner.scan(root: root, into: db) }.value
+        // Meepo's home as the store was given it: a test's store lists into its own folder, not the real one.
+        let (db, root, launched) = (self.db, usageRoot, bridge.meepoHome.appending(path: "launched"))
+        _ = try? await Task.detached { try UsageScanner.scan(root: root, into: db, launched: launched) }.value
         reloadUsage()
         reloadEvents() // the scan may have found tool calls blocked by the user's hooks
         refreshProjects()

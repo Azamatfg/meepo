@@ -102,9 +102,14 @@ enum Impact {
             if run.failed { totals[key(run.createdAt), default: Totals()].ciFailed += 1 }
         }
         var days: [Date: Set<Date>] = [:]
-        for pause in pauses where pause.date >= first {
-            totals[key(pause.date), default: Totals()].waiting += pause.seconds
-            days[key(pause.date), default: []].insert(calendar.startOfDay(for: pause.date))
+        // Sessions waiting side by side wait once: the time at least one of them waited, not the sum.
+        var reach: [Date: Date] = [:] // per week, how far the waiting counted so far goes
+        for pause in pauses.sorted(by: { $0.date - $0.seconds < $1.date - $1.seconds }) where pause.date >= first {
+            let week = key(pause.date)
+            let from = max(pause.date - pause.seconds, reach[week] ?? .distantPast)
+            totals[week, default: Totals()].waiting += max(0, pause.date.timeIntervalSince(from))
+            reach[week] = max(reach[week] ?? .distantPast, pause.date)
+            days[week, default: []].insert(calendar.startOfDay(for: pause.date))
         }
         for (week, set) in days { totals[week]?.waitingDays = set.count }
         return totals.keys.sorted(by: >).map { week in
@@ -235,15 +240,25 @@ enum Impact {
     }
 
     /// Pauses in every transcript Claude Code still keeps, in these folders (worktrees count for their project).
-    static func pauses(in folders: [String], root: URL = UsageScanner.defaultRoot) -> [Pause] {
-        guard let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { return [] }
-        let paths = files.compactMap { $0 as? URL }.filter { $0.pathExtension == "jsonl" && !$0.path.contains("/subagents/") }
+    /// `folders` are real paths; a transcript's cwd may be a link (~/Projects/taxi), so it's resolved too. One not
+    /// written to since `since` holds no pause in the window and isn't read.
+    static func pauses(in folders: [String], since: Date = .distantPast, root: URL = UsageScanner.defaultRoot) -> [Pause] {
+        guard let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else { return [] }
+        let paths = files.compactMap { $0 as? URL }.filter { url in
+            url.pathExtension == "jsonl" && !url.path.contains("/subagents/")
+                && ((try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantFuture) >= since
+        }
         let all = OSAllocatedUnfairLock(initialState: [Pause]())
         DispatchQueue.concurrentPerform(iterations: paths.count) { index in
             let found = (try? Data(contentsOf: paths[index], options: .alwaysMapped)).map(pauses(transcript:)) ?? []
             all.withLock { $0 += found }
         }
-        return all.withLock { $0 }.filter { pause in folders.contains { pause.cwd == $0 || pause.cwd.hasPrefix($0 + "/") } }
+        var real: [String: String] = [:]
+        return all.withLock { $0 }.filter { pause in
+            if real[pause.cwd] == nil { real[pause.cwd] = AppStore.realPath(pause.cwd) }
+            let cwd = real[pause.cwd]!
+            return folders.contains { cwd == $0 || cwd.hasPrefix($0 + "/") }
+        }
     }
 }
 
@@ -267,10 +282,17 @@ extension Impact {
                 if real[project] == nil { real[project] = AppStore.realPath(project) }
                 return inFolders(real[project])
             }
-            let repos = Array(Set(folders.compactMap { GitService.output(["rev-parse", "--path-format=absolute", "--show-toplevel"], in: $0)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) }))
-            return Local(entries: entries, commits: repos.flatMap { commits(in: $0, since: since) }, pauses: pauses(in: folders), repos: repos)
+            let repos = repos(of: folders)
+            return Local(entries: entries, commits: repos.flatMap { commits(in: $0, since: since) },
+                         pauses: pauses(in: folders, since: since), repos: repos)
         }.value
+    }
+
+    /// The repos holding these folders by their shared git dir, as refreshMethodStats does: a repo and its
+    /// worktrees are one repo, so their commits and CI runs count once.
+    static func repos(of folders: [String]) -> [String] {
+        Array(Set(folders.compactMap { GitService.output(["rev-parse", "--path-format=absolute", "--git-common-dir"], in: $0)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) }.map { URL(filePath: $0).deletingLastPathComponent().path })).sorted()
     }
 
     /// GitHub Actions runs you started in these repos, side by side (several seconds); other hosts give none.
