@@ -124,6 +124,9 @@ struct ExplorerSection: View {
     /// A click takes the keyboard (⌘V pastes here) and picks where it pastes.
     private func select(_ entry: FileTree.Entry?) {
         selected = entry
+        // Claude's terminal is AppKit's first responder: SwiftUI focus alone never takes the keyboard from it,
+        // only from the window (as after the file viewer closes), so the terminal lets go first.
+        NSApp.keyWindow?.makeFirstResponder(nil)
         hasKeyboard = true
     }
 
