@@ -176,9 +176,15 @@ private struct RunPanel: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 ForEach(setups.indices, id: \.self) { index in
-                    PixelMenu(selection: setups[index].model.isEmpty ? "Default" : setups[index].model) {
-                        ForEach(store.modelChoices(), id: \.value) { option in Button(option.title) { setups[index].model = option.value } }
+                    if setups[index].baseURL.isEmpty {
+                        PixelMenu(selection: setups[index].model.isEmpty ? "Default" : setups[index].model) {
+                            ForEach(store.modelChoices(), id: \.value) { option in Button(option.title) { setups[index].model = option.value } }
+                        }
+                    } else {
+                        TextField("Model", text: $setups[index].model).font(Fonts.mono(11)).textFieldStyle(.plain).frame(width: 140)
                     }
+                    TextField("Base URL", text: $setups[index].baseURL).font(Fonts.mono(11)).textFieldStyle(.plain).frame(width: 150)
+                        .help("Another Anthropic-compatible server, e.g. a local model in Ollama: http://localhost:11434. Empty: Claude")
                     PixelMenu(selection: setups[index].effort.isEmpty ? "Default" : setups[index].effort) {
                         ForEach(efforts, id: \.self) { level in Button(level.isEmpty ? "Default" : level) { setups[index].effort = level } }
                     }
