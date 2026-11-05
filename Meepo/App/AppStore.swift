@@ -3805,7 +3805,9 @@ final class AppStore {
         guard agent.isBackground else { return }
         if isDemo { elsewhere.removeAll { $0.id == agent.id }; return }
         guard let login = loginEnvironment else { return }
-        let (ok, output) = await Task.detached { ClaudeAgents.run(["stop", agent.id], login: login) }.value
+        // 30 s, not 5: with claude's daemon asleep, stop first wakes it and it resumes the agent; cut off
+        // there, the agent is left running and the stop never sent (2026-10-29).
+        let (ok, output) = await Task.detached { ClaudeAgents.run(["stop", agent.id], login: login, timeout: 30) }.value
         if !ok { bridgeError = "claude stop \(agent.id): " + ClaudeAgents.plainText(output).trimmingCharacters(in: .whitespacesAndNewlines) }
         await refreshElsewhere()
     }
