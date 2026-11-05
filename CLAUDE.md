@@ -46,6 +46,7 @@ Subagents: `code-reviewer`, `security-auditor`.
 - Сборка: `xcodebuild -project Meepo.xcodeproj -scheme Meepo -skipPackagePluginValidation -derivedDataPath .build/check build`
 - Тесты: `xcodebuild -project Meepo.xcodeproj -scheme Meepo -destination 'platform=macOS,arch=arm64' -skipPackagePluginValidation -derivedDataPath .build/check test`
 - `-derivedDataPath .build/check` обязателен: рабочий meepo пользователя запускается из DerivedData Debug, сборка туда подменяет его
+- Рабочий meepo: `scripts/install.sh` — сборка в `.build/install`, копия в `~/Applications/Meepo.app` (на неё ведёт Dock), перезапуск. Из DerivedData не запускать: его чистят целиком
 - Перед push (и как check проекта в meepo): `scripts/check.sh` — тесты мода и ключевые классы, ~20 с; весь набор — перед релизом
 - Evals скиллов мода: `Meepo/Resources/MeepoMod/evals/README.md`
 - `-skipPackagePluginValidation` — у SwiftTerm build-плагин (генерирует build info); в Xcode GUI нажать «Trust & Enable»
