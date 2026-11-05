@@ -112,6 +112,21 @@ final class ReplayTests: XCTestCase {
         XCTAssertEqual(env, ["PATH": "/bin"])
     }
 
+    /// A setup with a base URL runs on that server (a local model in Ollama): the API, the key and the small
+    /// background model all point there; without one the login environment is left as it is.
+    func testSetupWithBaseURLRunsOnThatServer() {
+        let local = Replay.Setup(model: "qwen2.5-coder:14b", effort: "", baseURL: "http://localhost:11434")
+        let env = Replay.agentEnvironment(["PATH": "/bin", "ANTHROPIC_API_KEY": "sk"], setup: local)
+        XCTAssertEqual(env["ANTHROPIC_BASE_URL"], "http://localhost:11434")
+        XCTAssertEqual(env["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "qwen2.5-coder:14b", "else background calls ask the server for a Claude model")
+        XCTAssertNotNil(env["ANTHROPIC_AUTH_TOKEN"])
+        XCTAssertNil(env["ANTHROPIC_API_KEY"], "the user's key isn't sent to another server")
+        XCTAssertEqual(local.title, "qwen2.5-coder:14b · localhost:11434")
+
+        XCTAssertEqual(Replay.agentEnvironment(["PATH": "/bin"], setup: Replay.Setup(model: "opus", effort: "")), ["PATH": "/bin"])
+        XCTAssertNotEqual(local, Replay.Setup(model: "qwen2.5-coder:14b", effort: ""), "results of each server are counted apart")
+    }
+
     func testUsageFromTheJSONResult() {
         XCTAssertEqual(Replay.usage(fromJSON: #"{"total_cost_usd":0.25,"duration_ms":90500,"num_turns":12,"result":"done"}"#),
                        Replay.Usage(cost: 0.25, seconds: 90.5, turns: 12))

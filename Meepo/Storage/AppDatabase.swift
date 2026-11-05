@@ -246,6 +246,10 @@ enum AppDatabase {
             }
         }
 
+        migrator.registerMigration("v23-replay-base-url") { db in
+            try db.alter(table: "replayRun") { t in t.add(column: "baseURL", .text).notNull().defaults(to: "") }
+        }
+
         return migrator
     }
 }

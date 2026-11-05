@@ -75,7 +75,13 @@ enum Replay {
     struct Setup: Hashable, Codable {
         var model: String
         var effort: String
-        var title: String { [model.isEmpty ? "default" : model, effort.isEmpty ? nil : effort].compactMap { $0 }.joined(separator: " · ") }
+        /// Another Anthropic-compatible server (a local model in Ollama, LM Studio); empty: Claude's own API.
+        var baseURL = ""
+        var title: String {
+            [model.isEmpty ? "default" : model, effort.isEmpty ? nil : effort, URL(string: baseURL).flatMap { url in
+                url.host().map { host in url.port.map { "\(host):\($0)" } ?? host }
+            }].compactMap { $0 }.joined(separator: " · ")
+        }
     }
 
     /// No one is there to answer a permission prompt; listed tools are allowed outright (auto mode would be reset
@@ -103,10 +109,19 @@ enum Replay {
     static let secretFolders = ["~/.ssh", "~/.aws", "~/.config/gh", "~/.gnupg", "~/.meepo", "~/.kube", "~/.docker"]
 
     /// The login environment without what reaches servers and accounts on the user's behalf.
-    static func agentEnvironment(_ environment: [String: String]) -> [String: String] {
-        environment.filter { key, _ in
+    /// A setup with a base URL points the API there, without the user's key, and the small background model
+    /// (titles, summaries) at the setup's model, which is all such a server has.
+    static func agentEnvironment(_ environment: [String: String], setup: Setup? = nil) -> [String: String] {
+        var env = environment.filter { key, _ in
             !["SSH_AUTH_SOCK", "GH_TOKEN", "GITHUB_TOKEN", "GITLAB_TOKEN", "NPM_TOKEN"].contains(key) && !key.hasPrefix("AWS_")
         }
+        guard let setup, !setup.baseURL.isEmpty else { return env }
+        env["ANTHROPIC_API_KEY"] = nil
+        env["ANTHROPIC_BASE_URL"] = setup.baseURL
+        env["ANTHROPIC_AUTH_TOKEN"] = "local"
+        env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
+        if !setup.model.isEmpty { env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = setup.model }
+        return env
     }
 
     /// An agent turn or a check longer than this is stuck (a watch-mode test, a loop): stopped, the run counts as broken.

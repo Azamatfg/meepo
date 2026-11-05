@@ -30,6 +30,7 @@ struct ReplayRun: Codable, Identifiable, Hashable, FetchableRecord, MutablePersi
     var taskId: Int64
     var model: String
     var effort: String
+    var baseURL = ""
     /// nil: the run itself broke (claude didn't start, the snapshot failed) — not the agent's failure.
     var passed: Bool?
     var costUsd: Double = 0
@@ -38,7 +39,7 @@ struct ReplayRun: Codable, Identifiable, Hashable, FetchableRecord, MutablePersi
     var error: String?
     var createdAt: Date = .now
 
-    var setup: Replay.Setup { Replay.Setup(model: model, effort: effort) }
+    var setup: Replay.Setup { Replay.Setup(model: model, effort: effort, baseURL: baseURL) }
 
     mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID

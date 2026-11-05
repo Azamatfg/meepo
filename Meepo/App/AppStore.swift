@@ -2997,13 +2997,13 @@ final class AppStore {
 
     private func replayOnce(_ task: ReplayTask, in project: Project, setup: Replay.Setup,
                             login: ClaudeLauncher.LoginEnvironment) async -> ReplayRun {
-        var run = ReplayRun(taskId: task.id!, model: setup.model, effort: setup.effort)
+        var run = ReplayRun(taskId: task.id!, model: setup.model, effort: setup.effort, baseURL: setup.baseURL)
         let folder = Replay.workURL.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         do {
             try await Task.detached { try Replay.snapshot("\(task.sha)^", of: project.path, to: folder) }.value
             let output = try await ClaudeHeadless.run(task.instruction, claude: login.claudePath,
-                                                      environment: Replay.agentEnvironment(login.environment),
+                                                      environment: Replay.agentEnvironment(login.environment, setup: setup),
                                                       arguments: Replay.agentArguments(setup, project: project.path),
                                                       directory: folder, timeout: Replay.timeout)
             guard let usage = Replay.usage(fromJSON: output) else {
