@@ -52,6 +52,13 @@ protocol CIProvider: Sendable {
     func pipeline(runs: [CIRun], in path: String) async -> Pipeline?
     /// Starts a manual step (deploy). Returns an error message, nil on success.
     func start(_ step: Pipeline.Step, of pipeline: Pipeline, in path: String) async -> String?
+    /// The user can push to the repo: its CI is theirs. A clone of someone else's repo (an upstream tool) runs CI on
+    /// every maintainer push and bot dispatch — not news for them.
+    func canPush(in path: String) async -> Bool
+}
+
+extension CIProvider {
+    func canPush(in path: String) async -> Bool { true }
 }
 
 /// One commit on the default branch going through CI → build → deploy (GitHub workflows or GitLab stages).
@@ -138,6 +145,18 @@ struct GitHubActions: CIProvider {
     func handles(_ project: Project) -> Bool { project.remote?.contains("github.com") == true }
 
     var reviewRequest: String { "a PR into %@ with `gh pr create`" }
+
+    /// Unknown (offline, no gh auth) counts as yes: CI isn't hidden on a hiccup.
+    func canPush(in path: String) async -> Bool {
+        let data = await CLI.run(gh, ["repo", "view", "--json", "viewerPermission", "--jq", ".viewerPermission"], in: path)
+        return Self.canPush(permission: data.map { String(decoding: $0, as: UTF8.self) })
+    }
+
+    /// `viewerPermission`: ADMIN, MAINTAIN, WRITE push; TRIAGE, READ (a public repo) don't.
+    static func canPush(permission: String?) -> Bool {
+        guard let permission = permission?.trimmingCharacters(in: .whitespacesAndNewlines), !permission.isEmpty else { return true }
+        return ["ADMIN", "MAINTAIN", "WRITE"].contains(permission)
+    }
 
     static let runFields = "databaseId,workflowName,headBranch,headSha,status,conclusion,createdAt,startedAt,updatedAt,attempt,url,event"
 
@@ -422,9 +441,10 @@ enum CIGuard {
 
     /// What a session on the run's branch hears when the run ends — Meepo's mod puts it in the conversation:
     /// "[Meepo] CI passed on main · “feat: x” — Build"; `repo` names one inside a project folder ("on ocpi main").
-    /// Nil while it runs, or when it ended otherwise (cancelled…).
+    /// Nil while it runs, when it ended otherwise (cancelled…), or when the branch didn't start it: someone's PR
+    /// or a cron runs against the branch's head commit, again and again, with nothing new about the session's code.
     static func sessionNote(_ run: CIRun, commit: String?, repo: String? = nil) -> String? {
-        guard let outcome = run.succeeded ? "passed" : run.failed ? "failed" : nil else { return nil }
+        guard run.isBranchRun, let outcome = run.succeeded ? "passed" : run.failed ? "failed" : nil else { return nil }
         let what = Pipeline.commitLabel(title: commit, sha: run.headSha)
         let why = run.failed ? " See why: \(run.url)" : ""
         let on = repo.map { "\($0) \(run.headBranch)" } ?? run.headBranch
