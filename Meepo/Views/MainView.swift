@@ -185,6 +185,7 @@ private struct TitleBar: View {
                             Button("Add a server…") { store.presentAddServer(projectId: nil) }
                         }
                         Divider()
+                        Button("New Project…") { newProject() }
                         Button("Add Project Folder…", action: onAddProject)
                         Button("Add from Claude Code History…") { isImportShown = true }
                     } label: {
@@ -368,6 +369,30 @@ private struct TabButton<Label: View>: View {
                 .fixedSize()
         }
         .buttonStyle(.plain)
+    }
+}
+
+extension TitleBar {
+    /// A name and where, like VS Code's New Folder: meepo makes the folder (with git), adds it and opens a session.
+    fileprivate func newProject() {
+        let panel = NSSavePanel()
+        panel.title = "New Project"
+        panel.prompt = "Create"
+        panel.nameFieldLabel = "Project:"
+        panel.nameFieldStringValue = "my-app"
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Projects")
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            // A folder that's already there (the panel asked to replace it): added as it is, nothing overwritten.
+            let project = FileManager.default.fileExists(atPath: url.path) ? try store.project(forFolder: url)
+                : try store.createProject(named: url.lastPathComponent, in: url.deletingLastPathComponent())
+            if let id = project?.id {
+                try store.createSession(projectId: id, model: nil, prompt: nil)
+            }
+        } catch {
+            store.bridgeError = error.localizedDescription
+        }
     }
 }
 
