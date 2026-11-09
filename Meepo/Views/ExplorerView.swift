@@ -5,6 +5,7 @@ import SwiftUI
 /// in their Source Control color; a file opens read-only in Monaco. Files dropped from Finder are copied in,
 /// like VS Code: onto a folder into it, elsewhere into the project's root. Files copied in Finder paste with ⌘V
 /// (user decision: a click here takes the keyboard from Claude's terminal until Esc, like VS Code) or Paste.
+/// ⌘C copies the selected file for Finder or a paste here; Delete moves it to the Trash after asking, like VS Code.
 struct ExplorerSection: View {
     @Environment(AppStore.self) private var store
     let root: String
@@ -46,8 +47,10 @@ struct ExplorerSection: View {
         .focused($hasKeyboard)
         .focusEffectDisabled()
         .onPasteCommand(of: [.fileURL]) { _ in paste(onto: selected) }
+        .onCopyCommand { selected.map { [NSItemProvider(object: url(of: $0) as NSURL)] } ?? [] }
+        .onDeleteCommand { if let selected { trash(selected) } }
         .onExitCommand { Self.giveKeyboardBack(to: store.selectedSessionId.flatMap(store.terminalView(for:)), focus: $hasKeyboard) }
-        .dropDestination(for: URL.self) { urls, _ in copy(urls, into: "") } isTargeted: { dropTarget = $0 ? "" : nil }
+        .dropDestination(for: URL.self) { urls, _ in drop(urls, into: "") } isTargeted: { dropTarget = $0 ? "" : nil }
         // New files from claude show up without a click; only the root and open folders are read.
         .task(id: root) {
             expanded = []
@@ -109,14 +112,20 @@ struct ExplorerSection: View {
         }
         .buttonStyle(.plain)
         // Onto a session's terminal: its path is typed there, as from Finder (Claude reads ignored files this way too).
-        .onDrag { NSItemProvider(object: URL(filePath: root).appending(path: entry.path) as NSURL) }
+        .onDrag { NSItemProvider(object: url(of: entry) as NSURL) }
         .help(entry.path)
         .contextMenu {
             // Built in body, so it can't see the clipboard: always on, and says so when there's nothing to paste.
+            Button("Copy") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.writeObjects([url(of: entry) as NSURL])
+            }
             Button("Paste into \(name(of: folder))") { paste(onto: entry) }
-            Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: root).appending(path: entry.path)]) }
+            Divider()
+            Button("Move to Trash") { trash(entry) }
+            Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url(of: entry)]) }
         }
-        .dropDestination(for: URL.self) { urls, _ in copy(urls, into: folder) } isTargeted: { over in
+        .dropDestination(for: URL.self) { urls, _ in drop(urls, into: folder) } isTargeted: { over in
             if over { dropTarget = entry.isDirectory ? entry.path : nil } else if dropTarget == entry.path { dropTarget = nil }
         }
     }
@@ -146,17 +155,44 @@ struct ExplorerSection: View {
         _ = copy(urls, into: Drops.pasteTarget(selected: entry, pasting: urls, root: root))
     }
 
+    private func url(of entry: FileTree.Entry) -> URL {
+        URL(filePath: root).appending(path: entry.path)
+    }
+
+    /// Delete or Move to Trash: asks first, like VS Code; the Trash keeps it (Finder's Put Back undoes it).
+    private func trash(_ entry: FileTree.Entry) {
+        let parent = (entry.path as NSString).deletingLastPathComponent, root = root
+        store.confirmation = PixelConfirmation(title: "Move \(entry.name) to the Trash?",
+                                               message: entry.isDirectory ? "The folder and everything in it." : nil,
+                                               action: "Move to Trash") {
+            do {
+                try FileManager.default.trashItem(at: url(of: entry), resultingItemURL: nil)
+                notice = "Moved \(entry.name) to the Trash"
+            } catch {
+                notice = "Couldn't move \(entry.name) to the Trash: \(error.localizedDescription)"
+            }
+            if selected == entry { selected = nil }
+            expanded = expanded.filter { $0 != entry.path && !$0.hasPrefix(entry.path + "/") }
+            Task { children[parent] = await Task.detached { FileTree.list(parent, in: root) }.value }
+        }
+    }
+
     /// "docs" for "src/docs"; the project's folder for "".
     private func name(of dir: String) -> String {
         URL(filePath: dir.isEmpty ? root : dir).lastPathComponent
     }
 
+    /// A drop from Finder. The project's own files, dragged from this tree toward a terminal and let go early,
+    /// are not copied; pasted, they are (a copy next to the original, "name 2", like Finder and VS Code).
+    private func drop(_ urls: [URL], into dir: String) -> Bool {
+        let own = Drops.canonicalPath(URL(filePath: root)) + "/"
+        return copy(urls.filter { !Drops.canonicalPath($0).hasPrefix(own) }, into: dir)
+    }
+
     /// Copies dropped or pasted files into `dir` (relative to the root), then shows that folder open with them
     /// in it. Each copy is logged in Tools → Changes (SPEC §8), where undoing it deletes it.
     private func copy(_ urls: [URL], into dir: String) -> Bool {
-        // The project's own files, dragged from this tree toward a terminal and let go early: no duplicate.
-        let own = Drops.canonicalPath(URL(filePath: self.root)) + "/" // self.: the local `root` below shadows it
-        let files = urls.filter { $0.isFileURL && !Drops.canonicalPath($0).hasPrefix(own) }
+        let files = urls.filter(\.isFileURL)
         guard !files.isEmpty else { return false }
         let (root, backups, place) = (root, store.backupsDir, name(of: dir))
         Task {
