@@ -74,6 +74,26 @@ final class CIGuardTests: XCTestCase {
                        "[Meepo] CI passed on ocpi main · “fix: race” — CI.", "a repo inside the project folder is named")
     }
 
+    /// Someone else's PR or a cron runs against main's head commit: not news about the session's own code.
+    func testSessionNoteSkipsRunsNotStartedByTheBranch() {
+        for event in ["pull_request", "pull_request_target", "schedule"] {
+            var run = ciRun(5, workflow: "PR triage", branch: "main", conclusion: "success")
+            run.event = event
+            XCTAssertNil(CIGuard.sessionNote(run, commit: "x"), event)
+        }
+        var deploy = ciRun(6, workflow: "Release Please", branch: "main", conclusion: "success")
+        deploy.event = "push"
+        XCTAssertNotNil(CIGuard.sessionNote(deploy, commit: "x"), "a push to the branch is still told")
+    }
+
+    /// A clone of someone else's public repo gives READ: its CI isn't followed; an unknown answer keeps it.
+    func testCanPushFromViewerPermission() {
+        for p in ["ADMIN", "MAINTAIN", "WRITE\n"] { XCTAssertTrue(GitHubActions.canPush(permission: p), p) }
+        for p in ["READ", "TRIAGE"] { XCTAssertFalse(GitHubActions.canPush(permission: p), p) }
+        XCTAssertTrue(GitHubActions.canPush(permission: nil), "gh failed: don't hide CI")
+        XCTAssertTrue(GitHubActions.canPush(permission: ""), "gh failed: don't hide CI")
+    }
+
     func testRulesFromTheSpec() {
         XCTAssertEqual(CIGuard.action(for: ciRun(1, conclusion: "success"), fixAttempts: 0, autofix: true), .none)
         XCTAssertEqual(CIGuard.action(for: ciRun(1), fixAttempts: 0, autofix: false), .none)          // notify only

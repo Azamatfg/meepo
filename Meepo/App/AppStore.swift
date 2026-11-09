@@ -2367,6 +2367,10 @@ final class AppStore {
         pipelines.values.contains(where: \.isRunning) || repoCI.values.contains { $0.pipeline?.isRunning == true }
     }
 
+    /// Whether the user can push to a repo of `repoCI`, asked once per launch: CI of a clone they can't push to
+    /// (someone else's tool) isn't followed.
+    private var pushAccess: [String: Bool] = [:]
+
     /// Repos inside a project folder that isn't one itself (charge-ev → ocpi, ocpp2.0, …), by project path.
     private(set) var nestedRepos: [String: [Repo]] = [:]
 
@@ -2382,8 +2386,11 @@ final class AppStore {
             Set(folders.flatMap(Repos.find)).filter { !projectPaths.contains($0.path) }
                 .map { (repo: $0, remote: GitService.remoteURL(in: $0.path)) }
         }.value
-        let tracked = repos.compactMap { repo, remote in
-            ciProvider(for: Project(name: repo.name, path: repo.path, remote: remote)).map { (repo: repo, provider: $0) }
+        var tracked: [(repo: Repo, provider: any CIProvider)] = []
+        for (repo, remote) in repos {
+            guard let provider = ciProvider(for: Project(name: repo.name, path: repo.path, remote: remote)) else { continue }
+            if pushAccess[repo.path] == nil { pushAccess[repo.path] = await provider.canPush(in: repo.path) }
+            if pushAccess[repo.path] == true { tracked.append((repo, provider)) } else { repoCI[repo.path] = nil }
         }
         let fetched = await Self.fetchCI(tracked.map { (path: $0.repo.path, provider: $0.provider) })
         for (repo, _) in tracked {
