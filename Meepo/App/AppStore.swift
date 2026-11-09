@@ -105,8 +105,9 @@ final class AppStore {
         let preset = defaults.string(forKey: Self.shellPresetKey).flatMap(ShellLayout.Preset.init(rawValue:)) ?? .focus
         shellPreset = preset
         editedLayouts = Dictionary(uniqueKeysWithValues: (Self.load([String: ShellLayout].self, Self.editedLayoutsKey, from: defaults) ?? [:])
-            .compactMap { key, layout in ShellLayout.Preset(rawValue: key).map { ($0, layout) } })
-        shell = Self.load(ShellLayout.self, Self.shellKey, from: defaults) ?? ShellLayout.preset(preset)
+            // Solo's changes, kept by builds before Solo stopped keeping them, are dropped.
+            .compactMap { key, layout in ShellLayout.Preset(rawValue: key).flatMap { $0 == .solo ? nil : ($0, layout) } })
+        shell = preset == .solo ? ShellLayout.preset(.solo) : Self.load(ShellLayout.self, Self.shellKey, from: defaults) ?? ShellLayout.preset(preset)
         relayThreshold = defaults.object(forKey: Self.relayThresholdKey) as? Double ?? 0.7
         remoteControlForNewSessions = defaults.bool(forKey: Self.remoteControlKey)
         shellsBeside = defaults.object(forKey: Self.shellsBesideKey) as? Bool ?? true
@@ -1564,7 +1565,7 @@ final class AppStore {
 
     func applyPreset(_ preset: ShellLayout.Preset) {
         shellPreset = preset
-        shell = editedLayouts[preset] ?? ShellLayout.preset(preset)
+        shell = preset == .solo ? ShellLayout.preset(.solo) : editedLayouts[preset] ?? ShellLayout.preset(preset)
     }
 
     /// ⌘⇧↩: Solo, and back to the preset it was opened from.
@@ -1575,11 +1576,13 @@ final class AppStore {
     }
 
     /// Moves, hides or opens panels by hand: the current preset keeps it — set up once, it stays that way.
+    /// Except Solo: a panel opened there is for now, so ⌘⇧↩ always gives the bare terminal.
     func editShell(_ change: (inout ShellLayout) -> Void) {
         var layout = shell
         change(&layout)
         guard layout != shell else { return }
         shell = layout
+        guard shellPreset != .solo else { return }
         editedLayouts[shellPreset] = layout == ShellLayout.preset(shellPreset) ? nil : layout
     }
 

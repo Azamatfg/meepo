@@ -72,6 +72,16 @@ final class ShellStoreTests: XCTestCase {
         XCTAssertEqual(store.shell.split, 4, "with your changes to it")
     }
 
+    func testSoloIsAlwaysOnlyTheTerminal() {
+        store.applyPreset(.focus)
+        store.toggleSolo()
+        store.editShell { $0.toggle(.explorer); $0.split = 2 }
+        XCTAssertNil(store.editedLayouts[.solo], "a panel opened in Solo is for now, not kept")
+        store.toggleSolo()
+        store.toggleSolo()
+        XCTAssertEqual(store.shell, ShellLayout.preset(.solo))
+    }
+
     func testChangingBackToTheDefaultIsNotAnEdit() {
         store.applyPreset(.full)
         store.editShell { $0.split = 4 }
