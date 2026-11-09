@@ -92,7 +92,11 @@ struct MainView: View {
             if store.isHomeShown {
                 HomeView()
             } else if store.selectedSession != nil {
-                TerminalGrid(sessionIds: store.visibleSessionIds)
+                if store.editor.files.isEmpty {
+                    TerminalGrid(sessionIds: store.visibleSessionIds)
+                } else {
+                    EditorSplit { TerminalGrid(sessionIds: store.visibleSessionIds) }
+                }
                 if !store.shell.bottom.isEmpty {
                     ZoneRow(zone: .bottom).frame(height: 200)
                 }
@@ -105,6 +109,36 @@ struct MainView: View {
         // An empty bottom zone still takes a dropped panel.
         .overlay(alignment: .bottom) {
             if store.shell.bottom.isEmpty, !store.isHomeShown { DropStrip(zone: .bottom).frame(height: 14) }
+        }
+    }
+}
+
+/// VS Code: the editor on top, the terminals under it; the line between them drags, and the split stays.
+private struct EditorSplit<Terminals: View>: View {
+    @ViewBuilder let terminals: Terminals
+    @AppStorage("editorFraction") private var fraction = 0.6
+    @State private var dragStart: Double?
+
+    var body: some View {
+        GeometryReader { geometry in
+            let height = geometry.size.height
+            VStack(spacing: 0) {
+                EditorArea().frame(height: height * fraction)
+                Rectangle().fill(Color.clear).frame(height: 10)
+                    .overlay { Capsule().fill(Tokens.textDim.opacity(0.4)).frame(width: 36, height: 3) }
+                    .contentShape(Rectangle())
+                    .onHover { inside in if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() } }
+                    .gesture(DragGesture(coordinateSpace: .global)
+                        .onChanged { drag in
+                            let start = dragStart ?? fraction
+                            dragStart = start
+                            // At least ~120 pt for each side.
+                            let lowest = min(0.5, 120 / max(height, 1))
+                            fraction = min(max(start + drag.translation.height / max(height, 1), lowest), 1 - lowest)
+                        }
+                        .onEnded { _ in dragStart = nil })
+                terminals
+            }
         }
     }
 }

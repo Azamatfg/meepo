@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// VS Code's Explorer as a panel: the session folder as a tree, folders open on click, changed files
-/// in their Source Control color; a file opens read-only in Monaco. Files dropped from Finder are copied in,
+/// in their Source Control color; a file opens in the editor above the terminals, like VS Code. Files dropped from Finder are copied in,
 /// like VS Code: onto a folder into it, elsewhere into the project's root. Files copied in Finder paste with ⌘V
 /// (user decision: a click here takes the keyboard from Claude's terminal until Esc, like VS Code) or Paste.
 /// ⌘C copies the selected file for Finder or a paste here; Delete moves it to the Trash after asking, like VS Code.
@@ -13,7 +13,6 @@ struct ExplorerSection: View {
     @State private var expanded: Set<String> = []
     /// Listings by folder ("" = root), read for the root and every open folder.
     @State private var children: [String: [FileTree.Entry]] = [:]
-    @State private var opened: String?
     /// The folder a drag is over ("" = the root).
     @State private var dropTarget: String?
     /// The clicked row, where ⌘V pastes (nil = the root).
@@ -63,9 +62,6 @@ struct ExplorerSection: View {
                 try? await Task.sleep(for: .seconds(10))
             }
         }
-        .sheet(isPresented: Binding(get: { opened != nil }, set: { if !$0 { opened = nil } })) {
-            if let opened { FileViewer(root: root, path: opened) }
-        }
     }
 
     /// The tree flattened in display order: an open folder's entries follow it, one level deeper.
@@ -87,7 +83,7 @@ struct ExplorerSection: View {
         let folder = entry.isDirectory ? entry.path : (entry.path as NSString).deletingLastPathComponent
         return Button {
             select(entry)
-            entry.isDirectory ? toggle(entry.path) : (opened = entry.path)
+            if entry.isDirectory { toggle(entry.path) } else { store.editor.open(url(of: entry).path) }
         } label: {
             HStack(spacing: 5) {
                 if entry.isDirectory {

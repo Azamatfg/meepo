@@ -20,6 +20,8 @@ enum AddProjectError: LocalizedError, Equatable {
 final class AppStore {
     private let db: DatabaseQueue
     private let terminals = TerminalRegistry()
+    /// Files open above the terminals, VS Code's editor.
+    @ObservationIgnored let editor = Editor()
     private let bridge: BridgeInstaller
     private let usageRoot: URL
     /// Injected so tests (which run inside the app, same bundle id) never touch the user's settings.
@@ -147,6 +149,7 @@ final class AppStore {
         refreshVoice()
         terminals.onExit = { [weak self] id in self?.sessionExited(id) }
         terminals.onAppearanceChange = { [weak self] dark in self?.appearanceChanged(dark: dark) }
+        editor.store = self
     }
 
     func sessionExited(_ id: Int64) {
@@ -1072,7 +1075,20 @@ final class AppStore {
     var terminate: () -> Void = {}
 
     /// Called on every quit (⌘Q, menu bar, restart). True = quit now; false = a question is on screen.
+    private var discardsUnsaved = false
+
     func shouldQuit() -> Bool {
+        if !isQuitConfirmed, !discardsUnsaved, editor.unsavedCount > 0 {
+            let count = editor.unsavedCount
+            confirmation = PixelConfirmation(
+                title: count == 1 ? "A file has unsaved changes" : "\(count) files have unsaved changes",
+                message: "Quitting now loses them. Save with ⌘S in the editor first.", action: "Quit without saving"
+            ) { [weak self] in
+                self?.discardsUnsaved = true // the agents' question still comes
+                self?.terminate()
+            }
+            return false
+        }
         let working = workingSessionIds.count
         if isQuitConfirmed || working == 0 { return true }
         confirmation = PixelConfirmation(

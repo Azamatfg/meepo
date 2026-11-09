@@ -1,0 +1,86 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- Meepo's editor: Monaco as VS Code edits a file. One model per open file, so a tab's unsaved edits and undo
+     survive switching tabs; ⌘S hands the text to Swift, which writes it. -->
+<link rel="stylesheet" href="vs/editor/editor.main.css">
+<style>
+  html, body, #editor { margin: 0; height: 100%; width: 100%; overflow: hidden; background: #1e1e1e; }
+</style>
+</head>
+<body>
+<div id="editor"></div>
+<script src="vs/loader.js"></script>
+<script>
+  self.MonacoEnvironment = { getWorker: function () { throw new Error("no workers on file://"); } };
+  require.config({ paths: { vs: "vs" } });
+  require(["vs/editor/editor.main"], function () {
+    const editor = monaco.editor.create(document.getElementById("editor"), {
+      theme: "vs-dark", automaticLayout: true, minimap: { enabled: true },
+      fontFamily: "Menlo, Monaco, 'Courier New', monospace", fontSize: 12, lineHeight: 18, scrollBeyondLastLine: false,
+    });
+    const post = (message) => window.webkit.messageHandlers.meepo.postMessage(message);
+    // path → { model, saved: the version id on disk, dirty }
+    const files = {};
+    let current = null;
+
+    function report(path) {
+      const file = files[path];
+      const dirty = file.model.getAlternativeVersionId() !== file.saved;
+      if (dirty !== file.dirty) { file.dirty = dirty; post({ dirty: path, value: dirty }); }
+    }
+
+    function save(path) {
+      const file = files[path];
+      if (file) post({ save: path, text: file.model.getValue() });
+    }
+
+    window.meepoOpen = function (payload) {
+      const p = JSON.parse(payload);
+      if (!files[p.path]) {
+        const model = monaco.editor.createModel(p.text, p.language);
+        files[p.path] = { model: model, saved: model.getAlternativeVersionId(), dirty: false };
+        model.onDidChangeContent(() => report(p.path));
+      }
+      if (current !== p.path) {
+        if (current && files[current]) files[current].view = editor.saveViewState();
+        current = p.path;
+        editor.setModel(files[p.path].model);
+        if (files[p.path].view) editor.restoreViewState(files[p.path].view);
+      }
+      editor.layout();
+      editor.render(true);
+      editor.focus();
+    };
+    // The disk changed and the tab had no edits: its text, kept as the saved version.
+    window.meepoReload = function (payload) {
+      const p = JSON.parse(payload);
+      const file = files[p.path];
+      if (!file) return;
+      const view = current === p.path ? editor.saveViewState() : null;
+      file.model.pushEditOperations([], [{ range: file.model.getFullModelRange(), text: p.text }], () => null);
+      file.saved = file.model.getAlternativeVersionId();
+      report(p.path);
+      if (view) editor.restoreViewState(view);
+    };
+    window.meepoSaved = function (path) {
+      const file = files[path];
+      if (!file) return;
+      file.saved = file.model.getAlternativeVersionId();
+      report(path);
+    };
+    window.meepoClose = function (path) {
+      const file = files[path];
+      if (!file) return;
+      if (current === path) { current = null; editor.setModel(null); }
+      file.model.dispose();
+      delete files[path];
+    };
+    window.meepoRequestSave = save;
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => { if (current) save(current); });
+    post({ ready: true });
+  });
+</script>
+</body>
+</html>
