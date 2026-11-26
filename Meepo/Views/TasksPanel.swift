@@ -68,6 +68,11 @@ struct DoneStats: Equatable {
     var days: [Day]
     /// Done tasks by the day they were closed, the latest first.
     var feed: [Group]
+    /// The first day of the streak; nil without one.
+    var streakStart: Date?
+    /// Tomorrow's midnight: every period ends here.
+    var end: Date
+    private var tasks: [TaskItem]
 
     static let feedLimit = 100
 
@@ -87,9 +92,23 @@ struct DoneStats: Equatable {
         var cursor = first
         while closedDays.contains(day(cursor)) { cursor -= 1 }
         streak = first - cursor
+        streakStart = streak > 0 ? day(cursor + 1) : nil
+        end = day(1)
+        self.tasks = tasks
         feed = Dictionary(grouping: done.prefix(Self.feedLimit)) { calendar.startOfDay(for: $0.1) }
             .map { Group(date: $0.key, tasks: $0.value.map(\.0)) }
             .sorted { $0.date > $1.date }
+    }
+
+    /// Closed in the period, the latest first.
+    func closed(since start: Date, until end: Date) -> [TaskItem] {
+        tasks.filter { task in task.isDone && task.doneAt.map { $0 >= start && $0 < end } == true }
+            .sorted { ($0.doneAt ?? .distantPast) > ($1.doneAt ?? .distantPast) }
+    }
+
+    /// Written in the period, the latest first.
+    func added(since start: Date, until end: Date) -> [TaskItem] {
+        tasks.filter { $0.createdAt >= start && $0.createdAt < end }.sorted { $0.createdAt > $1.createdAt }
     }
 }
 
@@ -190,27 +209,23 @@ struct TasksPanel: View {
     /// Always on top, whichever tab: what got done is what keeps you going.
     private func counters(_ stats: DoneStats) -> some View {
         HStack(spacing: 6) {
-            counter(stats.today, "today", help: "Tasks closed today")
-            counter(stats.week, "7 days", help: "Tasks closed today and the 6 days before")
+            counter(stats.today, "today", help: "Tasks closed today — click to see them") {
+                ClosedList(title: "Closed today", closed: stats.closed(since: stats.days.last!.date, until: stats.end))
+            }
+            counter(stats.week, "7 days", help: "Tasks closed today and the 6 days before — click to see them") {
+                ClosedList(title: "Closed in 7 days", closed: stats.closed(since: stats.days.first!.date, until: stats.end), showsDay: true)
+            }
             counter(stats.streak, stats.streak == 1 ? "day streak" : "days streak",
-                    help: "Days in a row with at least one task closed")
+                    help: "Days in a row with at least one task closed — click to see them") {
+                ClosedList(title: "The streak, \(stats.streak) \(stats.streak == 1 ? "day" : "days")",
+                           closed: stats.streakStart.map { stats.closed(since: $0, until: stats.end) } ?? [], showsDay: true)
+            }
         }
         .padding(.bottom, 8)
     }
 
-    private func counter(_ value: Int, _ label: String, help: String) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text("\(value)").font(Fonts.ui(20, weight: .bold)).monospacedDigit()
-                .foregroundStyle(value > 0 ? Tokens.added : Tokens.textDim)
-                .contentTransition(.numericText())
-            Text(label.uppercased()).font(Fonts.ui(10, weight: .bold)).tracking(1).foregroundStyle(Tokens.textDim).lineLimit(1)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10).padding(.vertical, 7)
-        .background(Tokens.ground, in: RoundedRectangle(cornerRadius: 8))
-        .animation(.snappy(duration: 0.3), value: value)
-        .help(help)
-        .accessibilityElement(children: .combine)
+    private func counter(_ value: Int, _ label: String, help: String, list: @escaping () -> ClosedList) -> some View {
+        CounterTile(value: value, label: label, help: help, list: list)
     }
 
     @ViewBuilder
@@ -520,7 +535,7 @@ private struct DoneFeed: View {
     let stats: DoneStats
 
     var body: some View {
-        WeekChart(days: stats.days)
+        WeekChart(stats: stats)
         if stats.feed.isEmpty {
             Text("Nothing closed yet. Tick a task in Tasks and it shows up here.")
                 .font(Fonts.ui(12)).foregroundStyle(Tokens.textDim).padding(.horizontal, 8).padding(.vertical, 10)
@@ -572,27 +587,27 @@ private struct DoneFeed: View {
 
 /// Closed against added, day by day for a week: a list that grows while you close ten a day is not you falling behind.
 private struct WeekChart: View {
-    let days: [DoneStats.Day]
+    @Environment(AppStore.self) private var store
+    let stats: DoneStats
+    @State private var shown: Date?
+    @State private var hovered: Date?
     private let height: CGFloat = 52
+    private var days: [DoneStats.Day] { stats.days }
 
     var body: some View {
         let top = max(1, days.map { max($0.closed, $0.added) }.max() ?? 0)
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .bottom, spacing: 0) {
                 ForEach(days, id: \.date) { day in
-                    VStack(spacing: 4) {
-                        HStack(alignment: .bottom, spacing: 2) {
-                            bar(day.closed, of: top, Tokens.added)
-                            bar(day.added, of: top, Tokens.idle)
+                    Button { shown = shown == day.date ? nil : day.date } label: { column(day, top: top) }
+                        .buttonStyle(.plain)
+                        .onHover { hovered = $0 ? day.date : (hovered == day.date ? nil : hovered) }
+                        .popover(isPresented: Binding(get: { shown == day.date }, set: { if !$0 { shown = nil } }), arrowEdge: .bottom) {
+                            let end = Calendar.current.date(byAdding: .day, value: 1, to: day.date)!
+                            ClosedList(title: DoneFeed.title(of: day.date), closed: stats.closed(since: day.date, until: end),
+                                       added: stats.added(since: day.date, until: end))
+                                .environment(store)
                         }
-                        .frame(height: height, alignment: .bottom)
-                        Text(day.date.formatted(Date.FormatStyle().weekday(.narrow).locale(english)))
-                            .font(Fonts.ui(10, weight: .bold)).foregroundStyle(Tokens.textDim)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .help("\(day.closed) closed, \(day.added) added")
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("\(day.date.formatted(date: .abbreviated, time: .omitted)): \(day.closed) closed, \(day.added) added")
                 }
             }
             HStack(spacing: 12) {
@@ -602,6 +617,25 @@ private struct WeekChart: View {
         }
         .padding(10)
         .background(Tokens.ground, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func column(_ day: DoneStats.Day, top: Int) -> some View {
+        VStack(spacing: 4) {
+            HStack(alignment: .bottom, spacing: 2) {
+                bar(day.closed, of: top, Tokens.added)
+                bar(day.added, of: top, Tokens.idle)
+            }
+            .frame(height: height, alignment: .bottom)
+            Text(day.date.formatted(Date.FormatStyle().weekday(.narrow).locale(english)))
+                .font(Fonts.ui(10, weight: .bold)).foregroundStyle(Tokens.textDim)
+        }
+        .padding(.vertical, 3)
+        .frame(maxWidth: .infinity)
+        .background(hovered == day.date || shown == day.date ? Tokens.grassLight : .clear, in: RoundedRectangle(cornerRadius: 6))
+        .contentShape(Rectangle())
+        .help("\(day.closed) closed, \(day.added) added — click to see them")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(day.date.formatted(date: .abbreviated, time: .omitted)): \(day.closed) closed, \(day.added) added")
     }
 
     private func bar(_ value: Int, of top: Int, _ color: Color) -> some View {
@@ -615,5 +649,92 @@ private struct WeekChart: View {
             RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 8, height: 8)
             Text(title.uppercased()).font(Fonts.ui(10, weight: .bold)).tracking(1).foregroundStyle(Tokens.textDim).monospacedDigit()
         }
+    }
+}
+
+/// A number on top of the panel; a click shows the tasks behind it.
+private struct CounterTile: View {
+    @Environment(AppStore.self) private var store
+    let value: Int
+    let label: String
+    let help: String
+    let list: () -> ClosedList
+    @State private var isShown = false
+    @State private var isHovered = false
+
+    var body: some View {
+        Button { isShown.toggle() } label: { tile }
+            .buttonStyle(.plain)
+            .onHover { isHovered = $0 }
+            .popover(isPresented: $isShown, arrowEdge: .bottom) { list().environment(store) }
+    }
+
+    private var tile: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text("\(value)").font(Fonts.ui(20, weight: .bold)).monospacedDigit()
+                .foregroundStyle(value > 0 ? Tokens.added : Tokens.textDim)
+                .contentTransition(.numericText())
+            Text(label.uppercased()).font(Fonts.ui(10, weight: .bold)).tracking(1).foregroundStyle(Tokens.textDim).lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10).padding(.vertical, 7)
+        .background(isHovered || isShown ? Tokens.grassLight : Tokens.ground, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(isShown ? Tokens.line : .clear))
+        .contentShape(Rectangle())
+        .animation(.snappy(duration: 0.3), value: value)
+        .help(help)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// The tasks behind a number or a day of the chart, in a popover.
+private struct ClosedList: View {
+    @Environment(AppStore.self) private var store
+    let title: String
+    let closed: [TaskItem]
+    var added: [TaskItem]?
+    var showsDay = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title.uppercased()).font(Fonts.ui(11, weight: .bold)).tracking(1.2).foregroundStyle(Tokens.text)
+                    .padding(.horizontal, 6).padding(.bottom, 4)
+                section(added == nil ? nil : "Closed", closed, at: \.doneAt, mark: "checkmark.circle.fill", Tokens.added)
+                if let added { section("Added", added, at: { $0.createdAt }, mark: "plus.circle", Tokens.idle) }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(width: 320)
+        .frame(maxHeight: 420)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private func section(_ name: String?, _ tasks: [TaskItem], at time: @escaping (TaskItem) -> Date?, mark: String, _ color: Color) -> some View {
+        if let name {
+            Text("\(name.uppercased())  \(tasks.count)").font(Fonts.ui(10, weight: .bold)).tracking(1).foregroundStyle(Tokens.textDim)
+                .padding(.horizontal, 6).padding(.top, 8).padding(.bottom, 2)
+        }
+        if tasks.isEmpty {
+            Text("None").font(Fonts.ui(12)).foregroundStyle(Tokens.textDim).padding(.horizontal, 6).padding(.vertical, 4)
+        }
+        ForEach(tasks) { task in
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: mark).font(.system(size: 12)).foregroundStyle(color).padding(.top, 1)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(task.text).font(Fonts.ui(12)).foregroundStyle(Tokens.text).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                    Text(([store.projects.first { $0.id == task.projectId }?.name, time(task).map(stamp)].compactMap { $0 })
+                        .joined(separator: " · "))
+                        .font(Fonts.ui(10)).foregroundStyle(Tokens.textDim)
+                }
+            }
+            .padding(.horizontal, 6).padding(.vertical, 3)
+        }
+    }
+
+    private func stamp(_ date: Date) -> String {
+        date.formatted((showsDay ? Date.FormatStyle().weekday(.abbreviated) : Date.FormatStyle()).hour().minute().locale(english))
     }
 }
