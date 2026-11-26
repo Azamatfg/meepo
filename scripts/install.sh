@@ -14,8 +14,14 @@ if running; then
   while running; do sleep 1; done
 fi
 mkdir -p "$HOME/Applications"
-rm -rf "$HOME/Applications/Meepo.app"
-ditto .build/install/Build/Products/Release/Meepo.app "$HOME/Applications/Meepo.app"
+# Copied next to the old one, then swapped by mv: a sandboxed shell once stopped `rm -rf` halfway (2026-11-26) and left
+# a Meepo.app without its binary. Now a failed step leaves the old copy whole.
+APP="$HOME/Applications/Meepo.app"
+rm -rf "$APP.new" "$APP.old"
+ditto .build/install/Build/Products/Release/Meepo.app "$APP.new"
+if [ -e "$APP" ]; then mv "$APP" "$APP.old"; fi
+mv "$APP.new" "$APP"
+rm -rf "$APP.old" || echo "couldn't remove $APP.old — delete it by hand"
 # macOS knows every Meepo.app ever built (DerivedData, .build/*, worktrees, temp folders) under the same bundle id, and `meepo`, meepo://
 # links and notifications could open one of those — gone with the next cleanup. Only this copy stays registered.
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister

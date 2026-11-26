@@ -149,6 +149,22 @@ final class TasksPanelTests: XCTestCase {
         XCTAssertEqual(stats.days.map(\.added), [0, 0, 0, 0, 1, 0, 2], "a task counts as added on the day it was written")
     }
 
+    /// What a click on a number or a day of the chart lists: the same tasks the number counts.
+    func testEachNumberListsTheTasksItCounts() {
+        let calendar = Calendar.current
+        let midnight = calendar.startOfDay(for: noon)
+        let stats = DoneStats([doneDaysAgo(1, 0), doneDaysAgo(2, 1), doneDaysAgo(3, 3), doneDaysAgo(4, 8), task(5, "found", createdMinutesAgo: 5)],
+                              now: noon)
+        func ids(_ tasks: [TaskItem]) -> [Int64] { tasks.compactMap(\.id) }
+        XCTAssertEqual(ids(stats.closed(since: midnight, until: stats.end)).count, stats.today)
+        XCTAssertEqual(ids(stats.closed(since: stats.days[0].date, until: stats.end)), [1, 2, 3], "the latest first")
+        XCTAssertEqual(stats.closed(since: stats.days[0].date, until: stats.end).count, stats.week)
+        XCTAssertEqual(stats.streakStart, calendar.date(byAdding: .day, value: -1, to: midnight))
+        XCTAssertEqual(ids(stats.streakStart.map { stats.closed(since: $0, until: stats.end) } ?? []), [1, 2], "not the day before the gap")
+        XCTAssertEqual(ids(stats.added(since: midnight, until: stats.end)), [5, 1])
+        XCTAssertNil(DoneStats([doneDaysAgo(1, 3)], now: noon).streakStart)
+    }
+
     func testTheFeedGroupsByDayTheLatestFirst() {
         let stats = DoneStats([doneDaysAgo(1, 2), doneDaysAgo(2, 0, hour: 9), doneDaysAgo(3, 0, hour: 11), task(4, "open", createdMinutesAgo: 1)],
                               now: noon)
