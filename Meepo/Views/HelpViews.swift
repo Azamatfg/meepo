@@ -38,6 +38,7 @@ enum Explain {
         case .events: "What Claude did in this session, step by step, in plain words: what you asked, the commands it ran, the files it read or edited. Click a step for the details; a file opens in the editor."
         case .waiting: "Sessions that stopped and wait for you — a question, a permission, or a finished task. Ctrl+Tab jumps to the next one."
         case .product: "What you sent, push by push: each with its commits and the requests that led to it — and on top, what isn't sent yet (not committed, not pushed) and the next step. Explain for users says it in your product's words: what changes for your users, section by section, what to check before you ship, how to try it. It's written on your click from the commits, your requests and Claude's answers — a small request, not a re-read of the whole conversation."
+        case .tasks: "Your to-do list. Type a task and press Return; click the circle when it's done — it is struck through and moves down to Done today. Double-click a task to reword it, right-click for more. The arrow starts a Claude session with the task as its first message. Done shows what you closed: today, the last 7 days, the streak of days in a row, and closed against added for the week."
         }
     }
 

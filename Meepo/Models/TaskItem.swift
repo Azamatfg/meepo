@@ -33,6 +33,11 @@ struct TaskItem: Codable, Identifiable, Hashable, FetchableRecord, MutablePersis
         if !attachments.isEmpty { parts.append("Attachments:\n" + attachments.map { "- \($0)" }.joined(separator: "\n")) }
         return parts.joined(separator: "\n\n")
     }
+
+    /// The note's last line: what a session closing the task wrote it ended with (a PR, a deploy).
+    var outcome: String? {
+        note.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.last { !$0.isEmpty }
+    }
 }
 
 /// A TODO/FIXME/HACK/XXX line Claude wrote into code (from PostToolUse), for the end-of-day summary.
