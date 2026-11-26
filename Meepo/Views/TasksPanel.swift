@@ -1,23 +1,49 @@
 import SwiftUI
 
-/// What the Tasks tab lists: what's left to do, then what was done today. Older work is in the Done tab.
+/// What the Tasks tab lists: the active tasks, then what was done today; and the open ones set aside.
+/// Older work is in the Done tab.
 struct TaskBoard: Equatable {
-    /// Oldest first. A task ticked a moment ago is still here (`lingering`), struck through, before it moves down.
+    /// Active, oldest first. A task ticked a moment ago is still here (`lingering`), struck through, before it moves down.
     var open: [TaskItem]
     /// Latest first: the task just done lands right under the open ones.
     var doneToday: [TaskItem]
+    /// What agents found, the latest first; not in the list until the user takes it.
+    var inbox: [TaskItem]
+    var waiting: [TaskItem]
+    var later: [TaskItem]
+
+    /// More active than this and the panel suggests moving some to Later. Only suggests.
+    static let crowdedLimit = 5
 
     init(_ tasks: [TaskItem], lingering: Set<Int64> = [], now: Date = .now, calendar: Calendar = .current) {
-        func staysOpen(_ task: TaskItem) -> Bool { !task.isDone || task.id.map(lingering.contains) == true }
-        open = tasks.filter(staysOpen).sorted { $0.createdAt < $1.createdAt }
+        func staysOpen(_ task: TaskItem) -> Bool { task.isActive || task.id.map(lingering.contains) == true }
+        func open(_ status: TaskStatus) -> [TaskItem] {
+            tasks.filter { !$0.isDone && $0.status == status }.sorted { $0.createdAt < $1.createdAt }
+        }
+        self.open = tasks.filter(staysOpen).sorted { $0.createdAt < $1.createdAt }
+        inbox = open(.inbox).reversed()
+        waiting = open(.waiting)
+        later = open(.later)
         let midnight = calendar.startOfDay(for: now)
-        doneToday = tasks.filter { !staysOpen($0) && ($0.doneAt ?? .distantPast) >= midnight }
+        doneToday = tasks.filter { $0.isDone && !staysOpen($0) && ($0.doneAt ?? .distantPast) >= midnight }
             .sorted { ($0.doneAt ?? .distantPast) > ($1.doneAt ?? .distantPast) }
     }
 
     /// Today's work: done today out of done today plus still open.
     var doneCount: Int { doneToday.count + open.filter(\.isDone).count }
     var totalCount: Int { doneToday.count + open.count }
+    var isCrowded: Bool { open.filter { !$0.isDone }.count > Self.crowdedLimit }
+}
+
+extension TaskStatus {
+    var title: String {
+        switch self {
+        case .inbox: "Inbox"
+        case .active: "Tasks"
+        case .later: "Later"
+        case .waiting: "Waiting on others"
+        }
+    }
 }
 
 /// What got done, for the Done tab: so the work shows, not only what's left.
@@ -70,7 +96,7 @@ struct DoneStats: Equatable {
 /// The to-do list at hand, next to the terminals: type a task, tick it, watch it move down to Done.
 /// The Done tab shows the work behind it. Notes, attachments and the morning start stay in the Tasks sheet (the menu).
 struct TasksPanel: View {
-    enum Tab: String { case tasks, done }
+    enum Tab: String { case tasks, inbox, done }
 
     @Environment(AppStore.self) private var store
     @State private var draft = ""
@@ -78,12 +104,17 @@ struct TasksPanel: View {
     @State private var editing: Int64?
     @AppStorage("tasksTab") private var tab = Tab.tasks
     @AppStorage("tasksDoneShown") private var isDoneShown = true
+    @State private var isWaitingShown = false
+    @State private var isLaterShown = false
     @FocusState private var isAdding: Bool
 
     private enum Item: Identifiable {
         case project(String)
         case task(TaskItem)
         case done(count: Int)
+        case waiting(count: Int)
+        case later(count: Int)
+        case crowded
         case empty(String)
 
         var id: String {
@@ -91,6 +122,9 @@ struct TasksPanel: View {
             case let .project(name): "project \(name)"
             case let .task(task): "task \(task.id ?? 0)"
             case .done: "done"
+            case .waiting: "waiting"
+            case .later: "later"
+            case .crowded: "crowded"
             case .empty: "empty"
             }
         }
@@ -98,11 +132,13 @@ struct TasksPanel: View {
 
     var body: some View {
         let stats = DoneStats(store.tasks)
+        let board = TaskBoard(store.tasks, lingering: lingering)
         VStack(alignment: .leading, spacing: 2) {
-            tabs
+            tabs(inbox: board.inbox.count)
             counters(stats)
             switch tab {
-            case .tasks: list
+            case .tasks: list(board)
+            case .inbox: InboxList(tasks: board.inbox)
             case .done: DoneFeed(stats: stats)
             }
         }
@@ -116,8 +152,7 @@ struct TasksPanel: View {
     }
 
     @ViewBuilder
-    private var list: some View {
-        let board = TaskBoard(store.tasks, lingering: lingering)
+    private func list(_ board: TaskBoard) -> some View {
         let items = items(of: board)
         addField
         if board.totalCount > 0 { progress(board) }
@@ -126,16 +161,23 @@ struct TasksPanel: View {
             .animation(.snappy(duration: 0.3), value: items.map(\.id))
     }
 
-    private var tabs: some View {
+    private func tabs(inbox: Int) -> some View {
         HStack(spacing: 4) {
-            ForEach([(Tab.tasks, "Tasks"), (.done, "Done")], id: \.0) { value, title in
+            ForEach([(Tab.tasks, "Tasks"), (.inbox, "Inbox"), (.done, "Done")], id: \.0) { value, title in
                 Button { tab = value } label: {
-                    Text(title.uppercased()).font(Fonts.ui(11, weight: .bold)).tracking(1.2)
-                        .foregroundStyle(tab == value ? Tokens.text : Tokens.textDim)
-                        .padding(.horizontal, 10).frame(height: 24)
-                        .background(tab == value ? Tokens.raised : .clear, in: RoundedRectangle(cornerRadius: 6))
-                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(tab == value ? Tokens.line : .clear))
-                        .contentShape(Rectangle())
+                    HStack(spacing: 5) {
+                        Text(title.uppercased()).font(Fonts.ui(11, weight: .bold)).tracking(1.2)
+                        if value == .inbox, inbox > 0 {
+                            Text("\(inbox)").font(Fonts.ui(10, weight: .bold)).monospacedDigit().foregroundStyle(Tokens.surface)
+                                .padding(.horizontal, 5).frame(minWidth: 16, minHeight: 16).background(Tokens.work, in: Capsule())
+                                .help("Not sorted yet: what agents found while they worked")
+                        }
+                    }
+                    .foregroundStyle(tab == value ? Tokens.text : Tokens.textDim)
+                    .padding(.horizontal, 10).frame(height: 24)
+                    .background(tab == value ? Tokens.raised : .clear, in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(tab == value ? Tokens.line : .clear))
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(tab == value ? .isSelected : [])
@@ -179,6 +221,12 @@ struct TasksPanel: View {
             TaskLine(task: task, isEditing: editing == task.id, onToggle: { toggle(task) },
                      onEdit: { editing = $0 ? task.id : nil })
         case let .done(count): section("Done today", count, isShown: $isDoneShown)
+        case let .waiting(count): section(TaskStatus.waiting.title, count, isShown: $isWaitingShown)
+        case let .later(count): section(TaskStatus.later.title, count, isShown: $isLaterShown)
+        case .crowded:
+            Label("Lots in progress — move some to Later (right-click a task)", systemImage: "lightbulb")
+                .font(Fonts.ui(11)).foregroundStyle(Tokens.textDim)
+                .padding(.horizontal, 8).padding(.top, 6)
         case let .empty(text):
             Text(text).font(Fonts.ui(12)).foregroundStyle(Tokens.textDim).padding(.horizontal, 8).padding(.vertical, 10)
         }
@@ -204,9 +252,18 @@ struct TasksPanel: View {
         } else {
             items += board.open.map(Item.task)
         }
+        if board.isCrowded { items.append(.crowded) }
         if !board.doneToday.isEmpty {
             items.append(.done(count: board.doneToday.count))
             if isDoneShown { items += board.doneToday.map(Item.task) }
+        }
+        if !board.waiting.isEmpty {
+            items.append(.waiting(count: board.waiting.count))
+            if isWaitingShown { items += board.waiting.map(Item.task) }
+        }
+        if !board.later.isEmpty {
+            items.append(.later(count: board.later.count))
+            if isLaterShown { items += board.later.map(Item.task) }
         }
         return items
     }
@@ -370,6 +427,11 @@ private struct TaskLine: View {
                     Divider()
                     Toggle("No project", isOn: Binding(get: { task.projectId == nil }, set: { _ in move(to: nil) }))
                 }
+                Menu("Move to") {
+                    ForEach(TaskStatus.allCases, id: \.self) { status in
+                        Toggle(status.title, isOn: Binding(get: { task.status == status }, set: { _ in store.setStatus(task, status) }))
+                    }
+                }
                 Divider()
             }
             Button("Delete", role: .destructive) { if let id = task.id { store.deleteTask(id) } }
@@ -395,6 +457,57 @@ private struct TaskLine: View {
     private func start() {
         guard let id = task.id else { return }
         do { try store.launchMorning([id]) } catch { store.bridgeError = error.localizedDescription }
+    }
+}
+
+/// The Inbox tab: what agents found while they worked. Each one is taken into the list, put off, or dropped.
+private struct InboxList: View {
+    @Environment(AppStore.self) private var store
+    let tasks: [TaskItem]
+
+    var body: some View {
+        if tasks.isEmpty {
+            Text("Inbox is empty. What agents find while they work lands here, not in your list.")
+                .font(Fonts.ui(12)).foregroundStyle(Tokens.textDim).padding(.horizontal, 8).padding(.vertical, 10)
+        }
+        ForEach(tasks) { task in
+            VStack(alignment: .leading, spacing: 6) {
+                Text(task.text).font(Fonts.ui(13)).foregroundStyle(Tokens.text).lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 6) {
+                    if let project = store.projects.first(where: { $0.id == task.projectId }) {
+                        Text(project.name).font(Fonts.ui(11)).foregroundStyle(Tokens.textDim).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    action("Do", filled: true, help: "Into the list") { store.setStatus(task, .active) }
+                    action("Later", help: "Out of the way, kept under Later") { store.setStatus(task, .later) }
+                    Button { if let id = task.id { store.deleteTask(id) } } label: {
+                        Image(systemName: "trash").font(.system(size: 11)).foregroundStyle(Tokens.textDim).frame(width: 24, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Delete")
+                    .accessibilityLabel("Delete: \(task.text)")
+                }
+            }
+            .padding(.horizontal, 8).padding(.vertical, 8)
+            .background(Tokens.ground, in: RoundedRectangle(cornerRadius: 8))
+            .padding(.bottom, 4)
+            .transition(.opacity)
+        }
+    }
+
+    private func action(_ title: String, filled: Bool = false, help: String, _ run: @escaping () -> Void) -> some View {
+        Button(action: run) {
+            Text(title.uppercased()).font(Fonts.ui(10, weight: .bold)).tracking(1)
+                .foregroundStyle(filled ? Tokens.surface : Tokens.text)
+                .padding(.horizontal, 9).frame(height: 22)
+                .background(filled ? Tokens.work : Tokens.raised, in: RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(filled ? .clear : Tokens.line))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 }
 

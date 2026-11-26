@@ -3092,6 +3092,12 @@ final class AppStore {
         reloadTasks()
     }
 
+    func setStatus(_ task: TaskItem, _ status: TaskStatus) {
+        var task = task
+        task.status = status
+        updateTask(task)
+    }
+
     func deleteTask(_ id: Int64) {
         let owned = tasks.first { $0.id == id }?.attachments.filter { $0.hasPrefix(TaskItem.attachmentsDir.path + "/") } ?? []
         for file in owned { try? FileManager.default.removeItem(atPath: file) }
@@ -3195,7 +3201,7 @@ final class AppStore {
                 todos: todos,
                 nextSteps: nextSteps,
                 doneTasks: projectTasks.filter { $0.isDone && ($0.doneAt ?? .distantPast) >= start }.map(\.text),
-                openTasks: projectTasks.filter { !$0.isDone }.map(\.text)
+                openTasks: projectTasks.filter(\.isActive).map(\.text)
             )
             let active = !day.commits.isEmpty || !day.stages.isEmpty || day.tokens > 0 || !day.todos.isEmpty || !day.doneTasks.isEmpty
             return active ? day : nil

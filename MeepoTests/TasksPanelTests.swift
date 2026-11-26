@@ -47,6 +47,68 @@ final class TasksPanelTests: XCTestCase {
         XCTAssertEqual([board.doneCount, board.totalCount], [1, 2])
     }
 
+    private func open(_ id: Int64, _ status: TaskStatus, createdMinutesAgo: Double) -> TaskItem {
+        var item = task(id, "\(status.rawValue) \(id)", createdMinutesAgo: createdMinutesAgo)
+        item.status = status
+        return item
+    }
+
+    func testTheListShowsOnlyActiveTasksAndTheRestHaveTheirOwnPlace() {
+        let board = TaskBoard([open(1, .active, createdMinutesAgo: 50), open(2, .inbox, createdMinutesAgo: 40), open(3, .inbox, createdMinutesAgo: 30),
+                               open(4, .later, createdMinutesAgo: 20), open(5, .waiting, createdMinutesAgo: 10)], now: noon)
+        XCTAssertEqual(board.open.map(\.text), ["active 1"])
+        XCTAssertEqual(board.inbox.map(\.text), ["inbox 3", "inbox 2"], "the latest finding on top")
+        XCTAssertEqual(board.later.map(\.text), ["later 4"])
+        XCTAssertEqual(board.waiting.map(\.text), ["waiting 5"])
+        XCTAssertEqual(board.totalCount, 1, "today's bar counts the list, not the inbox")
+    }
+
+    func testADoneTaskLeavesItsGroupWhateverItsStatus() {
+        var found = open(1, .inbox, createdMinutesAgo: 30)
+        found.isDone = true
+        found.doneAt = noon
+        let board = TaskBoard([found], now: noon)
+        XCTAssertEqual([board.inbox, board.open], [[], []])
+        XCTAssertEqual(board.doneToday.map(\.id), [1], "closed straight from the inbox by an agent: still today's work")
+    }
+
+    func testMoreThanFiveActiveTasksSuggestsLater() {
+        let five = (1...5).map { open(Int64($0), .active, createdMinutesAgo: Double($0)) }
+        XCTAssertFalse(TaskBoard(five, now: noon).isCrowded)
+        XCTAssertTrue(TaskBoard(five + [open(6, .active, createdMinutesAgo: 6)], now: noon).isCrowded)
+        var ticked = five + [open(6, .active, createdMinutesAgo: 6)]
+        ticked[0].isDone = true
+        XCTAssertFalse(TaskBoard(ticked, lingering: [1], now: noon).isCrowded, "a task just ticked is no longer in progress")
+    }
+
+    func testOldOpenTasksStayInTheListAndAnAgentsInsertGoesToTheInbox() throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: "status-\(UUID().uuidString).sqlite").path
+        let db = try DatabaseQueue(path: file)
+        try AppDatabase.migrator.migrate(db, upTo: "v23-replay-base-url")
+        try db.write { try $0.execute(sql: "INSERT INTO task (text, note, attachments, isDone, createdAt) VALUES ('old', '', '[]', 0, ?)", arguments: [Date.now]) }
+        try AppDatabase.migrator.migrate(db)
+        // What a Claude session runs to note a finding: it knows nothing of `status`.
+        let claude = try DatabaseQueue(path: file)
+        try claude.write { try $0.execute(sql: "INSERT INTO task (text, note, attachments, isDone, createdAt) VALUES ('found', '', '[]', 0, ?)", arguments: [Date.now]) }
+        let statuses = try db.read { try TaskItem.fetchAll($0) }.map { "\($0.text) \($0.status.rawValue)" }
+        XCTAssertEqual(statuses, ["old active", "found inbox"])
+    }
+
+    func testTasksTypedInMeepoGoStraightToTheListAndMoveBetweenStatuses() throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let tmp = FileManager.default.temporaryDirectory.appending(path: "status-\(UUID().uuidString)")
+        let store = AppStore(db: db, bridge: BridgeInstaller(settingsURL: tmp.appending(path: "s.json"), meepoHome: tmp),
+                             usageRoot: tmp, defaults: UserDefaults(suiteName: "meepo-status-\(UUID().uuidString)")!)
+        let typed = try XCTUnwrap(store.addTask("typed", projectId: nil))
+        XCTAssertEqual(typed.status, .active)
+        for status in [TaskStatus.later, .waiting, .inbox, .active] {
+            store.setStatus(try XCTUnwrap(store.tasks.first), status)
+            XCTAssertEqual(try db.read { try TaskItem.fetchOne($0) }?.status, status)
+        }
+        XCTAssertEqual(store.tasks.first?.isDone, false, "moving doesn't close it")
+    }
+
     private func doneDaysAgo(_ id: Int64, _ days: Int, hour: Int = 10, createdDaysAgo: Int? = nil) -> TaskItem {
         let calendar = Calendar.current
         let day = calendar.date(byAdding: .day, value: -days, to: calendar.startOfDay(for: noon))!
@@ -138,6 +200,10 @@ final class TasksPanelTests: XCTestCase {
         store.addTask("Refunds for Kaspi payments: the button on a paid trip and the ledger entry behind it", projectId: alva)
         store.addTask("Driver payouts: retry a failed transfer once", projectId: alva)
         store.addTask("Write the release notes", projectId: meepo)
+        for (text, status) in [("Onboarding copy", TaskStatus.active), ("Update the README", .active), ("Rotate the API key", .active),
+                               ("Fleety: phones for 29 employees without one", .waiting), ("Dark mode for the widget", .later)] {
+            store.setStatus(try XCTUnwrap(store.addTask(text, projectId: meepo)), status)
+        }
         // A week of work: some closed each day, some found.
         let calendar = Calendar.current
         for (daysAgo, closed, added) in [(6, 3, 4), (5, 5, 2), (4, 0, 1), (3, 4, 6), (2, 6, 5), (1, 8, 9), (0, 4, 3)] {
@@ -155,6 +221,10 @@ final class TasksPanelTests: XCTestCase {
                 try await db.write { try row.update($0) }
             }
         }
+        for (text, project) in [("ALVA: the charging socket doesn't reconnect after the app comes back from background (iOS #28)", alva),
+                                ("LogoutAll closes sessions Redis first, then the DB — a login in between survives", meepo)] {
+            store.setStatus(try XCTUnwrap(store.addTask(text, projectId: project)), .inbox)
+        }
         store.reloadTasks()
 
         let defaults = UserDefaults.standard
@@ -168,7 +238,7 @@ final class TasksPanelTests: XCTestCase {
             .padding(10).background(Tokens.ground).environment(store))
         window.makeKeyAndOrderFront(nil)
         defer { window.orderOut(nil) }
-        for tab in [TasksPanel.Tab.tasks, .done] {
+        for tab in [TasksPanel.Tab.tasks, .inbox, .done] {
             defaults.set(tab.rawValue, forKey: "tasksTab")
             for (theme, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
                 window.appearance = NSAppearance(named: appearance)

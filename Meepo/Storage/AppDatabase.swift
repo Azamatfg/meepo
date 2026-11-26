@@ -250,6 +250,12 @@ enum AppDatabase {
             try db.alter(table: "replayRun") { t in t.add(column: "baseURL", .text).notNull().defaults(to: "") }
         }
 
+        // Inbox for what agents find: Meepo writes `active`, an agent's sqlite3 INSERT that names no status gets `inbox`.
+        migrator.registerMigration("v25-task-status") { db in
+            try db.alter(table: "task") { t in t.add(column: "status", .text).notNull().defaults(to: TaskStatus.inbox.rawValue) }
+            try db.execute(sql: "UPDATE task SET status = ?", arguments: [TaskStatus.active]) // the list stays as it was
+        }
+
         return migrator
     }
 }
