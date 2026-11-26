@@ -709,6 +709,7 @@ struct PanelBox: View {
         case .events: EventsPanel()
         case .waiting: WaitingPanel()
         case .product: WhatChangedPanel()
+        case .tasks: TasksPanel()
         }
     }
 
@@ -723,6 +724,7 @@ struct PanelBox: View {
         case .events: "Events"
         case .waiting: "Needs you"
         case .product: "What changed"
+        case .tasks: "Tasks"
         }
     }
 
@@ -736,6 +738,7 @@ struct PanelBox: View {
         case .events: "What the agent did, step by step"
         case .waiting: "Sessions waiting for your answer"
         case .product: "What changed, for your users"
+        case .tasks: "Your to-do list: tick what's done"
         }
     }
 
@@ -748,6 +751,7 @@ struct PanelBox: View {
         case .events: "bolt"
         case .waiting: "bell"
         case .product: "sparkles"
+        case .tasks: "checklist"
         }
     }
 }

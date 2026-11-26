@@ -3064,6 +3064,17 @@ final class AppStore {
         tasks = (try? db.read { try TaskItem.order(Column("isDone"), Column("createdAt")).fetchAll($0) }) ?? []
     }
 
+    /// SQLite's count of commits made by other connections to the file — Claude's `sqlite3` closing a task, not Meepo's own writes.
+    @ObservationIgnored private var outsideVersion: Int?
+
+    /// Re-reads tasks when another process wrote the database since the last look; cheap enough to poll.
+    func reloadTasksIfChangedOutside() {
+        let version = try? db.read { try Int.fetchOne($0, sql: "PRAGMA data_version") }
+        guard version != outsideVersion else { return }
+        outsideVersion = version
+        reloadTasks()
+    }
+
     @discardableResult
     func addTask(_ text: String, projectId: Int64?) -> TaskItem? {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)

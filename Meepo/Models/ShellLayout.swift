@@ -4,7 +4,7 @@ import Foundation
 /// sessions' terminals share the center. Each preset starts from its default and keeps the user's changes.
 struct ShellLayout: Codable, Equatable {
     enum Panel: String, Codable, CaseIterable, Identifiable {
-        case sessions, explorer, changes, ci, events, waiting, product
+        case sessions, explorer, changes, ci, events, waiting, product, tasks
         var id: String { rawValue }
     }
 
