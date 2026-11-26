@@ -189,7 +189,7 @@ struct MorningView: View {
     @State private var brief: [Brief.Item]?
 
     var body: some View {
-        let open = store.tasks.filter { !$0.isDone }
+        let open = store.tasks.filter(\.isActive)
         VStack(alignment: .leading, spacing: 10) {
             Text("MORNING").font(Fonts.title(18)).foregroundStyle(Tokens.text)
             if let brief {

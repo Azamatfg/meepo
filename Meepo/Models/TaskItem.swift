@@ -1,6 +1,18 @@
 import Foundation
 import GRDB
 
+/// Where an open task stands. What agents find while they work lands in the inbox, not in the list.
+enum TaskStatus: String, Codable, CaseIterable, DatabaseValueConvertible {
+    /// Written by an agent's `sqlite3` (the column's default), not sorted yet.
+    case inbox
+    /// The list being worked on.
+    case active
+    /// Not now.
+    case later
+    /// Waits for someone else.
+    case waiting
+}
+
 /// A to-do for a project (SPEC module 7): typed or pasted in Meepo, launched as a session's first prompt.
 /// Open tasks carry over to the next morning.
 struct TaskItem: Codable, Identifiable, Hashable, FetchableRecord, MutablePersistableRecord {
@@ -14,6 +26,8 @@ struct TaskItem: Codable, Identifiable, Hashable, FetchableRecord, MutablePersis
     /// File paths (incl. screenshots) and links that go with the task into the session.
     var attachments: [String] = []
     var isDone = false
+    /// Typed in Meepo → active. A row an agent inserts without it gets the column's default, inbox.
+    var status = TaskStatus.active
     var createdAt: Date = .now
     var doneAt: Date?
     /// The session the task was last launched in.
@@ -33,6 +47,9 @@ struct TaskItem: Codable, Identifiable, Hashable, FetchableRecord, MutablePersis
         if !attachments.isEmpty { parts.append("Attachments:\n" + attachments.map { "- \($0)" }.joined(separator: "\n")) }
         return parts.joined(separator: "\n\n")
     }
+
+    /// In the list being worked on: open and active.
+    var isActive: Bool { !isDone && status == .active }
 
     /// The note's last line: what a session closing the task wrote it ended with (a PR, a deploy).
     var outcome: String? {
