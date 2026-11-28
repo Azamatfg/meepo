@@ -41,5 +41,7 @@ final class StageBarTests: XCTestCase {
     func testUsedKeepsWhatsRunAndCode() {
         let usage = ["sync": 56, "simplify": 49, "ship": 1, "commit-push-pr": 2, "plan": 2, "verify": 0]
         XCTAssertEqual(Stage.used(Stage.defaults, usage: usage).map(\.name), ["code", "simplify", "ship", "sync"])
+        let delivered = ["deliver": 2, "commit-push-pr": 1]
+        XCTAssertEqual(Stage.used(Stage.defaults, usage: delivered).map(\.name), ["code", "ship"], "SHIP counts /deliver and its stand-in")
     }
 }

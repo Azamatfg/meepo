@@ -203,7 +203,9 @@ extension Stage {
     static func used(_ stages: [Stage], usage: [String: Int], minUses: Int = 3) -> [Stage] {
         stages.filter { stage in
             guard let command = stage.command else { return true }
-            let uses = (usage[command] ?? 0) + (CommandCatalog.standIns[stage.name].flatMap { usage[$0] } ?? 0)
+            // /ship typed before 2026-11-28 was the user's own SHIP (Claude Code's took the name later).
+            let legacy = stage.name == "ship" && command != "ship" ? usage["ship"] ?? 0 : 0
+            let uses = (usage[command] ?? 0) + (CommandCatalog.standIns[command].flatMap { usage[$0] } ?? 0) + legacy
             return uses >= minUses
         }
     }

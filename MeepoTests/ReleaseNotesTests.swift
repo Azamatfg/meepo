@@ -116,7 +116,7 @@ final class ShipReportTests: XCTestCase {
 
         try await send("Stop", reply: "Plan ready")                       // before any ship: not a report
         XCTAssertNil(store.lastShipReport(projectId, after: nil))
-        try await send("UserPromptExpansion", prompt: "/ship", command: "ship")
+        try await send("UserPromptExpansion", prompt: "/deliver", command: "deliver")
         try await send("Stop", reply: "Shipped: 3 commits, pushed")
         try await send("Stop", reply: "Answered a follow-up")
         XCTAssertEqual(store.lastShipReport(projectId, after: nil), "Shipped: 3 commits, pushed")
