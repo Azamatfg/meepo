@@ -74,3 +74,41 @@ struct GroupNameSheet: View {
         dismiss()
     }
 }
+
+/// Names a new workspace and puts the project in it; other projects join it from their own Workspace menu.
+struct WorkspaceNameSheet: View {
+    @Environment(AppStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    let project: Project
+    @State private var name = ""
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("New workspace").font(Fonts.ui(20, weight: .bold))
+            Text("Where the work is: personal, a job, a client. The sidebar shows one workspace at a time, or all.")
+                .foregroundStyle(Tokens.textDim)
+            TextField("e.g. Personal, alva", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .focused($isFocused)
+                .onSubmit(save)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).buttonStyle(PixelButtonStyle())
+                Button("Create", action: save).keyboardShortcut(.defaultAction).buttonStyle(PixelButtonStyle(isPrimary: true))
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(22)
+        .frame(width: 420)
+        .paperSheet()
+        .onAppear { isFocused = true }
+    }
+
+    private func save() {
+        guard !name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        store.setWorkspace(project.id!, to: name)
+        store.workspace = name.trimmingCharacters(in: .whitespaces) // see what was just made
+        dismiss()
+    }
+}

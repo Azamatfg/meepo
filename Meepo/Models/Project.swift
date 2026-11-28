@@ -12,6 +12,8 @@ struct Project: Codable, Identifiable, Hashable, FetchableRecord, MutablePersist
     /// Meepo's method, VERIFY: the command that proves a change works (build, tests). A turn that changed files
     /// can't end until it passes — the mod runs it at Stop. nil = no check.
     var checkCommand: String?
+    /// Where the work is (personal, a job, a client): the sidebar shows one workspace at a time, or all.
+    var workspace: String? = nil
 
     mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID

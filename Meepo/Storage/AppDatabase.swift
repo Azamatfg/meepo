@@ -262,6 +262,11 @@ enum AppDatabase {
             try db.create(index: "hookEvent_on_sessionId_createdAt", on: "hookEvent", columns: ["sessionId", "createdAt", "id"])
         }
 
+        // Workspaces: projects grouped by where the work is (personal, a job, a client); nil = in none.
+        migrator.registerMigration("v27-project-workspace") { db in
+            try db.alter(table: "project") { t in t.add(column: "workspace", .text) }
+        }
+
         return migrator
     }
 }

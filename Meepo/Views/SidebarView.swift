@@ -10,7 +10,8 @@ struct SessionsPanel: View {
             if store.projects.isEmpty {
                 Text("No projects yet — add one with + above").font(.caption).foregroundStyle(Tokens.textDim)
             }
-            ForEach(store.projects) { project in
+            if !store.workspaceNames.isEmpty { WorkspacePicker() }
+            ForEach(store.workspaceProjects) { project in
                 ProjectHeader(project: project, isActive: store.selectedSession?.projectId == project.id) {
                     store.presentNewSession(projectId: project.id)
                 }
@@ -216,6 +217,28 @@ struct SessionLabel: View {
     }
 }
 
+/// One workspace at a time, or all: shown once a project is in one.
+private struct WorkspacePicker: View {
+    @Environment(AppStore.self) private var store
+
+    var body: some View {
+        Menu {
+            Button(store.workspace == nil ? "✓ All" : "All") { store.workspace = nil }
+            Divider()
+            ForEach(store.workspaceNames, id: \.self) { name in
+                Button(name == store.workspace ? "✓ \(name)" : name) { store.workspace = name }
+            }
+        } label: {
+            Text((store.workspace ?? "All").uppercased()).font(Fonts.ui(11, weight: .bold)).tracking(1.2)
+        }
+        .menuStyle(.button)
+        .buttonStyle(PixelButtonStyle(compact: true))
+        .fixedSize()
+        .padding(.horizontal, 4)
+        .help("Workspace: the projects shown here and in the tabs. A project's </> menu puts it in one")
+    }
+}
+
 private struct ProjectHeader: View {
     @Environment(AppStore.self) private var store
     let project: Project
@@ -242,6 +265,16 @@ private struct ProjectHeader: View {
                     Button("Open in \(ide.name)") { open(app: ide.app) }
                 }
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: project.path)]) }
+                Divider()
+                // Where the work is (personal, a job, a client): the sidebar then shows one workspace at a time.
+                Menu("Workspace") {
+                    ForEach(store.workspaceNames, id: \.self) { name in
+                        Button(name == project.workspace ? "✓ \(name)" : name) { store.setWorkspace(project.id!, to: name) }
+                    }
+                    if !store.workspaceNames.isEmpty { Divider() }
+                    Button("New Workspace…") { store.namingWorkspaceProjectId = project.id }
+                    if project.workspace != nil { Button("No Workspace") { store.setWorkspace(project.id!, to: nil) } }
+                }
                 Divider()
                 Button("Remove from meepo…") {
                     store.confirmation = PixelConfirmation(

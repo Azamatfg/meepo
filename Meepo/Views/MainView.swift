@@ -67,6 +67,11 @@ struct MainView: View {
                 GroupNameSheet(session: session)
             }
         }
+        .sheet(isPresented: Binding(get: { store.namingWorkspaceProjectId != nil }, set: { if !$0 { store.namingWorkspaceProjectId = nil } })) {
+            if let id = store.namingWorkspaceProjectId, let project = store.projects.first(where: { $0.id == id }) {
+                WorkspaceNameSheet(project: project)
+            }
+        }
         .sheet(isPresented: Binding(get: { store.editingCheckProjectId != nil }, set: { if !$0 { store.editingCheckProjectId = nil } })) {
             if let id = store.editingCheckProjectId, let project = store.projects.first(where: { $0.id == id }) {
                 CheckSheet(project: project)

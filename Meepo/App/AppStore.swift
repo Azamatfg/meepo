@@ -104,6 +104,7 @@ final class AppStore {
             defaults.set(try? JSONEncoder().encode(stages), forKey: Self.stagesKey)
         }
         self.stages = stages
+        workspace = defaults.string(forKey: Self.workspaceKey)
         guidedMode = defaults.bool(forKey: Self.guidedKey)
         Self.retireChains(from: defaults)
         suggestionStates = Self.load([String: SuggestionState].self, Self.suggestionsKey, from: defaults) ?? [:]
@@ -3392,6 +3393,40 @@ final class AppStore {
         didSet { defaults.set(Dictionary(uniqueKeysWithValues: tabGroupNames.map { (String($0), $1) }), forKey: Self.tabGroupNamesKey) }
     }
 
+    // MARK: Workspaces
+
+    private static let workspaceKey = "workspace"
+
+    /// The workspace shown in the sidebar and the tabs; nil = all projects.
+    var workspace: String? = nil {
+        didSet {
+            defaults.set(workspace, forKey: Self.workspaceKey)
+            if let id = selectedSessionId, !orderedSessions.contains(where: { $0.id == id }) {
+                selectedSessionId = orderedSessions.first?.id
+            }
+        }
+    }
+
+    var workspaceNames: [String] { Set(projects.compactMap(\.workspace)).sorted() }
+
+    var workspaceProjects: [Project] {
+        guard let workspace else { return projects }
+        return projects.filter { $0.workspace == workspace }
+    }
+
+    /// The project a new workspace is being named for (its sheet is open).
+    var namingWorkspaceProjectId: Int64?
+
+    /// Into the workspace `name`, made if it's new; nil or blank: in none.
+    func setWorkspace(_ projectId: Int64, to name: String?) {
+        let clean = name?.trimmingCharacters(in: .whitespaces) ?? ""
+        _ = try? db.write { db in
+            try db.execute(sql: "UPDATE project SET workspace = ? WHERE id = ?", arguments: [clean.isEmpty ? nil : clean, projectId])
+        }
+        reload()
+        if let workspace, !workspaceNames.contains(workspace) { self.workspace = nil } // emptied: nothing would show
+    }
+
     /// The user's groups in use, by name.
     var groupNames: [String] {
         Set(sessions.compactMap { $0.id.flatMap { tabGroupNames[$0] } }).sorted()
@@ -3405,7 +3440,7 @@ final class AppStore {
 
     /// `tabOrder` applied as it is, projects possibly mixed; `tabGroups` gathers them.
     private var arrangedSessions: [Session] {
-        let base = projects.flatMap { project in sessions.filter { $0.projectId == project.id } }
+        let base = workspaceProjects.flatMap { project in sessions.filter { $0.projectId == project.id } }
         guard !tabOrder.isEmpty else { return base }
         let rank = Dictionary(tabOrder.enumerated().map { ($1, $0) }) { first, _ in first }
         var ordered = base.filter { rank[$0.id ?? -1] != nil }.sorted { rank[$0.id!]! < rank[$1.id!]! }
