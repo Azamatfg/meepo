@@ -155,6 +155,28 @@ enum Updater {
         init(_ message: String) { errorDescription = message }
     }
 
+    static let lsregister = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+
+    /// Every Meepo.app macOS has registered, from `lsregister -dump`.
+    static func registeredCopies(inDump dump: String) -> [String] {
+        let paths = dump.split(separator: "\n").compactMap { line -> String? in
+            guard line.hasPrefix("path:"), let open = line.range(of: " (0x", options: .backwards) else { return nil }
+            let path = line[line.index(line.startIndex, offsetBy: 5)..<open.lowerBound].trimmingCharacters(in: .whitespaces)
+            return path.hasSuffix("/Meepo.app") ? path : nil
+        }
+        return Array(Set(paths)).sorted()
+    }
+
+    /// A build in DerivedData, .build or a temp folder, once registered, can be what a meepo:// link, a notification or
+    /// the widget opens — and it's gone with the next cleanup (2026-11-28: the test build was registered beside the
+    /// installed one). The running copy, if installed, stays the only one. Run off the main thread: the dump is slow.
+    static func unregisterOtherCopies(keeping app: URL) {
+        guard app.path.contains("/Applications/") else { return } // a dev build doesn't tidy up after the installed one
+        for copy in registeredCopies(inDump: run(lsregister, ["-dump"]).output) where copy != app.path {
+            run(lsregister, ["-u", copy])
+        }
+    }
+
     @discardableResult
     private static func run(_ executable: String, _ args: [String]) -> (status: Int32, output: String) {
         let process = Process()

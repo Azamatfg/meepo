@@ -210,6 +210,8 @@ final class LiveServices {
             }
         }
         store.refreshBridge()
+        let app = Bundle.main.bundleURL
+        Task.detached { Updater.unregisterOtherCopies(keeping: app) }
         store.onCINotice = { [weak self] title, body in self?.notifier.postText(title, body) }
         notifier.onOpen = { [weak store] id in
             store?.selectedSessionId = id

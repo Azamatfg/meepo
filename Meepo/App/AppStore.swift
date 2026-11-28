@@ -1423,6 +1423,32 @@ final class AppStore {
         await checkForUpdates()
     }
 
+    /// `meepo://update?build=<app>&notes=<last commit>`: scripts/install.sh built meepo while this one runs.
+    /// It can't swap the app itself — it runs in a meepo terminal, and quitting meepo ends it halfway.
+    nonisolated static func localBuild(in url: URL) -> (app: URL, notes: String)? {
+        guard url.scheme == "meepo", url.host() == "update",
+              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              let path = items.first(where: { $0.name == "build" })?.value, !path.isEmpty else { return nil }
+        return (URL(filePath: path), items.first { $0.name == "notes" }?.value ?? "")
+    }
+
+    /// A local build waits like a downloaded release: RESTART (after the agents finish) puts it in place.
+    /// Signed by this copy's team, as a download must be; Apple doesn't notarize a build from source.
+    func stageLocalBuild(_ app: URL, notes: String) async {
+        let target = Bundle.main.bundleURL
+        let problem = await Task.detached { () -> String? in
+            let own = Updater.signature(of: target)
+            guard let team = own.team, let bundleID = own.identifier else { return "this copy of meepo isn't signed" }
+            return Updater.verify(app, team: team, bundleID: bundleID, requireNotarization: false)
+        }.value
+        if let problem {
+            notice("BUILD NOT INSTALLED", "\(app.path): \(problem)")
+            return
+        }
+        stagedUpdate = app
+        updateState = .ready(version: "build " + Date.now.formatted(date: .omitted, time: .shortened), notes: notes)
+    }
+
     /// At quit (and RESTART NOW): puts the verified download in place of this app. True when it did.
     @discardableResult
     func installStagedUpdate() -> Bool {
@@ -3516,6 +3542,10 @@ final class AppStore {
 
     /// `meepo <folder>` (via meepo://open?path=…): the folder's project — added if new — with a session open in it.
     func openFromCommandLine(_ url: URL) {
+        if let build = Self.localBuild(in: url) {
+            Task { await stageLocalBuild(build.app, notes: build.notes) }
+            return
+        }
         if url.scheme == "meepo", url.host() == "update" {             // `meepo update`, like `claude update`
             Task { await checkForUpdates(userInitiated: true) }
             return
