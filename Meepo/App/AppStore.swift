@@ -105,6 +105,7 @@ final class AppStore {
         }
         self.stages = stages
         workspace = defaults.string(forKey: Self.workspaceKey)
+        showsAllPanels = defaults.bool(forKey: Self.showsAllPanelsKey)
         guidedMode = defaults.bool(forKey: Self.guidedKey)
         Self.retireChains(from: defaults)
         suggestionStates = Self.load([String: SuggestionState].self, Self.suggestionsKey, from: defaults) ?? [:]
@@ -1609,6 +1610,27 @@ final class AppStore {
         didSet { defaults.set(try? JSONEncoder().encode(shell), forKey: Self.shellKey) }
     }
 
+    /// Panels out of sight unless Settings shows them all (2026-11-28: the user works with Claude Code's context and
+    /// Tasks, not these). Hidden, not removed: CI also stops watching, since it acts on sessions by itself.
+    static let rarelyUsedPanels: Set<ShellLayout.Panel> = [.changes, .ci, .events, .waiting, .product]
+    private static let showsAllPanelsKey = "showsAllPanels"
+
+    var showsAllPanels = false {
+        didSet { defaults.set(showsAllPanels, forKey: Self.showsAllPanelsKey) }
+    }
+
+    /// `shell` as the window shows it: the user's arrangement without the hidden panels.
+    var shownShell: ShellLayout {
+        guard !showsAllPanels else { return shell }
+        var layout = shell
+        for panel in Self.rarelyUsedPanels { layout.remove(panel) }
+        return layout
+    }
+
+    var railPanels: [ShellLayout.Panel] {
+        ShellLayout.Panel.allCases.filter { showsAllPanels || !Self.rarelyUsedPanels.contains($0) }
+    }
+
     /// The Home tab (Deck/Timeline) instead of a session; picking a session leaves it.
     var isHomeShown = false
 
@@ -2330,6 +2352,7 @@ final class AppStore {
 
     /// Polls CI and acts on new failures. The first pass after launch only records history.
     func refreshCI() async {
+        guard showsAllPanels else { return } // hidden: nothing typed into sessions, no reruns, no notices
         if ciProviders.isEmpty {
             ciProviders = [toolPath("gh").map { GitHubActions(gh: $0) }, toolPath("glab").map { GitLabCI(glab: $0) }].compactMap { $0 }
         }

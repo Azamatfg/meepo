@@ -125,8 +125,9 @@ private final class FakeCI: CIProvider, @unchecked Sendable {
     var runs: [CIRun] = []
     var reruns: [Int64] = []
     var delay: Duration = .zero // how long gh takes per repo
+    var calls = 0
     func handles(_ project: Project) -> Bool { true }
-    func runs(in path: String) async -> [CIRun] { try? await Task.sleep(for: delay); return runs }
+    func runs(in path: String) async -> [CIRun] { calls += 1; try? await Task.sleep(for: delay); return runs }
     func failedLog(_ run: CIRun, in path: String) async -> String { "KeyError: 'since'" }
     func rerunFailed(_ run: CIRun, in path: String) async -> Bool { reruns.append(run.id); return true }
     var reviewRequest: String { GitHubActions(gh: "").reviewRequest }
@@ -150,9 +151,18 @@ final class CIWatcherTests: XCTestCase {
         ci = FakeCI()
         store.ciProviders = [ci]
         store.onCINotice = { [weak self] title, _ in self?.notices.append(title) }
+        store.showsAllPanels = true // CI is watched only while its panels are shown
     }
 
     private var projectId: Int64 { store.projects[0].id! }
+
+    /// Hidden (Settings): no CI asked, nothing typed into sessions, no notices.
+    func testHiddenCIIsNotWatched() async throws {
+        store.showsAllPanels = false
+        await store.refreshCI()
+        XCTAssertEqual(ci.calls, 0)
+        XCTAssertTrue(notices.isEmpty)
+    }
 
     /// A pass asks every repo at once: one by one, ~4 s of gh each kept a project folder's CI empty for minutes.
     func testReposAreAskedSideBySide() async throws {

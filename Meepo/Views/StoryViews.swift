@@ -209,6 +209,6 @@ struct TodayList: View {
         guard let id else { return }
         store.selectedSessionId = id
         store.focusedUnit = AppStore.FocusedUnit(folder: row.folder, unit: row.unit.id)
-        if store.shell.zone(of: .product) == nil { store.isWhatChangedShown = true }
+        if store.shownShell.zone(of: .product) == nil { store.isWhatChangedShown = true }
     }
 }

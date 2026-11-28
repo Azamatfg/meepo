@@ -102,7 +102,7 @@ struct MainView: View {
                 } else {
                     EditorSplit { TerminalGrid(sessionIds: store.visibleSessionIds) }
                 }
-                if !store.shell.bottom.isEmpty {
+                if !store.shownShell.bottom.isEmpty {
                     ZoneRow(zone: .bottom).frame(height: 200)
                 }
             } else {
@@ -113,7 +113,7 @@ struct MainView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // An empty bottom zone still takes a dropped panel.
         .overlay(alignment: .bottom) {
-            if store.shell.bottom.isEmpty, !store.isHomeShown { DropStrip(zone: .bottom).frame(height: 14) }
+            if store.shownShell.bottom.isEmpty, !store.isHomeShown { DropStrip(zone: .bottom).frame(height: 14) }
         }
     }
 }
@@ -482,7 +482,7 @@ private struct Rail: View {
 
     var body: some View {
         VStack(spacing: 4) {
-            ForEach(ShellLayout.Panel.allCases) { panel in
+            ForEach(store.railPanels) { panel in
                 let isOn = store.shell.zone(of: panel) != nil
                 RailButton(symbol: PanelBox.symbol(panel), isOn: isOn, name: PanelBox.title(panel),
                            hint: PanelBox.hint(panel), click: isOn ? "Click to hide" : "Click to show") {
@@ -559,7 +559,7 @@ private struct ZoneColumn: View {
     let zone: ShellLayout.Zone
 
     var body: some View {
-        let panels = store.shell[zone]
+        let panels = store.shownShell[zone]
         if panels.isEmpty {
             DropStrip(zone: zone).frame(width: 12)
         } else {
@@ -581,7 +581,7 @@ private struct ZoneRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            ForEach(store.shell[zone]) { PanelBox(panel: $0) }
+            ForEach(store.shownShell[zone]) { PanelBox(panel: $0) }
         }
         .dropZone(zone)
     }

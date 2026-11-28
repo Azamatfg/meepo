@@ -47,3 +47,24 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertTrue(store.workspaceNames.isEmpty)
     }
 }
+
+/// What the user doesn't use (2026-11-28: Source Control, CI, Events, Needs you, What changed) stays out of sight
+/// until Settings brings it back; the layout the user arranged is kept as it was.
+@MainActor
+final class HiddenPanelsTests: XCTestCase {
+    func testHiddenPanelsLeaveTheLayoutAndTheRail() throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        store.applyPreset(.full)
+        XCTAssertFalse(store.showsAllPanels, "hidden by default")
+        XCTAssertEqual(store.shownShell.left, [.explorer])
+        XCTAssertTrue(store.shownShell.bottom.isEmpty)
+        XCTAssertEqual(store.railPanels, [.sessions, .explorer, .tasks])
+        XCTAssertEqual(store.shell.bottom, [.events, .ci], "the arrangement itself stays")
+
+        store.showsAllPanels = true
+        XCTAssertEqual(store.shownShell, store.shell)
+        XCTAssertEqual(store.railPanels, ShellLayout.Panel.allCases)
+    }
+}

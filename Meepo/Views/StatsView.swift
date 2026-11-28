@@ -294,6 +294,11 @@ struct SettingsView: View {
                         }
                         .help("EXPLAIN, Explain for users, DRAW, skill drafts and release notes. Haiku is about 5× cheaper than Opus for the same explanation.")
                     }
+                    FieldRow("Source Control, CI, Events, Needs you, What changed") {
+                        Button(store.showsAllPanels ? "SHOWN" : "HIDDEN") { store.showsAllPanels.toggle() }
+                            .buttonStyle(PixelButtonStyle())
+                            .help("Hidden: out of the rail and the layout, and CI isn't watched. Your layout stays as you arranged it")
+                    }
                     FieldRow("Remote Control for new sessions") {
                         Button(store.remoteControlForNewSessions ? "ON" : "OFF") { store.remoteControlForNewSessions.toggle() }
                             .buttonStyle(PixelButtonStyle())
