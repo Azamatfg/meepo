@@ -152,6 +152,7 @@ final class AppStore {
         }
         reload()
         reloadTasks()
+        reloadProdAgents()
         reloadReleaseNotes()
         reloadTitles()
         reloadLastLines()
@@ -3494,6 +3495,10 @@ final class AppStore {
         guard let workspace else { return projects }
         return projects.filter { $0.workspace == workspace }
     }
+
+    /// The user's production agents (ProdAgents.swift) and, per agent id, what the last check found (not stored).
+    var prodAgents: [ProdAgent] = []
+    var prodAgentHealth: [Int64: ProdAgents.Health] = [:]
 
     /// Each session's context window by part, from the mod after every turn (ContextUsage.swift); not stored.
     var contextUsage: [Int64: ContextUsage] = [:]

@@ -272,6 +272,18 @@ enum AppDatabase {
             try db.alter(table: "task") { t in t.add(column: "workspace", .text) }
         }
 
+        // Production AI agents on the project's servers, checked read-only (ProdAgents).
+        migrator.registerMigration("v29-prod-agents") { db in
+            try db.create(table: "prodAgent") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("projectId", .integer).notNull().indexed().references("project", onDelete: .cascade)
+                t.column("serverId", .integer).notNull().references("server", onDelete: .cascade)
+                t.column("name", .text).notNull()
+                t.column("container", .text).notNull()
+                t.column("folder", .text)
+            }
+        }
+
         return migrator
     }
 }

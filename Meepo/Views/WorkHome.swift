@@ -37,6 +37,7 @@ struct WorkHome: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     VStack(alignment: .leading, spacing: 28) {
+                        ProdAgentsSection(isRussian: facts?.isRussian == true)
                         if let facts { setup(facts) }
                         stackSection
                     }
