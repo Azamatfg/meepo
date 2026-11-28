@@ -162,6 +162,11 @@ struct SessionMenu: View {
         // Meepo's method, VERIFY: a turn that changed files ends only once the project's check passes.
         let check = store.projects.first { $0.id == session.projectId }?.checkCommand
         Button(check.map { "✓ Check Before Done — \($0)" } ?? "Check Before Done…") { store.editingCheckProjectId = session.projectId }
+        // A backend and its app: sessions know each other's contract files; a change to one offers to tell the other.
+        let links = store.linkedProjects(of: session.projectId)
+        Button(links.isEmpty ? "Linked Projects…" : "Linked Projects — \(links.map(\.name).joined(separator: ", "))…") {
+            store.linkingProjectId = session.projectId
+        }
         Button("Open Terminal Here") {
             do { try store.openTerminal(projectId: session.projectId) } catch { store.bridgeError = error.localizedDescription }
         }

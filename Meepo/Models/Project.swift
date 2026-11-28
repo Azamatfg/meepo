@@ -14,6 +14,10 @@ struct Project: Codable, Identifiable, Hashable, FetchableRecord, MutablePersist
     var checkCommand: String?
     /// Where the work is (personal, a job, a client): the sidebar shows one workspace at a time, or all.
     var workspace: String? = nil
+    /// Files linked projects depend on (globs relative to the project: "api/openapi.yaml", "proto/**").
+    var contractPaths: [String]? = nil
+    /// Projects that work together with this one (a backend and its app); kept the same on both sides.
+    var linkedProjectIds: [Int64]? = nil
 
     mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID

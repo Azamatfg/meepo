@@ -298,6 +298,14 @@ enum AppDatabase {
             try db.alter(table: "prodAgent") { t in t.add(column: "biURL", .text) }
         }
 
+        // Linked projects (a backend and its app) and the contract files one depends on in the other.
+        migrator.registerMigration("v32-project-links") { db in
+            try db.alter(table: "project") { t in
+                t.add(column: "contractPaths", .text)
+                t.add(column: "linkedProjectIds", .text)
+            }
+        }
+
         return migrator
     }
 }

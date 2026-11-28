@@ -1191,6 +1191,7 @@ final class AppStore {
         reload()
         if sessionId == selectedSessionId { reloadEvents() }
         noteForHome(event, payload: payload, session: session)
+        if payload.event == "Stop" { offerContractNote(sessionId) }
         if payload.event == "Stop", payload.backgroundTasks == 0, relayingSessionIds.contains(sessionId) {
             finishRelay(sessionId, summary: payload.lastAssistantMessage)
             return nil
@@ -2342,7 +2343,7 @@ final class AppStore {
         guard let payload = HookPayload(json: body) else { return nil }
         switch payload.event {
         case "UserPromptSubmit":
-            let notes = [teammateNotes.removeValue(forKey: sessionId), neighborNote(sessionId)].compactMap { $0 }
+            let notes = [teammateNotes.removeValue(forKey: sessionId), linksNote(sessionId), neighborNote(sessionId)].compactMap { $0 }
             return notes.isEmpty ? nil : notes.joined(separator: "\n\n")
         case "PreToolUse":
             guard let tool = payload.toolName, ["Edit", "Write", "MultiEdit"].contains(tool), let file = payload.toolTarget,
@@ -2350,6 +2351,87 @@ final class AppStore {
             return Neighbors.askOutput(reason)
         default:
             return nil
+        }
+    }
+
+    // MARK: Linked projects (2026-11-28)
+
+    /// The project whose Linked Projects sheet is open.
+    var linkingProjectId: Int64?
+
+    /// The projects linked to this one that still exist.
+    func linkedProjects(of projectId: Int64) -> [Project] {
+        let ids = projects.first { $0.id == projectId }?.linkedProjectIds ?? []
+        return projects.filter { $0.id.map(ids.contains) == true }
+    }
+
+    /// The project's links and contract files; a link is kept on both sides.
+    func setLinks(_ projectId: Int64, linked: Set<Int64>, contracts: [String]) {
+        let clean = contracts.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        _ = try? db.write { db in
+            for var project in try Project.fetchAll(db) {
+                guard let id = project.id else { continue }
+                var ids = Set(project.linkedProjectIds ?? [])
+                if id == projectId {
+                    ids = linked.subtracting([projectId])
+                    project.contractPaths = clean.isEmpty ? nil : clean
+                } else if linked.contains(id) {
+                    ids.insert(projectId)
+                } else {
+                    ids.remove(projectId)
+                }
+                project.linkedProjectIds = ids.isEmpty ? nil : ids.sorted()
+                try project.update(db)
+            }
+        }
+        reload()
+        toldLinks = []
+    }
+
+    /// Sessions already told about their project's links.
+    @ObservationIgnored private var toldLinks: Set<Int64> = []
+
+    private func linksNote(_ sessionId: Int64) -> String? {
+        guard !toldLinks.contains(sessionId), let session = sessions.first(where: { $0.id == sessionId }), session.sshHost == nil,
+              let project = project(for: session) else { return nil }
+        toldLinks.insert(sessionId)
+        return Links.note(project: project, linked: linkedProjects(of: session.projectId))
+    }
+
+    /// After a turn that changed contract files: offer to tell the linked projects — their live sessions get a note,
+    /// a project nobody works in gets a task. Nothing goes out without the ok.
+    private func offerContractNote(_ sessionId: Int64) {
+        guard !isDemo, let session = sessions.first(where: { $0.id == sessionId }), let project = project(for: session),
+              let contracts = project.contractPaths, !contracts.isEmpty, let folder = workdir(of: session) else { return }
+        let linked = linkedProjects(of: session.projectId)
+        guard !linked.isEmpty else { return }
+        let edits = (try? db.read { db -> [String] in
+            let start = try Int64.fetchOne(db, sql: "SELECT MAX(id) FROM hookEvent WHERE sessionId = ? AND name = 'UserPromptSubmit'",
+                                           arguments: [sessionId]) ?? 0
+            return try String.fetchAll(db, sql: "SELECT summary FROM hookEvent WHERE sessionId = ? AND id > ? AND name = 'PostToolUse'",
+                                       arguments: [sessionId, start])
+        }) ?? []
+        let files = Links.contractFiles(edited: edits.compactMap(Runs.editedFile), root: folder, contracts: contracts)
+        guard !files.isEmpty else { return }
+        let names = linked.map(\.name).joined(separator: ", ")
+        confirmation = PixelConfirmation(
+            title: "\(project.name) changed its contract",
+            message: "\(files.joined(separator: ", ")). Tell \(names)? A session working there gets a note to bring it in line; "
+                + "a project with none gets a task.",
+            action: "Tell \(names)", cancel: "Not Now", isDestructive: false
+        ) { [weak self] in self?.tellLinked(linked, from: project, files: files, folder: folder) }
+    }
+
+    func tellLinked(_ linked: [Project], from project: Project, files: [String], folder: String) {
+        for other in linked {
+            // Only the mod picks up inbox notes; a session without it gets the task instead.
+            let live = sessions.filter { $0.projectId == other.id && $0.sshHost == nil && modSessionIds.contains($0.id ?? -1)
+                && runningSessionIds.contains($0.id ?? -1) }
+            if live.isEmpty {
+                addTask(Links.task(from: project, files: files), projectId: other.id)
+            } else {
+                for id in live.compactMap(\.id) { inbox[id, default: []].append(Links.changeNote(from: project, files: files, folder: folder)) }
+            }
         }
     }
 
@@ -2730,7 +2812,8 @@ final class AppStore {
     }
 
     /// Sessions running Meepo's mod: they follow Important at once, through guard.json.
-    private(set) var modSessionIds: Set<Int64> = []
+    /// Settable outside only by tests: sessions marked as running the mod.
+    var modSessionIds: Set<Int64> = []
 
     /// guard.json for the mod, what `databaseAsks` gives an important project: the commands ("ssh", "docker exec")
     /// and each important project's path → its Postgres MCP servers; while guided mode is on, also what it asks
