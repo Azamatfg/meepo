@@ -293,6 +293,11 @@ enum AppDatabase {
             }
         }
 
+        // An agent whose backend reports its day over https (a BI endpoint); its token lives in Keychain.
+        migrator.registerMigration("v31-prod-agent-bi") { db in
+            try db.alter(table: "prodAgent") { t in t.add(column: "biURL", .text) }
+        }
+
         return migrator
     }
 }

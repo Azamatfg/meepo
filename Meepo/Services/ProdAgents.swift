@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import Security
 
 /// A production AI agent of the user's (a support bot on the Claude API), running in a container on one of the
 /// project's servers. Meepo only reads: is it up, did it restart, what errors it logged today.
@@ -17,6 +18,8 @@ struct ProdAgent: Codable, Identifiable, Hashable, FetchableRecord, MutablePersi
     var statsRunner: String?
     var statsScript: String?
     var statsApproved: String?
+    /// The day from the agent's own backend instead (https, a Bearer token from Keychain), e.g. alva's /bi/ai-daily.
+    var biURL: String?
 
     mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
 }
@@ -44,6 +47,17 @@ enum ProdAgents {
             + "docker logs --since 24h \(name) 2>&1 | grep -iE 'error|exception|traceback|panic' | tail -n 20"
     }
 
+    /// What's worth a notification between two checks: down, back up, or 5+ new error lines. The first check after
+    /// launch only remembers; a check that couldn't reach the server says nothing (that isn't the agent).
+    static func alert(name: String, from old: Health?, to new: Health) -> (title: String, body: String)? {
+        guard let old, new.problem == nil, old.problem == nil else { return nil }
+        if old.isUp && !new.isUp { return ("\(name) is down", "Container \(new.state)\(new.errors.last.map { ". Last error: \($0)" } ?? "")") }
+        if !old.isUp && new.isUp { return ("\(name) is back up", "Restarts: \(new.restarts)") }
+        let added = new.errors.count - old.errors.count
+        if new.isUp, added >= 5 { return ("\(name): \(added) new errors", new.errors.last ?? "") }
+        return nil
+    }
+
     /// The day as the agent's script counts it: one JSON line.
     struct Stats: Decodable, Equatable {
         /// "today" or "24h": what the counts cover.
@@ -55,6 +69,24 @@ enum ProdAgents {
         /// Waiting for a person: an operator, the owner's approval.
         var handoffs: Int
         var costUSD: Double
+    }
+
+    /// A BI endpoint's day (alva tech-b's /bi/ai-daily): dialogs, replied, escalated, cost, waiting now.
+    static func stats(fromBI data: Data) -> Stats? {
+        struct Day: Decodable { var dialogs, replied_dialogs, escalated_dialogs, awaiting_now: Int; var cost_usd: Double }
+        guard let d = try? JSONDecoder().decode(Day.self, from: data) else { return nil }
+        return Stats(period: "today", dialogs: d.dialogs, unanswered: max(0, d.dialogs - d.replied_dialogs - d.escalated_dialogs),
+                     failed: 0, handoffs: d.awaiting_now, costUSD: d.cost_usd)
+    }
+
+    /// GET <url>?date=<today> with the token; https only, the token is a secret.
+    static func biRequest(url: String, token: String, day: Date) -> URLRequest? {
+        guard var parts = URLComponents(string: url), parts.scheme == "https" else { return nil }
+        parts.queryItems = [URLQueryItem(name: "date", value: day.formatted(.iso8601.year().month().day()))]
+        guard let full = parts.url else { return nil }
+        var request = URLRequest(url: full, timeoutInterval: 20)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        return request
     }
 
     /// The only ways a stats script runs in a container: Python reading stdin, or a Django shell reading stdin.
@@ -119,6 +151,7 @@ extension AppStore {
 
     /// Each agent's status template over ssh, side by side, off the main thread.
     func checkProdAgents() async {
+        reloadProdAgents() // one added elsewhere (Claude's sqlite3) shows without a restart
         let runner = sshRunner
         let hosts = Dictionary(uniqueKeysWithValues: servers.compactMap { s in s.id.map { ($0, s.host) } })
         let jobs = prodAgents.compactMap { agent -> (Int64, String, String)? in
@@ -145,7 +178,13 @@ extension AppStore {
             for await item in group { all.append(item) }
             return all
         }
-        for (id, health) in results { prodAgentHealth[id] = health }
+        for (id, health) in results {
+            if let agent = prodAgents.first(where: { $0.id == id }),
+               let alert = ProdAgents.alert(name: agent.name, from: prodAgentHealth[id], to: health) {
+                onCINotice?(alert.title, alert.body) // the same notifier CI uses
+            }
+            prodAgentHealth[id] = health
+        }
         await countProdAgentDays()
     }
 
@@ -175,6 +214,32 @@ extension AppStore {
             prodAgentStats[id] = stats
             prodAgentStatsProblem[id] = problem
         }
+        // Agents that report their own day over https.
+        for agent in prodAgents {
+            guard let id = agent.id, let url = agent.biURL else { continue }
+            guard let token = Keychain.read(account: "prod-agent-\(id)"), let request = ProdAgents.biRequest(url: url, token: token, day: .now) else {
+                prodAgentStatsProblem[id] = "No BI token yet: paste it in the day's numbers."
+                continue
+            }
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                prodAgentStats[id] = status == 200 ? ProdAgents.stats(fromBI: data) : nil
+                prodAgentStatsProblem[id] = status == 200 ? nil : "BI answered \(status)\(status == 401 ? " — the token is wrong or revoked" : "")."
+            } catch {
+                prodAgentStatsProblem[id] = error.localizedDescription
+            }
+        }
+    }
+
+    /// The BI endpoint and its token (Keychain) for an agent that reports its own day.
+    func saveBI(_ agentId: Int64, url: String, token: String) async {
+        guard var agent = prodAgents.first(where: { $0.id == agentId }) else { return }
+        agent.biURL = url.trimmingCharacters(in: .whitespaces)
+        if !token.isEmpty { Keychain.save(token.trimmingCharacters(in: .whitespacesAndNewlines), account: "prod-agent-\(agentId)") }
+        _ = try? await db.write { [agent] db in try agent.update(db) }
+        reloadProdAgents()
+        await countProdAgentDays()
     }
 
     /// Saves the stats script and approves exactly this runner + script; runs it once.
@@ -203,5 +268,27 @@ extension AppStore {
         }
         prompt += "Найди причину по коду\(agent.folder.map { " в \($0)" } ?? ""), предложи исправление. На сервере ничего не меняй."
         do { try createSession(projectId: agent.projectId, model: nil, prompt: prompt) } catch { bridgeError = error.localizedDescription }
+    }
+}
+
+/// Secrets meepo keeps for the user (a BI token), in the login Keychain — never in its database.
+enum Keychain {
+    private static let service = "com.azamatfg.meepo"
+
+    static func save(_ secret: String, account: String) {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                                    kSecAttrAccount as String: account]
+        SecItemDelete(query as CFDictionary)
+        var item = query
+        item[kSecValueData as String] = Data(secret.utf8)
+        SecItemAdd(item as CFDictionary, nil)
+    }
+
+    static func read(account: String) -> String? {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                                    kSecAttrAccount as String: account, kSecReturnData as String: true]
+        var result: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return nil }
+        return String(decoding: data, as: UTF8.self)
     }
 }

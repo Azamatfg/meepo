@@ -27,12 +27,8 @@ struct ProdAgentsSection: View {
         }
         .sheet(isPresented: $isAdding) { AddProdAgentSheet(isRussian: isRussian) }
         .sheet(item: $statsFor) { ProdAgentStatsSheet(agent: $0, isRussian: isRussian) }
-        .task {
-            while !Task.isCancelled {
-                await store.checkProdAgents()
-                try? await Task.sleep(for: .seconds(300))
-            }
-        }
+        // Fresh when Home opens; the 5-minute checks run in the background (MeepoApp).
+        .task { await store.checkProdAgents() }
     }
 
     private func card(_ agent: ProdAgent) -> some View {
@@ -48,8 +44,10 @@ struct ProdAgentsSection: View {
                     .help(t("A Claude Code session in its code with today's errors; the server isn't touched from it",
                             "Сессия Claude Code в его коде с ошибками за день; сервер из неё не трогается"))
             }
-            Text("\(project) · \(agent.container)").font(.caption).foregroundStyle(Tokens.textDim)
-            if let health {
+            Text("\(project) · \(agent.container.isEmpty ? "BI" : agent.container)").font(.caption).foregroundStyle(Tokens.textDim)
+            if agent.container.isEmpty {
+                // Only its backend's day is read (BI); no container to check.
+            } else if let health {
                 if let problem = health.problem {
                     Text(problem).font(.caption).foregroundStyle(Tokens.need)
                 } else {
@@ -66,7 +64,7 @@ struct ProdAgentsSection: View {
                     .foregroundStyle(stats.unanswered > 0 || stats.failed > 0 ? Tokens.need : Tokens.text)
             } else if let id = agent.id, let problem = store.prodAgentStatsProblem[id] {
                 Text(t("Day's numbers: ", "Цифры дня: ") + problem).font(.caption).foregroundStyle(Tokens.need).lineLimit(2)
-            } else if agent.statsScript == nil {
+            } else if agent.statsScript == nil, agent.biURL == nil {
                 Button(t("Add the day's numbers…", "Добавить цифры дня…")) { statsFor = agent }
                     .buttonStyle(.plain).font(.caption).foregroundStyle(Tokens.work)
             } else if ProdAgents.statsCommand(for: agent) == nil {
@@ -190,12 +188,63 @@ struct ProdAgentStatsSheet: View {
     @State private var runner = ProdAgents.runners[0]
     @State private var script = ""
     @State private var isRunning = false
+    @State private var biURL = ""
+    @State private var token = ""
 
     private func t(_ en: String, _ ru: String) -> String { isRussian ? ru : en }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(t("The day's numbers · \(agent.name)", "Цифры дня · \(agent.name)")).font(Fonts.ui(20, weight: .bold))
+            if agent.container.isEmpty || agent.biURL != nil { bi } else { scriptForm }
+        }
+        .padding(22)
+        .frame(width: 720)
+        .paperSheet()
+        .onAppear {
+            runner = agent.statsRunner ?? ProdAgents.runners[0]
+            script = agent.statsScript ?? ""
+            biURL = agent.biURL ?? ""
+        }
+    }
+
+    /// The agent's backend reports its day itself: an https address and a token, kept in Keychain.
+    private var bi: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(t("Its backend reports the day itself: Meepo asks this https address with the token every 5 minutes. The token goes to Keychain, not to Meepo's database.",
+                   "Его бэкенд сам отдаёт день: Meepo раз в 5 минут спрашивает этот https-адрес с токеном. Токен хранится в Keychain, не в базе Meepo."))
+                .foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
+            TextField("https://…/bi/ai-daily", text: $biURL).textFieldStyle(.roundedBorder).font(Fonts.mono(12))
+            SecureField(t("BI token (leave empty to keep the saved one)", "BI-токен (пусто — оставить сохранённый)"), text: $token)
+                .textFieldStyle(.roundedBorder)
+            result
+            HStack {
+                Spacer()
+                Button(t("Close", "Закрыть")) { dismiss() }.keyboardShortcut(.cancelAction).buttonStyle(PixelButtonStyle())
+                Button(isRunning ? t("Checking…", "Проверяю…") : t("Save and check", "Сохранить и проверить")) {
+                    guard let id = agent.id else { return }
+                    isRunning = true
+                    Task { await store.saveBI(id, url: biURL, token: token); token = ""; isRunning = false }
+                }
+                .buttonStyle(PixelButtonStyle(isPrimary: true))
+                .disabled(!biURL.hasPrefix("https://") || isRunning)
+            }
+        }
+    }
+
+    @ViewBuilder private var result: some View {
+        if let id = agent.id {
+            if let stats = store.prodAgentStats[id] {
+                Text(t("Last run: ", "Последний запуск: ") + "\(stats.dialogs) / \(stats.unanswered) / \(stats.failed) / \(stats.handoffs) / $\(String(format: "%.2f", stats.costUSD))")
+                    .font(.caption).foregroundStyle(Tokens.added)
+            } else if let problem = store.prodAgentStatsProblem[id] {
+                Text(problem).font(Fonts.mono(11)).foregroundStyle(Tokens.need).lineLimit(4)
+            }
+        }
+    }
+
+    private var scriptForm: some View {
+        VStack(alignment: .leading, spacing: 12) {
             Text(t("A script that runs inside \(agent.container) and prints one JSON line: period (today or 24h), dialogs, unanswered, failed, handoffs, costUSD. It should only read. Meepo runs exactly what you approve here, every 5 minutes while Home is open.",
                    "Скрипт выполняется внутри \(agent.container) и печатает одну строку JSON: period (today или 24h), dialogs, unanswered, failed, handoffs, costUSD. Он должен только читать. Meepo запускает ровно то, что ты здесь подтвердишь, раз в 5 минут, пока открыт Home."))
                 .foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
@@ -206,14 +255,7 @@ struct ProdAgentStatsSheet: View {
                 .font(Fonts.mono(12))
                 .frame(minHeight: 260)
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Tokens.line))
-            if let id = agent.id {
-                if let stats = store.prodAgentStats[id] {
-                    Text(t("Last run: ", "Последний запуск: ") + "\(stats.dialogs) / \(stats.unanswered) / \(stats.failed) / \(stats.handoffs) / $\(String(format: "%.2f", stats.costUSD))")
-                        .font(.caption).foregroundStyle(Tokens.added)
-                } else if let problem = store.prodAgentStatsProblem[id] {
-                    Text(problem).font(Fonts.mono(11)).foregroundStyle(Tokens.need).lineLimit(4)
-                }
-            }
+            result
             HStack {
                 if ProdAgents.statsCommand(for: agent) != nil, agent.statsScript == script, agent.statsRunner == runner {
                     Text(t("Approved as written.", "Подтверждено в этом виде.")).font(.caption).foregroundStyle(Tokens.textDim)
@@ -229,13 +271,6 @@ struct ProdAgentStatsSheet: View {
                 .disabled(script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isRunning)
                 .help(t("Saves this script as approved and runs it once now", "Сохраняет скрипт как подтверждённый и сразу запускает один раз"))
             }
-        }
-        .padding(22)
-        .frame(width: 720)
-        .paperSheet()
-        .onAppear {
-            runner = agent.statsRunner ?? ProdAgents.runners[0]
-            script = agent.statsScript ?? ""
         }
     }
 }

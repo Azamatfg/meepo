@@ -81,3 +81,41 @@ final class ProdAgentStatsTests: XCTestCase {
         XCTAssertNil(ProdAgents.stats(from: "Traceback (most recent call last):\n  ...\nNameError"))
     }
 }
+
+/// When to tell the user about a production agent (2026-11-29): it went down, came back, or errors piled up.
+final class ProdAgentAlertTests: XCTestCase {
+    private func health(_ state: String, errors: Int = 0) -> ProdAgents.Health {
+        ProdAgents.Health(state: state, errors: Array(repeating: "ERROR x", count: errors), checkedAt: .now)
+    }
+
+    func testOnlyChangesWorthAMessageAlert() {
+        XCTAssertNil(ProdAgents.alert(name: "a", from: nil, to: health("exited")), "the first look after launch only remembers")
+        XCTAssertEqual(ProdAgents.alert(name: "a", from: health("running"), to: health("exited"))?.title, "a is down")
+        XCTAssertEqual(ProdAgents.alert(name: "a", from: health("exited"), to: health("running"))?.title, "a is back up")
+        XCTAssertEqual(ProdAgents.alert(name: "a", from: health("running", errors: 2), to: health("running", errors: 7))?.title, "a: 5 new errors")
+        XCTAssertNil(ProdAgents.alert(name: "a", from: health("running", errors: 2), to: health("running", errors: 4)), "a couple more isn't news")
+        XCTAssertNil(ProdAgents.alert(name: "a", from: health("exited"), to: health("exited")), "still down: said once")
+        var unreachable = health("unknown")
+        unreachable.problem = "taxitech.app didn't answer."
+        XCTAssertNil(ProdAgents.alert(name: "a", from: health("running"), to: unreachable), "ssh trouble isn't the agent going down")
+    }
+}
+
+/// An agent whose backend reports its own day over https (alva's /bi/ai-daily), the token kept in Keychain.
+final class ProdAgentBITests: XCTestCase {
+    func testTheBIDayReadsAsTheDaysNumbers() throws {
+        let json = Data(#"{"date":"2026-11-29","dialogs":40,"replied_dialogs":31,"escalated_dialogs":6,"cost_usd":3.27,"awaiting_now":2}"#.utf8)
+        let stats = try XCTUnwrap(ProdAgents.stats(fromBI: json))
+        XCTAssertEqual(stats, ProdAgents.Stats(period: "today", dialogs: 40, unanswered: 3, failed: 0, handoffs: 2, costUSD: 3.27),
+                       "unanswered: run but neither replied nor handed over")
+        XCTAssertNil(ProdAgents.stats(fromBI: Data(#"{"error":"invalid token"}"#.utf8)))
+    }
+
+    func testTheRequestAsksForTodayWithTheToken() throws {
+        let request = try XCTUnwrap(ProdAgents.biRequest(url: "https://support.alvainfo.kz/api/v1/bi/ai-daily", token: "t0k",
+                                                         day: Date(timeIntervalSince1970: 1_795_900_000)))
+        XCTAssertTrue(request.url!.absoluteString.hasPrefix("https://support.alvainfo.kz/api/v1/bi/ai-daily?date=2026-"))
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer t0k")
+        XCTAssertNil(ProdAgents.biRequest(url: "http://support.alvainfo.kz/api/v1/bi/ai-daily", token: "t", day: .now), "https only: the token is a secret")
+    }
+}

@@ -103,6 +103,12 @@ struct MeepoApp: App {
                             try? await Task.sleep(for: .seconds(15))
                         }
                     }
+                    Task { // Production agents: every 5 minutes, so "down" reaches a notification without Home open.
+                        while !Task.isCancelled {
+                            await store.checkProdAgents()
+                            try? await Task.sleep(for: .seconds(300))
+                        }
+                    }
                     Task { // Once a minute is cheap on the GitHub API; every 15 s while a step runs, so it looks live.
                         while !Task.isCancelled {
                             await store.refreshCI()
