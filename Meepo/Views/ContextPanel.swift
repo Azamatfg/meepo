@@ -5,6 +5,13 @@ import SwiftUI
 /// about it (compact, clear, hand off to a fresh session).
 struct ContextPanel: View {
     @Environment(AppStore.self) private var store
+    /// CLAUDE.md files, rules and memory of the session's project, read off the main thread.
+    @State private var sources: AppStore.SourcesSnapshot?
+    /// Bumped after a change here (a new rule, a deleted memory) so the sources are read again.
+    @State private var revision = 0
+    @State private var isNewRuleShown = false
+    @State private var ruleName = ""
+    @State private var isAllMemoryShown = false
 
     var body: some View {
         if let session = store.selectedSession, let id = session.id {
@@ -35,7 +42,12 @@ struct ContextPanel: View {
                 } else {
                     dim("Measured after Claude's next answer in this session. A session started before this meepo version needs a restart.")
                 }
+                if let sources { sourcesSections(sources) }
                 actions(id)
+            }
+            // Read again when the session, or what it measured and loaded, changes.
+            .task(id: "\(id) \(store.contextUsage[id]?.tokens ?? 0) \(store.loadedInstructions[id]?.count ?? 0) \(revision)") {
+                sources = await store.readSources(of: session)
             }
         } else {
             dim("Select a session to see its context.")
@@ -73,6 +85,110 @@ struct ContextPanel: View {
         .buttonStyle(PixelButtonStyle(compact: true))
     }
 
+    // MARK: Sources
+
+    @ViewBuilder
+    private func sourcesSections(_ sources: AppStore.SourcesSnapshot) -> some View {
+        if !sources.hints.isEmpty {
+            section("HINTS") {
+                ForEach(sources.hints, id: \.text) { hint in
+                    Button { if let path = hint.path { store.editor.open(path) } } label: {
+                        Label(hint.text, systemImage: "lightbulb").font(Fonts.ui(12)).foregroundStyle(Tokens.text)
+                            .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        let everyTurn = sources.instructions.filter { $0.loading == .always }.reduce(0) { $0 + $1.tokens }
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text("SOURCES · ≈\(TokenFormat.short(everyTurn)) EVERY TURN").font(Fonts.ui(11, weight: .bold)).tracking(1.2)
+                    .foregroundStyle(Tokens.textDim)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+            }
+            ForEach(sources.instructions, id: \.path) { item in
+                // A rule's name says which it is; a CLAUDE.md's folder does.
+                fileRow(item.path, detail: "\(item.scope) · \(Self.loading(item))", tokens: item.tokens, isEstimate: !item.isMeasured,
+                        showsPath: item.path.hasSuffix("CLAUDE.md") || item.path.hasSuffix("CLAUDE.local.md"))
+            }
+            HStack(spacing: 6) {
+                Button("REMEMBER") { if let id = store.selectedSession?.id { _ = store.type(AppStore.rememberPrompt + "\r", into: id) } }
+                    .help("Claude picks what from this conversation should outlast it — for CLAUDE.md, a rule or memory — and shows it before writing")
+                Button("+ RULE") { ruleName = ""; isNewRuleShown = true }
+                    .help("A rule in .claude/rules: loaded only when Claude reads the files its paths: name")
+                    .popover(isPresented: $isNewRuleShown) { newRule(in: sources.folder) }
+            }
+            .buttonStyle(PixelButtonStyle(compact: true))
+            .padding(.top, 3)
+        }
+        if let memory = sources.memory, !memory.entries.isEmpty {
+            section("MEMORY · \(memory.entries.count)") {
+                fileRow(memory.index, detail: "index · \(memory.indexLines) lines", tokens: nil)
+                ForEach(isAllMemoryShown ? memory.entries : Array(memory.entries.prefix(6)), id: \.file) { entry in
+                    memoryRow(entry, in: memory)
+                }
+                if memory.entries.count > 6 {
+                    Button(isAllMemoryShown ? "Show fewer" : "Show all \(memory.entries.count)") { isAllMemoryShown.toggle() }
+                        .buttonStyle(.plain).font(.caption).foregroundStyle(Tokens.work)
+                }
+                if !memory.unwritten.isEmpty {
+                    dim("Linked, not written yet: \(memory.unwritten.joined(separator: ", "))")
+                }
+            }
+        }
+    }
+
+    private func newRule(in folder: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("New rule").font(Fonts.ui(13, weight: .semibold))
+            TextField("What it's about, e.g. API handlers", text: $ruleName)
+                .textFieldStyle(.roundedBorder).frame(width: 240)
+                .onSubmit { createRule(in: folder) }
+            Button("CREATE") { createRule(in: folder) }.buttonStyle(PixelButtonStyle(compact: true))
+                .disabled(ClaudeLauncher.worktreeSlug(ruleName).isEmpty)
+        }
+        .padding(12)
+    }
+
+    private func createRule(in folder: String) {
+        guard !ClaudeLauncher.worktreeSlug(ruleName).isEmpty else { return }
+        store.newRule(named: ruleName, in: folder)
+        isNewRuleShown = false
+        revision += 1
+    }
+
+    private func memoryRow(_ entry: Sources.MemoryEntry, in memory: Sources.Memory) -> some View {
+        Button { store.editor.open("\(memory.folder)/\(entry.file)") } label: {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(entry.title).lineLimit(1).foregroundStyle(entry.exists ? Tokens.text : Tokens.textDim)
+                Text(entry.hook.isEmpty ? entry.file : entry.hook).font(.caption).foregroundStyle(Tokens.textDim).lineLimit(1)
+            }
+            .font(Fonts.ui(13)).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!entry.exists)
+        .contextMenu {
+            Button("Delete…", role: .destructive) {
+                store.confirmation = PixelConfirmation(
+                    title: "Delete the memory “\(entry.title)”?",
+                    message: "Its file and its line in MEMORY.md go away; Claude won't recall it in new sessions.",
+                    action: "Delete"
+                ) { store.deleteMemory(entry, in: memory); revision += 1 }
+            }
+        }
+    }
+
+    static func loading(_ item: Sources.Instruction) -> String {
+        switch item.loading {
+        case .always: "every turn"
+        case let .paths(paths): "when reading \(paths.joined(separator: ", "))" + (item.isLoaded ? " · loaded" : "")
+        case .nested: "when reading files in its folder" + (item.isLoaded ? " · loaded" : "")
+        }
+    }
+
     private func section(_ title: String, @ViewBuilder _ rows: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title).font(Fonts.ui(11, weight: .bold)).tracking(1.2).foregroundStyle(Tokens.textDim)
@@ -91,16 +207,16 @@ struct ContextPanel: View {
     }
 
     /// A file opens in meepo's editor: change what Claude reads, right there.
-    private func fileRow(_ path: String, detail: String, tokens: Int?) -> some View {
+    private func fileRow(_ path: String, detail: String, tokens: Int?, isEstimate: Bool = false, showsPath: Bool = true) -> some View {
         Button { store.editor.open(path) } label: {
             HStack(spacing: 6) {
                 VStack(alignment: .leading, spacing: 0) {
                     Text(URL(filePath: path).lastPathComponent).lineLimit(1)
-                    Text("\(detail) · \(Self.shortPath(path))").font(.caption).foregroundStyle(Tokens.textDim)
+                    Text(showsPath ? "\(detail) · \(Self.shortPath(path))" : detail).font(.caption).foregroundStyle(Tokens.textDim)
                         .lineLimit(1).truncationMode(.middle)
                 }
                 Spacer(minLength: 4)
-                if let tokens { Text(TokenFormat.short(tokens)).font(Fonts.mono(12)).foregroundStyle(Tokens.textDim) }
+                if let tokens { Text((isEstimate ? "≈" : "") + TokenFormat.short(tokens)).font(Fonts.mono(12)).foregroundStyle(Tokens.textDim) }
             }
             .font(Fonts.ui(13))
             .contentShape(Rectangle())
