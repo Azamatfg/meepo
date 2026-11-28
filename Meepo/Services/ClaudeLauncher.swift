@@ -198,6 +198,8 @@ enum ClaudeLauncher {
         var env = base.merging(extra) { _, new in new }
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
+        // Folders added with --add-dir ("Also work in", a workspace session) load their CLAUDE.md too (2.1.332).
+        env["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"] = "1"
         if env["LANG"] == nil { env["LANG"] = "en_US.UTF-8" }
         return env.map { "\($0.key)=\($0.value)" }
     }

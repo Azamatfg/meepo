@@ -16,6 +16,10 @@ struct WorkspaceChip: View {
                 }
             }
             Divider()
+            if let workspace = store.workspace {
+                Button("New Session for All of \(workspace)") { store.newWorkspaceSession() }
+                    .help("Claude in one project of \(workspace), working in all the others too (--add-dir)")
+            }
             Button(store.workspaceNames.isEmpty ? "Set Up Workspaces…" : "Workspaces…") { store.isWorkspacesShown = true }
         } label: {
             HStack(spacing: 5) {

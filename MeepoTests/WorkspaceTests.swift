@@ -287,3 +287,31 @@ final class NarrowTasksPictureTests: XCTestCase {
         try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path!).appending(path: "tasks-narrow.png"))
     }
 }
+
+/// One session for a whole workspace (2026-11-29): it starts in one of its projects and works in all the others
+/// (`--add-dir`), their CLAUDE.md loaded too.
+@MainActor
+final class WorkspaceSessionTests: XCTestCase {
+    func testAWorkspaceSessionWorksInEveryProjectOfIt() throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        for _ in 0..<3 { try store.addProject(at: try makeTempRepo()) }
+        let (a, b, outside) = (store.projects[0], store.projects[1], store.projects[2])
+        store.setWorkspace(a.id!, to: "taxi")
+        store.setWorkspace(b.id!, to: "taxi")
+        try store.createSession(projectId: b.id!, model: nil, prompt: nil) // the tab shown: b
+        store.workspace = "taxi"
+        store.newWorkspaceSession()
+        let session = try XCTUnwrap(store.selectedSession)
+        XCTAssertEqual(session.projectId, b.id, "it starts in the project of the tab shown")
+        XCTAssertEqual(session.extraDirs, [a.path], "and works in the workspace's other projects, not one outside it")
+        XCTAssertEqual(session.name, "taxi · workspace")
+        XCTAssertFalse(session.extraDirs?.contains(outside.path) ?? true)
+    }
+
+    func testAddedFoldersBringTheirClaudeMd() {
+        let env = ClaudeLauncher.environment(base: [:])
+        XCTAssertTrue(env.contains("CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1"))
+    }
+}

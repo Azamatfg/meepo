@@ -3155,6 +3155,18 @@ final class AppStore {
         reloadTasks()
     }
 
+    /// One session for the whole workspace shown: in the project of the tab shown (else its first), working in
+    /// every other project of it through --add-dir.
+    func newWorkspaceSession() {
+        guard let workspace else { return }
+        let members = projects.filter { $0.workspace == workspace }
+        guard let home = members.first(where: { $0.id == selectedSession?.projectId }) ?? members.first, let id = home.id else { return }
+        do {
+            try createSession(projectId: id, model: nil, prompt: nil, name: "\(workspace) · workspace",
+                              extraDirs: members.filter { $0.id != id }.map(\.path))
+        } catch { bridgeError = error.localizedDescription }
+    }
+
     /// ⌘T, as in a browser: a new tab at once, with no sheet — a session in the project of the tab shown, else the
     /// first project of the workspace shown. ⌘N still opens New Session to pick.
     func newTab() {
