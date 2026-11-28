@@ -3499,6 +3499,8 @@ final class AppStore {
     /// The user's production agents (ProdAgents.swift) and, per agent id, what the last check found (not stored).
     var prodAgents: [ProdAgent] = []
     var prodAgentHealth: [Int64: ProdAgents.Health] = [:]
+    var prodAgentStats: [Int64: ProdAgents.Stats] = [:]
+    var prodAgentStatsProblem: [Int64: String] = [:]
 
     /// Each session's context window by part, from the mod after every turn (ContextUsage.swift); not stored.
     var contextUsage: [Int64: ContextUsage] = [:]

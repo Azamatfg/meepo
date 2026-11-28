@@ -6,6 +6,7 @@ struct ProdAgentsSection: View {
     @Environment(AppStore.self) private var store
     let isRussian: Bool
     @State private var isAdding = false
+    @State private var statsFor: ProdAgent?
 
     private func t(_ en: String, _ ru: String) -> String { isRussian ? ru : en }
 
@@ -25,6 +26,7 @@ struct ProdAgentsSection: View {
             ForEach(store.workspaceProdAgents) { agent in card(agent) }
         }
         .sheet(isPresented: $isAdding) { AddProdAgentSheet(isRussian: isRussian) }
+        .sheet(item: $statsFor) { ProdAgentStatsSheet(agent: $0, isRussian: isRussian) }
         .task {
             while !Task.isCancelled {
                 await store.checkProdAgents()
@@ -59,13 +61,33 @@ struct ProdAgentsSection: View {
             } else {
                 Text(t("Checking…", "Проверяю…")).font(.caption).foregroundStyle(Tokens.textDim)
             }
+            if let id = agent.id, let stats = store.prodAgentStats[id] {
+                Text(day(stats)).font(Fonts.ui(12, weight: .semibold))
+                    .foregroundStyle(stats.unanswered > 0 || stats.failed > 0 ? Tokens.need : Tokens.text)
+            } else if let id = agent.id, let problem = store.prodAgentStatsProblem[id] {
+                Text(t("Day's numbers: ", "Цифры дня: ") + problem).font(.caption).foregroundStyle(Tokens.need).lineLimit(2)
+            } else if agent.statsScript == nil {
+                Button(t("Add the day's numbers…", "Добавить цифры дня…")) { statsFor = agent }
+                    .buttonStyle(.plain).font(.caption).foregroundStyle(Tokens.work)
+            } else if ProdAgents.statsCommand(for: agent) == nil {
+                Button(t("The day's numbers wait for your approval…", "Цифры дня ждут твоего подтверждения…")) { statsFor = agent }
+                    .buttonStyle(.plain).font(.caption).foregroundStyle(Tokens.need)
+            }
         }
         .padding(12)
         .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(health.map { $0.isUp ? Tokens.line : Tokens.need } ?? Tokens.line))
         .contextMenu {
+            Button(t("The Day's Numbers…", "Цифры дня…")) { statsFor = agent }
             Button(t("Remove from meepo", "Убрать из meepo")) { if let id = agent.id { store.removeProdAgent(id) } }
         }
+    }
+
+    private func day(_ s: ProdAgents.Stats) -> String {
+        let period = s.period == "today" ? t("today", "сегодня") : t("24 h", "за 24 ч")
+        return isRussian
+            ? "\(period): диалогов \(s.dialogs) · без ответа \(s.unanswered) · сбоев \(s.failed) · ждут человека \(s.handoffs) · $\(String(format: "%.2f", s.costUSD))"
+            : "\(period): \(s.dialogs) dialogs · \(s.unanswered) unanswered · \(s.failed) failed · \(s.handoffs) wait for a person · $\(String(format: "%.2f", s.costUSD))"
     }
 
     private func status(_ health: ProdAgents.Health) -> String {
@@ -154,6 +176,66 @@ struct AddProdAgentSheet: View {
             case let .success(list): containers = list
             case let .failure(error): problem = error.text
             }
+        }
+    }
+}
+
+/// The day's numbers for one agent: the script that counts them inside its container, approved as written.
+/// Meepo runs exactly what was approved; any change waits for approval again.
+struct ProdAgentStatsSheet: View {
+    @Environment(AppStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    let agent: ProdAgent
+    let isRussian: Bool
+    @State private var runner = ProdAgents.runners[0]
+    @State private var script = ""
+    @State private var isRunning = false
+
+    private func t(_ en: String, _ ru: String) -> String { isRussian ? ru : en }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(t("The day's numbers · \(agent.name)", "Цифры дня · \(agent.name)")).font(Fonts.ui(20, weight: .bold))
+            Text(t("A script that runs inside \(agent.container) and prints one JSON line: period (today or 24h), dialogs, unanswered, failed, handoffs, costUSD. It should only read. Meepo runs exactly what you approve here, every 5 minutes while Home is open.",
+                   "Скрипт выполняется внутри \(agent.container) и печатает одну строку JSON: period (today или 24h), dialogs, unanswered, failed, handoffs, costUSD. Он должен только читать. Meepo запускает ровно то, что ты здесь подтвердишь, раз в 5 минут, пока открыт Home."))
+                .foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
+            Picker(t("Runs as", "Запуск"), selection: $runner) {
+                ForEach(ProdAgents.runners, id: \.self) { Text("docker exec -i \(agent.container) \($0)").tag($0) }
+            }
+            TextEditor(text: $script)
+                .font(Fonts.mono(12))
+                .frame(minHeight: 260)
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Tokens.line))
+            if let id = agent.id {
+                if let stats = store.prodAgentStats[id] {
+                    Text(t("Last run: ", "Последний запуск: ") + "\(stats.dialogs) / \(stats.unanswered) / \(stats.failed) / \(stats.handoffs) / $\(String(format: "%.2f", stats.costUSD))")
+                        .font(.caption).foregroundStyle(Tokens.added)
+                } else if let problem = store.prodAgentStatsProblem[id] {
+                    Text(problem).font(Fonts.mono(11)).foregroundStyle(Tokens.need).lineLimit(4)
+                }
+            }
+            HStack {
+                if ProdAgents.statsCommand(for: agent) != nil, agent.statsScript == script, agent.statsRunner == runner {
+                    Text(t("Approved as written.", "Подтверждено в этом виде.")).font(.caption).foregroundStyle(Tokens.textDim)
+                }
+                Spacer()
+                Button(t("Close", "Закрыть")) { dismiss() }.keyboardShortcut(.cancelAction).buttonStyle(PixelButtonStyle())
+                Button(isRunning ? t("Running…", "Запускаю…") : t("Approve and run", "Подтвердить и запустить")) {
+                    guard let id = agent.id else { return }
+                    isRunning = true
+                    Task { await store.approveStats(id, runner: runner, script: script); isRunning = false }
+                }
+                .buttonStyle(PixelButtonStyle(isPrimary: true))
+                .disabled(script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isRunning)
+                .help(t("Saves this script as approved and runs it once now", "Сохраняет скрипт как подтверждённый и сразу запускает один раз"))
+            }
+        }
+        .padding(22)
+        .frame(width: 720)
+        .paperSheet()
+        .onAppear {
+            runner = agent.statsRunner ?? ProdAgents.runners[0]
+            script = agent.statsScript ?? ""
         }
     }
 }

@@ -284,6 +284,15 @@ enum AppDatabase {
             }
         }
 
+        // The day's numbers: a script run inside the agent's container, only as the user approved it (ProdAgents).
+        migrator.registerMigration("v30-prod-agent-stats") { db in
+            try db.alter(table: "prodAgent") { t in
+                t.add(column: "statsRunner", .text)
+                t.add(column: "statsScript", .text)
+                t.add(column: "statsApproved", .text)
+            }
+        }
+
         return migrator
     }
 }

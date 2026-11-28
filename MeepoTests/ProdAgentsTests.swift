@@ -51,3 +51,33 @@ final class ProdAgentsTests: XCTestCase {
         XCTAssertEqual(ran.withLock { $0 }, [ProdAgents.statusCommand(container: "tg-assistant")!], "only the template, nothing else")
     }
 }
+
+/// The day's numbers: a script the user approved, run inside the agent's container, printing one JSON line.
+@MainActor
+final class ProdAgentStatsTests: XCTestCase {
+    private let script = "import json\nprint(json.dumps({\"period\": \"today\", \"dialogs\": 34, \"unanswered\": 3, \"failed\": 1, \"handoffs\": 2, \"costUSD\": 4.1}))\n"
+
+    func testOnlyAnApprovedScriptRunsAndItCantLeaveTheContainer() throws {
+        var agent = ProdAgent(projectId: 1, serverId: 1, name: "a", container: "tg-assistant")
+        agent.statsRunner = "python -"
+        agent.statsScript = script
+        XCTAssertNil(ProdAgents.statsCommand(for: agent), "not approved yet")
+        agent.statsApproved = ProdAgents.approval(of: agent)
+        let command = try XCTUnwrap(ProdAgents.statsCommand(for: agent))
+        let encoded = Data(script.utf8).base64EncodedString()
+        XCTAssertEqual(command, "echo '\(encoded)' | base64 -d | docker exec -i 'tg-assistant' python -")
+        agent.statsScript = script + "print('one more line')\n"
+        XCTAssertNil(ProdAgents.statsCommand(for: agent), "changed after approval: approve again")
+        agent.statsApproved = ProdAgents.approval(of: agent)
+        agent.statsRunner = "sh -c 'curl example.com'"
+        XCTAssertNil(ProdAgents.statsCommand(for: agent), "only the listed ways to run")
+    }
+
+    func testTheLastJSONLineIsTheDay() throws {
+        let stats = try XCTUnwrap(ProdAgents.stats(from: "warning: something\n{\"period\": \"24h\", \"dialogs\": 34, \"unanswered\": 3, \"failed\": 1, \"handoffs\": 2, \"costUSD\": 4.1}\n"))
+        XCTAssertEqual(stats.dialogs, 34)
+        XCTAssertEqual(stats.unanswered, 3)
+        XCTAssertEqual(stats.costUSD, 4.1)
+        XCTAssertNil(ProdAgents.stats(from: "Traceback (most recent call last):\n  ...\nNameError"))
+    }
+}
