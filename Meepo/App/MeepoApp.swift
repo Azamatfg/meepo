@@ -31,6 +31,7 @@ struct MeepoApp: App {
             _store = State(initialValue: store)
             hotkeys = HotkeyMonitor(store: store)
             services = isolated ? nil : LiveServices(store: store)
+            if !isolated { BehaviorLog.start(store: store) }
         } catch {
             fatalError("Cannot open ~/.meepo/meepo.sqlite: \(error)")
         }
@@ -221,6 +222,7 @@ final class LiveServices {
                 if let status = StatusLine(json: body) { store.applyStatusLine(status, sessionId: sessionId); return }
                 guard let payload = HookPayload(json: body) else { return }
                 let attention = store.handleHookEvent(payload, sessionId: sessionId)
+                BehaviorLog.hook(payload, sessionId: sessionId, store: store)
                 if payload.event == "Stop" { Task { await store.refreshUsage() } }
                 guard let attention,
                       let session = store.sessions.first(where: { $0.id == sessionId }) else { return }
