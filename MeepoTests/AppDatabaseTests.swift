@@ -77,4 +77,17 @@ final class AppDatabaseTests: XCTestCase {
             try s2.insert(db)
         })
     }
+
+    /// The feed of the selected session runs on the main thread on every hook event: it must read its 200 rows
+    /// off the index, not sort a week of the session's events (lag.log, 2026-11-28: 141 s of stalls).
+    func testSessionFeedReadsOffTheIndexWithoutSorting() throws {
+        let db = try makeDB()
+        let plan = try db.read {
+            try String.fetchAll($0, sql: """
+                EXPLAIN QUERY PLAN SELECT * FROM hookEvent WHERE sessionId = 1 ORDER BY createdAt DESC, id DESC LIMIT 200
+                """, adapter: SuffixRowAdapter(fromIndex: 3))
+        }.joined(separator: "\n")
+        XCTAssertTrue(plan.contains("hookEvent_on_sessionId_createdAt"), plan)
+        XCTAssertFalse(plan.contains("TEMP B-TREE"), plan)
+    }
 }

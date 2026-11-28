@@ -256,6 +256,12 @@ enum AppDatabase {
             try db.execute(sql: "UPDATE task SET status = ?", arguments: [TaskStatus.active]) // the list stays as it was
         }
 
+        // The selected session's feed (newest 200) on every hook event: off this index it reads 200 rows instead of
+        // sorting the session's week (lag.log, 2026-11-28: the main thread's top stall in Meepo's own code).
+        migrator.registerMigration("v26-hook-event-feed-index") { db in
+            try db.create(index: "hookEvent_on_sessionId_createdAt", on: "hookEvent", columns: ["sessionId", "createdAt", "id"])
+        }
+
         return migrator
     }
 }
