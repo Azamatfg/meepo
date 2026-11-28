@@ -239,3 +239,25 @@ final class NewTabTests: XCTestCase {
         XCTAssertEqual(store.selectedSession?.projectId, store.projects[0].id, "no tab open: the workspace's first project")
     }
 }
+
+/// A task for a whole workspace, or for all projects (2026-11-28): moved into a workspace, it leaves a project that
+/// isn't that workspace's; one of the workspace's own projects it keeps.
+@MainActor
+final class WholeWorkspaceTaskTests: XCTestCase {
+    func testMovingIntoAWorkspaceKeepsOnlyItsOwnProject() throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        for _ in 0..<2 { try store.addProject(at: try makeTempRepo()) }
+        let (taxi, alva) = (store.projects[0].id!, store.projects[1].id!)
+        store.setWorkspace(taxi, to: "taxi")
+        store.setWorkspace(alva, to: "alva")
+        let own = try XCTUnwrap(store.addTask("taxi deploy", projectId: taxi))
+        let other = try XCTUnwrap(store.addTask("alva deploy", projectId: alva))
+        store.moveTasks([own.id!, other.id!], toWorkspace: "taxi")
+        XCTAssertEqual(store.tasks.first { $0.id == own.id }?.projectId, taxi, "its project is taxi's: kept")
+        XCTAssertNil(store.tasks.first { $0.id == other.id }?.projectId, "alva's project isn't taxi's: now the whole workspace's")
+        store.workspace = "taxi"
+        XCTAssertEqual(Set(store.workspaceTasks.map(\.text)), ["taxi deploy", "alva deploy"])
+    }
+}

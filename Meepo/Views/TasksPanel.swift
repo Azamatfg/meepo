@@ -314,8 +314,11 @@ struct TasksPanel: View {
                 items += tasks.map(Item.task)
             }
             if let unsorted = byProject[nil] {
-                items.append(.project("No project"))
-                items += unsorted.map(Item.task)
+                // No one project: a whole workspace's, or all projects'.
+                for (workspace, tasks) in Dictionary(grouping: unsorted, by: \.workspace).sorted(by: { ($0.key ?? "~") < ($1.key ?? "~") }) {
+                    items.append(.project(workspace.map { store.workspace == nil ? "Whole workspace · \($0)" : "Whole workspace" } ?? "All projects"))
+                    items += tasks.map(Item.task)
+                }
             }
         } else {
             items += board.open.map(Item.task)
@@ -494,6 +497,16 @@ private struct TaskLine: View {
                     }
                     Divider()
                     Toggle("No project", isOn: Binding(get: { task.projectId == nil }, set: { _ in move(to: nil) }))
+                }
+                // A task for a whole workspace (no one project), or for all projects.
+                Menu("Workspace") {
+                    ForEach(store.workspaceNames, id: \.self) { name in
+                        Toggle(name, isOn: Binding(get: { store.workspace(of: task) == name },
+                                                   set: { _ in if let id = task.id { store.moveTasks([id], toWorkspace: name) } }))
+                    }
+                    if !store.workspaceNames.isEmpty { Divider() }
+                    Toggle("All projects", isOn: Binding(get: { task.projectId == nil && task.workspace == nil },
+                                                         set: { _ in if let id = task.id { store.moveTasksToAllProjects([id]) } }))
                 }
                 Menu("Move to") {
                     ForEach(TaskStatus.allCases, id: \.self) { status in

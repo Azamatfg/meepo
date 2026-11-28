@@ -172,6 +172,7 @@ struct WorkHome: View {
                         .disabled(added.contains(principle.step))
                     }
                     Text(principle.who).font(Fonts.ui(12, weight: .semibold)).foregroundStyle(Tokens.textDim)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text(principle.why).font(Fonts.ui(13)).fixedSize(horizontal: false, vertical: true)
                     (Text(t("In your work: ", "У тебя: ")).bold() + Text(principle.inYourWork))
                         .font(Fonts.ui(13)).foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)

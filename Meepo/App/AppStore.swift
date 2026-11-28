@@ -3172,9 +3172,25 @@ final class AppStore {
     }
 
     /// Several tasks into a workspace at once (nil: back to their projects').
+    /// A task keeps its project when the project is in that workspace; otherwise it becomes the whole workspace's.
     func moveTasks(_ ids: [Int64], toWorkspace name: String?) {
+        let own = Set(projects.filter { $0.workspace == name }.compactMap(\.id))
         _ = try? db.write { db in
-            for id in ids { try db.execute(sql: "UPDATE task SET workspace = ? WHERE id = ?", arguments: [name, id]) }
+            for id in ids {
+                try db.execute(sql: "UPDATE task SET workspace = ? WHERE id = ?", arguments: [name, id])
+                if name != nil {
+                    try db.execute(sql: "UPDATE task SET projectId = NULL WHERE id = ? AND projectId NOT IN (\(own.isEmpty ? "NULL" : own.map(String.init).joined(separator: ",")))",
+                                   arguments: [id])
+                }
+            }
+        }
+        reloadTasks()
+    }
+
+    /// For all projects: no project, no workspace.
+    func moveTasksToAllProjects(_ ids: [Int64]) {
+        _ = try? db.write { db in
+            for id in ids { try db.execute(sql: "UPDATE task SET projectId = NULL, workspace = NULL WHERE id = ?", arguments: [id]) }
         }
         reloadTasks()
     }
