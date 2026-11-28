@@ -2060,7 +2060,11 @@ final class AppStore {
         guard let session = sessions.first(where: { $0.id == sessionId }) else { return }
         relayingSessionIds.insert(sessionId)
         let sync = stages.first { $0.name == "sync" }?.command
-        if let sync, (commandsByProject[session.projectId] ?? []).contains(where: { $0.name == sync }) {
+        let commands = commandsByProject[session.projectId] ?? []
+        // The mod's handoff: a file the next session reads, kept for tomorrow too (~/.meepo/handoffs).
+        if commands.contains(where: { $0.name == "meepo:handoff" }) {
+            type("/meepo:handoff\r", into: sessionId)
+        } else if let sync, commands.contains(where: { $0.name == sync }) {
             type("/\(sync)\r", into: sessionId)
         } else {
             type("Summarize for a fresh session taking over: the task, what is done, what is next, key files and decisions.\r",
@@ -2068,10 +2072,23 @@ final class AppStore {
         }
     }
 
+    /// The handoff file /meepo:handoff names on its reply's last `HANDOFF:` line; nil for a plain summary.
+    nonisolated static func handoffPath(in reply: String) -> String? {
+        reply.split(separator: "\n").reversed().lazy
+            .compactMap { line -> String? in
+                guard line.hasPrefix("HANDOFF: ") else { return nil }
+                let path = line.dropFirst("HANDOFF: ".count).trimmingCharacters(in: .whitespaces)
+                return path.hasPrefix("/") ? path : nil
+            }.first
+    }
+
     private func finishRelay(_ sessionId: Int64, summary: String?) {
         relayingSessionIds.remove(sessionId)
         guard let old = sessions.first(where: { $0.id == sessionId }) else { return }
-        let handoff = summary.map { "\n\nHandoff from the previous session:\n\n\($0)" } ?? ""
+        // A handoff file: the next session reads it (all of it, not a reply's tail); else the reply itself.
+        let file = summary.flatMap(Self.handoffPath(in:)).flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil }
+        let handoff = file.map { "\n\nRead the handoff first: \($0)" }
+            ?? summary.map { "\n\nHandoff from the previous session:\n\n\($0)" } ?? ""
         do {
             let fresh = try successor(of: old, model: old.model, effort: old.effort, stage: old.stage,
                                       prompt: "Continue the task of the previous session (its context was full).\(handoff)",

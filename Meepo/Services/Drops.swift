@@ -25,6 +25,11 @@ enum Drops {
         })
     }
 
+    /// A screen recording or a bug video: Claude can't read it, the mod's /meepo:video watches it.
+    static func isVideo(_ url: URL) -> Bool {
+        ["mov", "mp4", "m4v", "webm", "avi", "mkv"].contains(url.pathExtension.lowercased())
+    }
+
     static func isImage(_ url: URL) -> Bool {
         UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true
     }
@@ -102,7 +107,12 @@ extension AppStore {
     func dropFiles(_ urls: [URL], into sessionId: Int64) {
         let isShell = sessions.first { $0.id == sessionId }?.sshHost != nil // a server shell takes paths only
         let images = isShell ? [] : urls.filter(Drops.isImage).compactMap { url in NSImage(contentsOf: url).map { (url, $0) } }
-        let paths = urls.filter { url in !images.contains { $0.0 == url } }
+        // A video goes to /meepo:video (key frames and speech in a side context) when the session has the mod.
+        let session = sessions.first { $0.id == sessionId }
+        let hasVideoSkill = !isShell && (session.map { commandsByProject[$0.projectId] ?? [] } ?? []).contains { $0.name == "meepo:video" }
+        let videos = hasVideoSkill ? urls.filter(Drops.isVideo) : []
+        for video in videos { type("/meepo:video \(Drops.escapedPath(video.path))\r", into: sessionId) }
+        let paths = urls.filter { url in !images.contains { $0.0 == url } && !videos.contains(url) }
         if !paths.isEmpty { type(paths.map { Drops.escapedPath($0.path) }.joined(separator: " ") + " ", into: sessionId) }
         pasteImages(images.map(\.1), into: sessionId)
     }
