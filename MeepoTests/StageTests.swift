@@ -156,7 +156,9 @@ final class StageFlowTests: XCTestCase {
         XCTAssertEqual(CommandCatalog.resolve("qa", available: builtIns), "verify")
         XCTAssertEqual(CommandCatalog.resolve("security", available: builtIns), "security-review")
         XCTAssertEqual(CommandCatalog.resolve("simplify", available: builtIns), "simplify")
-        XCTAssertEqual(CommandCatalog.resolve("ship", available: builtIns), "commit-push-pr")
+        XCTAssertEqual(CommandCatalog.resolve("deliver", available: builtIns), "commit-push-pr")
+        XCTAssertEqual(Stage.defaults.first { $0.name == "ship" }?.command, "deliver",
+                       "not /ship: Claude Code has its own (2.1.332), and a project's ship.md no longer runs")
         XCTAssertNil(CommandCatalog.resolve("sync", available: builtIns), "no built-in does sync — the stage says so")
     }
 
@@ -367,5 +369,13 @@ final class BridgeCommandTests: XCTestCase {
         XCTAssertFalse(installer.isUpToDate(), "an old bare path fails hooks once ~/.meepo is gone")
         try installer.install()
         XCTAssertTrue(installer.isUpToDate())
+    }
+
+    /// Stages saved before 2026-11-28 start SHIP with /ship — now Claude Code's built-in. Moved to /deliver once.
+    func testSavedShipStageMovesToDeliver() {
+        let saved = [Stage(name: "qa", command: "qa"), Stage(name: "ship", command: "ship")]
+        XCTAssertEqual(Stage.movingShipToDeliver(saved).map(\.command), ["qa", "deliver"])
+        let own = [Stage(name: "ship", command: "my-release")]
+        XCTAssertEqual(Stage.movingShipToDeliver(own).map(\.command), ["my-release"], "a command the user picked stays")
     }
 }

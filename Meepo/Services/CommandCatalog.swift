@@ -29,7 +29,7 @@ enum CommandCatalog {
     /// A stage's own command → the built-in that does its job when a project has no such command,
     /// so a teammate without anyone's .claude folder still has working stages.
     /// spec, review and sync are skills in Meepo's mod (`meepo:…`): there in every project, while sessions load it.
-    static let standIns = ["qa": "verify", "security": "security-review", "ship": "commit-push-pr",
+    static let standIns = ["qa": "verify", "security": "security-review", "deliver": "commit-push-pr",
                            "spec": "meepo:spec", "review": "meepo:review", "sync": "meepo:sync"]
 
     /// The command a stage runs given the commands a project has: its own, else its built-in stand-in.
@@ -134,7 +134,8 @@ struct Stage: Codable, Hashable, Identifiable {
         Stage(name: "security", command: "security"),
         Stage(name: "simplify", command: "simplify"),
         Stage(name: "review", command: "review"),
-        Stage(name: "ship", command: "ship"),
+        // Not /ship: Claude Code has its own since 2.1.33x, and it hides a project's ship.md (2026-11-28).
+        Stage(name: "ship", command: "deliver"),
         Stage(name: "sync", command: "sync"),
     ]
 
@@ -160,6 +161,16 @@ struct Stage: Codable, Hashable, Identifiable {
 
     /// The stages Meepo's method added; a bar saved before it gets them once.
     static let method = defaults.filter { ["spec", "review"].contains($0.name) }
+
+    /// SHIP saved with /ship (before 2026-11-28) runs Claude Code's built-in now, not the user's: it moves to /deliver.
+    static func movingShipToDeliver(_ stages: [Stage]) -> [Stage] {
+        stages.map { stage in
+            guard stage.name == "ship", stage.command == "ship" else { return stage }
+            var moved = stage
+            moved.command = "deliver"
+            return moved
+        }
+    }
 
     /// A hidden default stage back in the bar, where it stands in the default order.
     static func adding(_ stage: Stage, to stages: [Stage]) -> [Stage] {

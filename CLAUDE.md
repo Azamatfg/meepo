@@ -7,7 +7,7 @@
 - `/simplify` — code review: reuse, quality, efficiency (встроен)
 - `/qa` — QA-тестирование через браузер/симулятор
 - `/security` — аудит безопасности (OWASP)
-- `/ship` — сборка, тесты, коммит, push (только по явной просьбе)
+- `/deliver` — проверка, тесты, коммит, push, CI, деплой (только по явной просьбе; не `/ship` — тот встроен в Claude Code и перекрывает команду проекта)
 - `/retro` — ретроспектива сессии
 - `/sync` — актуализация memory
 - `/updates` — проверка обновлений Claude Code / Anthropic
@@ -22,12 +22,12 @@ Subagents: `code-reviewer`, `security-auditor`.
 2. Реализация по фазам
 3. После кода: `/simplify` или `code-reviewer`
 4. Если баг: `/investigate`
-5. Перед push: `/ship`
+5. Перед push: `/deliver`
 6. В конце дня: `/retro`
 
 ## Spec
 
-Полное ТЗ: [`SPEC.md`](SPEC.md). Модули собираются строго по порядку (раздел 6), каждый: `/plan` → подтверждение → реализация → `/qa` → `/ship` → `/sync`.
+Полное ТЗ: [`SPEC.md`](SPEC.md). Модули собираются строго по порядку (раздел 6), каждый: `/plan` → подтверждение → реализация → `/qa` → `/deliver` → `/sync`.
 
 ## Stack
 
@@ -54,6 +54,11 @@ Subagents: `code-reviewer`, `security-auditor`.
 - `claude` запускается через `$SHELL -l -i -c` — чтобы подхватить PATH из `.zshrc` (nvm)
 - База: `~/.meepo/meepo.sqlite` (миграции в `Meepo/Storage/AppDatabase.swift`)
 - Цвета — только через `Meepo/Design/Tokens.swift`
+
+## Deploy
+
+- Для себя: `scripts/install.sh`. Запущенный Meepo сам ставит сборку по RESTART в status bar (ждёт работающих агентов, сессии возвращаются). Из терминала вне Meepo — `MEEPO_INSTALL_NOW=1 scripts/install.sh`
+- Релиз для всех — только по явной просьбе: сначала dry run `release.yml` (workflow_dispatch), потом тег `vX.Y.Z`
 
 ## Project Structure
 

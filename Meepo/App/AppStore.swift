@@ -98,6 +98,11 @@ final class AppStore {
             stages = Stage.method.reduce(stages) { Stage.adding($1, to: $0) }
             defaults.set(try? JSONEncoder().encode(stages), forKey: Self.stagesKey) // didSet doesn't run in init
         }
+        if !defaults.bool(forKey: Self.deliverStageKey) {
+            defaults.set(true, forKey: Self.deliverStageKey)
+            stages = Stage.movingShipToDeliver(stages)
+            defaults.set(try? JSONEncoder().encode(stages), forKey: Self.stagesKey)
+        }
         self.stages = stages
         guidedMode = defaults.bool(forKey: Self.guidedKey)
         Self.retireChains(from: defaults)
@@ -1571,6 +1576,7 @@ final class AppStore {
     // MARK: Stages and relay (SPEC module 4)
 
     private static let stagesKey = "stages"
+    private static let deliverStageKey = "stagesShipToDeliver"
     private static let methodStagesKey = "methodStagesAdded"
     private static let relayThresholdKey = "relayThreshold"
 
