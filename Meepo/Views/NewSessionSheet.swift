@@ -25,7 +25,8 @@ struct NewSessionSheet: View {
             Text("NEW SESSION").font(Fonts.title(18)).foregroundStyle(Tokens.text)
             FieldRow("Project") {
                 PixelMenu(selection: store.projects.first { $0.id == projectId }?.name ?? "—") {
-                    ForEach(store.projects) { project in
+                    // The workspace shown first; the rest stay reachable.
+                    ForEach(store.workspaceProjects + store.projects.filter { p in !store.workspaceProjects.contains { $0.id == p.id } }) { project in
                         Button(project.name) { projectId = project.id }
                     }
                 }

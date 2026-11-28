@@ -267,6 +267,11 @@ enum AppDatabase {
             try db.alter(table: "project") { t in t.add(column: "workspace", .text) }
         }
 
+        // A task's own workspace, for one with no project or moved out of its project's (nil = its project's).
+        migrator.registerMigration("v28-task-workspace") { db in
+            try db.alter(table: "task") { t in t.add(column: "workspace", .text) }
+        }
+
         return migrator
     }
 }

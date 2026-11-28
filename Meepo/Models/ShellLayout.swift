@@ -4,7 +4,7 @@ import Foundation
 /// sessions' terminals share the center. Each preset starts from its default and keeps the user's changes.
 struct ShellLayout: Codable, Equatable {
     enum Panel: String, Codable, CaseIterable, Identifiable {
-        case sessions, explorer, changes, ci, events, waiting, product, tasks
+        case sessions, explorer, changes, ci, events, waiting, product, tasks, context
         var id: String { rawValue }
     }
 
@@ -30,7 +30,8 @@ struct ShellLayout: Codable, Equatable {
         // Solo: the terminal and nothing around it (⌘⇧↩).
         case .solo: ShellLayout(left: [], right: [], bottom: [], split: 1)
         // Focus is the simplest view: what changed for users first, then who waits.
-        case .focus: ShellLayout(left: [], right: [.product, .waiting], bottom: [], split: 1)
+        // Focus: the session's context first (2026-11-28: what the user manages most).
+        case .focus: ShellLayout(left: [], right: [.context, .product, .waiting], bottom: [], split: 1)
         // Side zones on both sides leave ~780 pt at 1440 wide — one terminal. Presets with several keep one side.
         case .deck: ShellLayout(left: [.sessions], right: [], bottom: [], split: 4)
         case .full: ShellLayout(left: [.explorer, .changes], right: [], bottom: [.events, .ci], split: 2)

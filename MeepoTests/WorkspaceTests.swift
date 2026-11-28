@@ -1,4 +1,5 @@
 import GRDB
+import SwiftUI
 import XCTest
 @testable import Meepo
 
@@ -57,14 +58,106 @@ final class HiddenPanelsTests: XCTestCase {
         try AppDatabase.migrator.migrate(db)
         let store = makeIsolatedStore(db: db)
         store.applyPreset(.full)
-        XCTAssertFalse(store.showsAllPanels, "hidden by default")
+        XCTAssertFalse(store.showsEverything, "hidden by default")
         XCTAssertEqual(store.shownShell.left, [.explorer])
         XCTAssertTrue(store.shownShell.bottom.isEmpty)
-        XCTAssertEqual(store.railPanels, [.sessions, .explorer, .tasks])
+        XCTAssertEqual(store.railPanels, [.sessions, .explorer, .tasks, .context])
         XCTAssertEqual(store.shell.bottom, [.events, .ci], "the arrangement itself stays")
 
-        store.showsAllPanels = true
+        store.showsEverything = true
         XCTAssertEqual(store.shownShell, store.shell)
         XCTAssertEqual(store.railPanels, ShellLayout.Panel.allCases)
+    }
+}
+
+/// Workspaces set up in one place (2026-11-28): renamed and removed whole, and suggested from the projects' names.
+@MainActor
+final class WorkspaceSetupTests: XCTestCase {
+    func testRenameAndRemoveTakeEveryProjectAlong() throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        for _ in 0..<2 { try store.addProject(at: try makeTempRepo()) }
+        let ids = store.projects.compactMap(\.id)
+        for id in ids { store.setWorkspace(id, to: "Work") }
+        store.workspace = "Work"
+        store.renameWorkspace("Work", to: "alva")
+        XCTAssertEqual(store.workspaceNames, ["alva"])
+        XCTAssertEqual(store.workspace, "alva", "the one shown follows its new name")
+        store.removeWorkspace("alva")
+        XCTAssertTrue(store.workspaceNames.isEmpty)
+        XCTAssertNil(store.workspace)
+        XCTAssertEqual(store.projects.count, 2, "projects stay; only the grouping goes")
+    }
+
+    func testGroupsAreSuggestedFromSharedWordsInNames() {
+        let names = ["taxi", "taxinet", "taxi-kolesa", "regional taxi", "alva", "powerbanks", "meepo", "career"]
+        let suggested = AppStore.suggestedWorkspaces(names)
+        XCTAssertEqual(suggested["taxi"].map(Set.init), ["taxi", "taxinet", "taxi-kolesa", "regional taxi"])
+        XCTAssertEqual(suggested.count, 1, "a name shared by nobody else isn't a group")
+    }
+
+    /// The sheet and the title bar's switcher as pictures (MEEPO_SNAPSHOT_DIR, as ShellSnapshotTests).
+    func testWorkspacesPicture() async throws {
+        let path = ProcessInfo.processInfo.environment["MEEPO_SNAPSHOT_DIR"]
+        try XCTSkipIf(path == nil, "pictures only on request")
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        let base = FileManager.default.temporaryDirectory.appending(path: "ws-\(UUID().uuidString)")
+        for name in ["taxi", "taxinet", "taxi-kolesa", "regional taxi", "alva", "powerbanks", "meepo", "career"] {
+            let repo = try makeTempRepo()
+            let named = base.appending(path: name)
+            try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+            try FileManager.default.moveItem(at: repo, to: named)
+            try store.addProject(at: named)
+        }
+        store.setWorkspace(store.projects.first { $0.name == "alva" }!.id!, to: "alva")
+        for (view, size, file) in [(AnyView(WorkspacesSheet()), NSSize(width: 720, height: 600), "workspaces.png"),
+                                   (AnyView(WorkspaceChip().padding(10)), NSSize(width: 220, height: 50), "workspace-chip.png")] {
+            let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
+            window.appearance = NSAppearance(named: .darkAqua)
+            window.contentView = NSHostingView(rootView: view.background(Tokens.ground).environment(store))
+            window.makeKeyAndOrderFront(nil)
+            try await Task.sleep(for: .seconds(1))
+            let content = try XCTUnwrap(window.contentView)
+            let rep = try XCTUnwrap(content.bitmapImageRepForCachingDisplay(in: content.bounds))
+            content.cacheDisplay(in: content.bounds, to: rep)
+            try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path!).appending(path: file))
+            window.orderOut(nil)
+        }
+    }
+}
+
+/// Tasks belong to a workspace: their own, else their project's; moved many at once (2026-11-28).
+@MainActor
+final class WorkspaceTasksTests: XCTestCase {
+    func testTasksFollowTheWorkspaceAndMoveTogether() throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        try store.addProject(at: try makeTempRepo())
+        let alva = store.projects[0].id!
+        store.setWorkspace(alva, to: "alva")
+        let inProject = try XCTUnwrap(store.addTask("deploy", projectId: alva))
+        let loose = try XCTUnwrap(store.addTask("read SRE book", projectId: nil))
+        XCTAssertEqual(store.workspace(of: inProject), "alva", "a project's task is in its project's workspace")
+        XCTAssertNil(store.workspace(of: loose))
+
+        store.workspace = "taxi-free"  // a name with no projects isn't kept; set the real one
+        store.workspace = "alva"
+        XCTAssertEqual(store.workspaceTasks.map(\.text), ["deploy"], "the loose one isn't alva's")
+        let typed = try XCTUnwrap(store.addTask("call the driver team", projectId: nil))
+        XCTAssertEqual(typed.workspace, "alva", "typed while alva is shown: it's alva's")
+
+        store.moveTasks([loose.id!, inProject.id!], toWorkspace: "taxi")
+        XCTAssertEqual(Set(store.tasks.compactMap { store.workspace(of: $0) }), ["taxi", "alva"])
+        XCTAssertEqual(store.tasks.first { $0.text == "deploy" }.flatMap { store.workspace(of: $0) }, "taxi",
+                       "its own workspace wins over its project's")
+        XCTAssertTrue(store.workspaceNames.contains("taxi"), "a workspace with tasks only is offered too")
+        store.renameWorkspace("taxi", to: "taxi work")
+        XCTAssertEqual(store.tasks.filter { $0.workspace == "taxi work" }.count, 2, "its tasks follow the new name")
+        store.workspace = nil
+        XCTAssertEqual(store.workspaceTasks.count, 3, "All shows every task")
     }
 }

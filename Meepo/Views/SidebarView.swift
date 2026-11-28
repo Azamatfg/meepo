@@ -273,6 +273,7 @@ private struct ProjectHeader: View {
                     }
                     if !store.workspaceNames.isEmpty { Divider() }
                     Button("New Workspace…") { store.namingWorkspaceProjectId = project.id }
+                    Button("Workspaces…") { store.isWorkspacesShown = true }
                     if project.workspace != nil { Button("No Workspace") { store.setWorkspace(project.id!, to: nil) } }
                 }
                 Divider()

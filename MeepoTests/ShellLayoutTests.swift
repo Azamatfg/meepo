@@ -16,7 +16,7 @@ final class ShellLayoutTests: XCTestCase {
         var layout = ShellLayout.preset(.focus)
         layout.move(.product, to: .left)
         XCTAssertEqual(layout.left, [.product])
-        XCTAssertEqual(layout.right, [.waiting])
+        XCTAssertEqual(layout.right, [.context, .waiting])
         XCTAssertEqual(layout.zone(of: .product), .left)
     }
 

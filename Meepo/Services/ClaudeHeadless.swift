@@ -31,10 +31,11 @@ enum ClaudeHeadless {
     }
 
     /// Returns the JSON of the answer (`structured_output`).
+    /// `extra`: more flags (`--add-dir <folder>` for folders it may read).
     static func askJSON(_ prompt: String, schema: String, claude: String, environment: [String: String],
-                        tools: String = "", model: String, directory: URL? = nil) async throws -> Data {
+                        tools: String = "", model: String, directory: URL? = nil, extra: [String] = []) async throws -> Data {
         let output = try await run(prompt, claude: claude, environment: environment,
-                                   arguments: jsonArguments(schema: schema, tools: tools, model: model), directory: directory)
+                                   arguments: jsonArguments(schema: schema, tools: tools, model: model) + extra, directory: directory)
         guard let object = try? JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any],
               let structured = object["structured_output"],
               let data = try? JSONSerialization.data(withJSONObject: structured) else {

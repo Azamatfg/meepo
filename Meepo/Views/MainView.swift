@@ -67,6 +67,7 @@ struct MainView: View {
                 GroupNameSheet(session: session)
             }
         }
+        .sheet(isPresented: Binding(get: { store.isWorkspacesShown }, set: { store.isWorkspacesShown = $0 })) { WorkspacesSheet() }
         .sheet(isPresented: Binding(get: { store.namingWorkspaceProjectId != nil }, set: { if !$0 { store.namingWorkspaceProjectId = nil } })) {
             if let id = store.namingWorkspaceProjectId, let project = store.projects.first(where: { $0.id == id }) {
                 WorkspaceNameSheet(project: project)
@@ -94,8 +95,10 @@ struct MainView: View {
     @ViewBuilder
     private var center: some View {
         VStack(spacing: 10) {
-            if store.isHomeShown {
-                HomeView()
+            if store.isTasksShown {
+                ScrollView { TasksPanel().padding(28).frame(maxWidth: 760) }.frame(maxWidth: .infinity)
+            } else if store.isHomeShown {
+                if store.showsEverything { HomeView() } else { WorkHome() }
             } else if store.selectedSession != nil {
                 if store.editor.files.isEmpty {
                     TerminalGrid(sessionIds: store.visibleSessionIds)
@@ -167,20 +170,24 @@ private struct TitleBar: View {
     var body: some View {
         HStack(spacing: 8) {
             Menu {
-                Button("Tasks — morning start") { isMorningShown = true }
-                Button("Day — end-of-day summary") { isDayShown = true }
-                Divider()
-                Button("Stats") { isStatsShown = true }
-                Button("Tools — Docker space, ports, servers, meepo's edits") { store.toolsTab = .docker }
-                Button("Notes — release notes") { isNotesShown = true }
-                Button("Replay — your past tasks on other setups") { isReplayShown = true }
-                Divider()
+                if store.showsEverything {
+                    Button("Tasks — morning start") { isMorningShown = true }
+                    Button("Day — end-of-day summary") { isDayShown = true }
+                    Divider()
+                    Button("Stats") { isStatsShown = true }
+                    Button("Tools — Docker space, ports, servers, meepo's edits") { store.toolsTab = .docker }
+                    Button("Notes — release notes") { isNotesShown = true }
+                    Button("Replay — your past tasks on other setups") { isReplayShown = true }
+                    Divider()
+                }
                 Toggle("Guided mode — Claude explains, asks first", isOn: Binding(get: { store.guidedMode }, set: { store.setGuidedMode($0) }))
-                Button("How meepo works…") { isGuideShown = true }
-                Button("Welcome…") { isWelcomeShown = true }
-                Divider()
-                Button("Automations…") { isAutomationsShown = true }
-                Button("Claude Code Setup…") { isSetupShown = true }
+                if store.showsEverything {
+                    Button("How meepo works…") { isGuideShown = true }
+                    Button("Welcome…") { isWelcomeShown = true }
+                    Divider()
+                    Button("Automations…") { isAutomationsShown = true }
+                    Button("Claude Code Setup…") { isSetupShown = true }
+                }
                 Button("Send Feedback…") { NSWorkspace.shared.open(CrashNotice.newIssue(title: "", body: "")) }
                 Button("Settings…") { store.isSettingsShown = true }
             } label: {
@@ -193,6 +200,7 @@ private struct TitleBar: View {
             .fixedSize()
             .help("Menu — Tasks, Day, Stats, Tools, Automations, Settings")
             .accessibilityLabel("Menu")
+            WorkspaceChip()
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
                     TabButton(isOn: store.isHomeShown, action: { store.isHomeShown = true }) {
@@ -200,6 +208,11 @@ private struct TitleBar: View {
                         Text("Home")
                     }
                     .help("All sessions at a glance")
+                    TabButton(isOn: store.isTasksShown, action: { store.isTasksShown = true }) {
+                        Image(systemName: "checklist").font(.system(size: 12, weight: .semibold))
+                        Text("Tasks")
+                    }
+                    .help("Your tasks, in the workspace shown")
                     ForEach(store.tabGroups) { group in
                         if group.sessions.count == 1, case .project = group.kind {
                             SessionTab(session: group.sessions[0])
@@ -240,8 +253,10 @@ private struct TitleBar: View {
                 }
             }
             UpdateBadge()
-            PresetPicker()
-            InfoButton(title: "Layouts", text: Explain.presets)
+            if store.showsEverything {
+                PresetPicker()
+                InfoButton(title: "Layouts", text: Explain.presets)
+            }
         }
         .padding(.leading, isFullScreen ? 10 : 84) // room for the traffic lights, which full screen hides
         .padding(.trailing, 10)
@@ -715,6 +730,7 @@ struct PanelBox: View {
         case .waiting: WaitingPanel()
         case .product: WhatChangedPanel()
         case .tasks: TasksPanel()
+        case .context: ContextPanel()
         }
     }
 
@@ -730,6 +746,7 @@ struct PanelBox: View {
         case .waiting: "Needs you"
         case .product: "What changed"
         case .tasks: "Tasks"
+        case .context: "Context"
         }
     }
 
@@ -744,6 +761,7 @@ struct PanelBox: View {
         case .waiting: "Sessions waiting for your answer"
         case .product: "What changed, for your users"
         case .tasks: "Your to-do list: tick what's done"
+        case .context: "What fills Claude's context, and room left"
         }
     }
 
@@ -757,6 +775,7 @@ struct PanelBox: View {
         case .waiting: "bell"
         case .product: "sparkles"
         case .tasks: "checklist"
+        case .context: "gauge.with.dots.needle.50percent"
         }
     }
 }
@@ -837,7 +856,7 @@ private struct TerminalPane: View {
                 header(session)
                 Rectangle().fill(Tokens.line).frame(height: 1)
                 terminal(session)
-                if session.sshHost == nil { // stages, slash commands and voice are claude's
+                if session.sshHost == nil, store.showsEverything { // stages, slash commands and voice are claude's
                     Rectangle().fill(Tokens.line).frame(height: 1)
                     StagePanel(session: session)
                 }
@@ -1007,8 +1026,9 @@ private struct StatusBar: View {
                 .buttonStyle(.plain).foregroundStyle(Tokens.work).fontWeight(.semibold)
                 .help("Downloaded and checked. Restart now, or it installs when you quit meepo")
             }
+            ContextChip()
             if let claude = store.claudeVersion { Text("Claude Code \(claude)") }
-            Text(store.shellPreset.title)
+            if store.showsEverything { Text(store.shellPreset.title) }
             if let version = Updater.currentVersion { Text("meepo \(version.description)") }
         }
         .font(Fonts.ui(12))

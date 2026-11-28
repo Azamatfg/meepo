@@ -32,6 +32,8 @@ struct TaskItem: Codable, Identifiable, Hashable, FetchableRecord, MutablePersis
     var doneAt: Date?
     /// The session the task was last launched in.
     var sessionId: Int64?
+    /// Its own workspace; nil = its project's (AppStore.workspace(of:)).
+    var workspace: String? = nil
 
     /// Screenshots taken for tasks; they belong to the task and go when it is deleted.
     static var attachmentsDir: URL { MeepoHome.url.appending(path: "attachments") }

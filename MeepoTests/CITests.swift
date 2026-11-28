@@ -151,14 +151,14 @@ final class CIWatcherTests: XCTestCase {
         ci = FakeCI()
         store.ciProviders = [ci]
         store.onCINotice = { [weak self] title, _ in self?.notices.append(title) }
-        store.showsAllPanels = true // CI is watched only while its panels are shown
+        store.showsEverything = true // CI is watched only while its panels are shown
     }
 
     private var projectId: Int64 { store.projects[0].id! }
 
     /// Hidden (Settings): no CI asked, nothing typed into sessions, no notices.
     func testHiddenCIIsNotWatched() async throws {
-        store.showsAllPanels = false
+        store.showsEverything = false
         await store.refreshCI()
         XCTAssertEqual(ci.calls, 0)
         XCTAssertTrue(notices.isEmpty)

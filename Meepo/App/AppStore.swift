@@ -18,7 +18,7 @@ enum AddProjectError: LocalizedError, Equatable {
 @MainActor
 @Observable
 final class AppStore {
-    private let db: DatabaseQueue
+    let db: DatabaseQueue // extensions in their own files (WeekReview) read it
     private let terminals = TerminalRegistry()
     /// Files open above the terminals, VS Code's editor.
     @ObservationIgnored let editor = Editor()
@@ -41,6 +41,7 @@ final class AppStore {
         didSet {
             reloadEvents()
             isHomeShown = false
+            isTasksShown = false
             focusedUnit = nil
             if let id = selectedSessionId, paneAnchor.map({ paneWindow(from: $0, count: shell.split).contains(id) }) != true {
                 paneAnchor = id
@@ -105,7 +106,7 @@ final class AppStore {
         }
         self.stages = stages
         workspace = defaults.string(forKey: Self.workspaceKey)
-        showsAllPanels = defaults.bool(forKey: Self.showsAllPanelsKey)
+        showsEverything = defaults.bool(forKey: Self.showsEverythingKey)
         guidedMode = defaults.bool(forKey: Self.guidedKey)
         Self.retireChains(from: defaults)
         suggestionStates = Self.load([String: SuggestionState].self, Self.suggestionsKey, from: defaults) ?? [:]
@@ -1610,29 +1611,36 @@ final class AppStore {
         didSet { defaults.set(try? JSONEncoder().encode(shell), forKey: Self.shellKey) }
     }
 
-    /// Panels out of sight unless Settings shows them all (2026-11-28: the user works with Claude Code's context and
-    /// Tasks, not these). Hidden, not removed: CI also stops watching, since it acts on sessions by itself.
+    /// What's out of sight unless Settings shows everything (2026-11-28: the user works with Claude Code's context and
+    /// Tasks in Solo, switching windows): these panels, the stage bar under the terminal, the layout picker and the
+    /// menu's extras. Hidden, not removed: CI also stops watching, since it acts on sessions by itself.
     static let rarelyUsedPanels: Set<ShellLayout.Panel> = [.changes, .ci, .events, .waiting, .product]
-    private static let showsAllPanelsKey = "showsAllPanels"
+    private static let showsEverythingKey = "showsAllPanels" // its first name: a choice already made stays
 
-    var showsAllPanels = false {
-        didSet { defaults.set(showsAllPanels, forKey: Self.showsAllPanelsKey) }
+    var showsEverything = false {
+        didSet { defaults.set(showsEverything, forKey: Self.showsEverythingKey) }
     }
 
     /// `shell` as the window shows it: the user's arrangement without the hidden panels.
     var shownShell: ShellLayout {
-        guard !showsAllPanels else { return shell }
+        guard !showsEverything else { return shell }
         var layout = shell
         for panel in Self.rarelyUsedPanels { layout.remove(panel) }
         return layout
     }
 
     var railPanels: [ShellLayout.Panel] {
-        ShellLayout.Panel.allCases.filter { showsAllPanels || !Self.rarelyUsedPanels.contains($0) }
+        ShellLayout.Panel.allCases.filter { showsEverything || !Self.rarelyUsedPanels.contains($0) }
     }
 
     /// The Home tab (Deck/Timeline) instead of a session; picking a session leaves it.
-    var isHomeShown = false
+    var isHomeShown = false {
+        didSet { if isHomeShown { isTasksShown = false } }
+    }
+    /// The Tasks tab in the center: in Solo no panel is around to hold them (2026-11-28).
+    var isTasksShown = false {
+        didSet { if isTasksShown { isHomeShown = false } }
+    }
 
     func applyPreset(_ preset: ShellLayout.Preset) {
         shellPreset = preset
@@ -2352,7 +2360,7 @@ final class AppStore {
 
     /// Polls CI and acts on new failures. The first pass after launch only records history.
     func refreshCI() async {
-        guard showsAllPanels else { return } // hidden: nothing typed into sessions, no reruns, no notices
+        guard showsEverything else { return } // hidden: nothing typed into sessions, no reruns, no notices
         if ciProviders.isEmpty {
             ciProviders = [toolPath("gh").map { GitHubActions(gh: $0) }, toolPath("glab").map { GitLabCI(glab: $0) }].compactMap { $0 }
         }
@@ -3131,11 +3139,40 @@ final class AppStore {
         reloadTasks()
     }
 
+    /// A task's workspace: its own, else its project's.
+    func workspace(of task: TaskItem) -> String? {
+        task.workspace ?? projects.first { $0.id == task.projectId }?.workspace
+    }
+
+    /// The tasks of the workspace shown; All: every task.
+    var workspaceTasks: [TaskItem] {
+        guard let workspace else { return tasks }
+        return tasks.filter { self.workspace(of: $0) == workspace }
+    }
+
+    /// Several tasks into a workspace at once (nil: back to their projects').
+    func moveTasks(_ ids: [Int64], toWorkspace name: String?) {
+        _ = try? db.write { db in
+            for id in ids { try db.execute(sql: "UPDATE task SET workspace = ? WHERE id = ?", arguments: [name, id]) }
+        }
+        reloadTasks()
+    }
+
+    /// Several tasks into a project at once; they then follow its workspace.
+    func moveTasks(_ ids: [Int64], toProject projectId: Int64?) {
+        _ = try? db.write { db in
+            for id in ids { try db.execute(sql: "UPDATE task SET projectId = ?, workspace = NULL WHERE id = ?", arguments: [projectId, id]) }
+        }
+        reloadTasks()
+    }
+
     @discardableResult
     func addTask(_ text: String, projectId: Int64?) -> TaskItem? {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
         var task = TaskItem(projectId: projectId, text: text)
+        // Typed while a workspace is shown, with no project of its own: it's that workspace's.
+        if projectId == nil { task.workspace = workspace }
         try? db.write { try task.insert($0) }
         reloadTasks()
         return task
@@ -3430,12 +3467,18 @@ final class AppStore {
         }
     }
 
-    var workspaceNames: [String] { Set(projects.compactMap(\.workspace)).sorted() }
+    /// From projects and from tasks moved into a workspace of their own.
+    var workspaceNames: [String] { Set(projects.compactMap(\.workspace) + tasks.compactMap(\.workspace)).sorted() }
 
     var workspaceProjects: [Project] {
         guard let workspace else { return projects }
         return projects.filter { $0.workspace == workspace }
     }
+
+    /// Each session's context window by part, from the mod after every turn (ContextUsage.swift); not stored.
+    var contextUsage: [Int64: ContextUsage] = [:]
+    /// The CLAUDE.md and rules files each session loaded, and why; not stored.
+    var loadedInstructions: [Int64: [LoadedInstruction]] = [:]
 
     /// The project a new workspace is being named for (its sheet is open).
     var namingWorkspaceProjectId: Int64?
@@ -3449,6 +3492,56 @@ final class AppStore {
         reload()
         if let workspace, !workspaceNames.contains(workspace) { self.workspace = nil } // emptied: nothing would show
     }
+
+    /// Every project in `old` moves to `new`; the one shown follows.
+    func renameWorkspace(_ old: String, to new: String) {
+        let clean = new.trimmingCharacters(in: .whitespaces)
+        guard !clean.isEmpty, clean != old else { return }
+        _ = try? db.write { db in
+            try db.execute(sql: "UPDATE project SET workspace = ? WHERE workspace = ?", arguments: [clean, old])
+            try db.execute(sql: "UPDATE task SET workspace = ? WHERE workspace = ?", arguments: [clean, old])
+        }
+        reload()
+        reloadTasks()
+        if workspace == old { workspace = clean }
+    }
+
+    /// The grouping goes; its projects stay, in none.
+    func removeWorkspace(_ name: String) {
+        _ = try? db.write { db in
+            try db.execute(sql: "UPDATE project SET workspace = NULL WHERE workspace = ?", arguments: [name])
+            try db.execute(sql: "UPDATE task SET workspace = NULL WHERE workspace = ?", arguments: [name])
+        }
+        reload()
+        reloadTasks()
+        if workspace == name { workspace = nil }
+    }
+
+    /// Groups worth offering: a word (≥3 letters) that starts several projects' names or their words —
+    /// "taxi" in taxi, taxinet, taxi-kolesa, regional taxi. Each project in at most one, the biggest group first.
+    nonisolated static func suggestedWorkspaces(_ names: [String]) -> [String: [String]] {
+        func words(_ name: String) -> [String] {
+            name.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count >= 3 }
+        }
+        var byStem: [String: Set<String>] = [:]
+        for name in names {
+            for word in words(name) { byStem[word, default: []].insert(name) }
+        }
+        // A word also gathers the names that have a word starting with it (taxinet under taxi).
+        for stem in byStem.keys {
+            for name in names where words(name).contains(where: { $0.hasPrefix(stem) && $0 != stem }) { byStem[stem]?.insert(name) }
+        }
+        var taken = Set<String>(), result: [String: [String]] = [:]
+        for (stem, members) in byStem.sorted(by: { ($0.value.count, $1.key) > ($1.value.count, $0.key) }) {
+            let free = members.subtracting(taken)
+            guard free.count >= 2 else { continue }
+            result[stem] = names.filter(free.contains)
+            taken.formUnion(free)
+        }
+        return result
+    }
+
+    var isWorkspacesShown = false
 
     /// The user's groups in use, by name.
     var groupNames: [String] {

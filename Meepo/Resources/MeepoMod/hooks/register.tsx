@@ -1,6 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 import type { Waiting } from '../types'
+import { contextReport } from './context'
 import { askReason, checkFailure, FILE_TOOLS, findCommand, guidedReason, importantProject, projectCheck, SHIP_COMMANDS, type Guard } from './guard'
 
 /** What waits for the person's click in this session's project (a deploy), as of Meepo's last answer. */
@@ -70,6 +71,15 @@ async function waitingBand($: any, e: any, next: any) {
       ))}
     </Box>
   )
+}
+
+/** After each turn: the window by part for Meepo's Context panel — `summary` is estimated locally, no API call. */
+async function measure($: any, e: any, next: any) {
+  const result = await next(e)
+  const usage = await $.session.usage({ breakdown: 'summary' }).catch(() => undefined)
+  const report = contextReport(usage?.context, await $.session.id())
+  if (report) await post($, '/event', report)
+  return result
 }
 
 async function forward($: any, e: any, next: any) {
@@ -173,6 +183,8 @@ export const register: Register = on => {
   on('classic.Stop', verify)
   on('classic.StopFailure', forward)
   on('classic.PreCompact', forward)
+  on('classic.InstructionsLoaded', forward) // which CLAUDE.md and rules files loaded, and why
+  on('session.measure', measure)
   on('classic.UserPromptExpansion', forward)
   on('classic.UserPromptSubmit', async ($, e, next) => {
     const reply = await post($, '/event', e)

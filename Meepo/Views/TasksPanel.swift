@@ -126,6 +126,9 @@ struct TasksPanel: View {
     @State private var isWaitingShown = false
     @State private var isLaterShown = false
     @FocusState private var isAdding: Bool
+    /// SELECT: a click ticks a task instead of opening it; the bar below moves the ticked ones all at once.
+    @State private var isSelecting = false
+    @State private var selected: Set<Int64> = []
 
     private enum Item: Identifiable {
         case project(String)
@@ -150,11 +153,12 @@ struct TasksPanel: View {
     }
 
     var body: some View {
-        let stats = DoneStats(store.tasks)
-        let board = TaskBoard(store.tasks, lingering: lingering)
+        // The workspace shown in the title bar: its tasks only (All: every task).
+        let stats = DoneStats(store.workspaceTasks)
+        let board = TaskBoard(store.workspaceTasks, lingering: lingering)
         VStack(alignment: .leading, spacing: 2) {
             tabs(inbox: board.inbox.count)
-            counters(stats)
+            if isSelecting { bulkBar } else { counters(stats) }
             switch tab {
             case .tasks: list(board)
             case .inbox: InboxList(tasks: board.inbox)
@@ -180,6 +184,38 @@ struct TasksPanel: View {
             .animation(.snappy(duration: 0.3), value: items.map(\.id))
     }
 
+    /// What the ticked tasks can do at once.
+    private var bulkBar: some View {
+        let ids = Array(selected)
+        return HStack(spacing: 6) {
+            Text("\(ids.count) selected").font(Fonts.ui(12, weight: .semibold)).foregroundStyle(Tokens.textDim)
+            Menu("Workspace") {
+                ForEach(store.workspaceNames, id: \.self) { name in
+                    Button(name) { store.moveTasks(ids, toWorkspace: name); selected = [] }
+                }
+                if !store.workspaceNames.isEmpty { Divider() }
+                Button("Their projects' workspace") { store.moveTasks(ids, toWorkspace: nil); selected = [] }
+                Button("New Workspace…") { store.isWorkspacesShown = true }
+            }
+            Menu("Project") {
+                ForEach(store.projects) { project in
+                    Button(project.name) { store.moveTasks(ids, toProject: project.id); selected = [] }
+                }
+                Divider()
+                Button("No project") { store.moveTasks(ids, toProject: nil); selected = [] }
+            }
+            Button("Later") {
+                for task in store.tasks where ids.contains(task.id ?? -1) { var t = task; t.status = .later; store.updateTask(t) }
+                selected = []
+            }
+            Spacer()
+        }
+        .menuStyle(.button)
+        .buttonStyle(PixelButtonStyle(compact: true))
+        .disabled(ids.isEmpty)
+        .padding(.vertical, 6)
+    }
+
     private func tabs(inbox: Int) -> some View {
         HStack(spacing: 4) {
             ForEach([(Tab.tasks, "Tasks"), (.inbox, "Inbox"), (.done, "Done")], id: \.0) { value, title in
@@ -202,6 +238,11 @@ struct TasksPanel: View {
                 .accessibilityAddTraits(tab == value ? .isSelected : [])
             }
             Spacer(minLength: 0)
+            if tab == .tasks {
+                Button(isSelecting ? "DONE" : "SELECT") { isSelecting.toggle(); selected = [] }
+                    .buttonStyle(PixelButtonStyle(compact: true))
+                    .help("Tick several tasks, then move them to a workspace or a project at once")
+            }
         }
         .padding(.bottom, 6)
     }
@@ -233,8 +274,20 @@ struct TasksPanel: View {
         switch item {
         case let .project(name): header(name)
         case let .task(task):
-            TaskLine(task: task, isEditing: editing == task.id, onToggle: { toggle(task) },
-                     onEdit: { editing = $0 ? task.id : nil })
+            if isSelecting, let id = task.id {
+                Button { if selected.contains(id) { selected.remove(id) } else { selected.insert(id) } } label: {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: selected.contains(id) ? "checkmark.square.fill" : "square")
+                            .foregroundStyle(selected.contains(id) ? Tokens.work : Tokens.textDim).padding(.top, 2)
+                        TaskLine(task: task, isEditing: false, onToggle: {}, onEdit: { _ in }).allowsHitTesting(false)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else {
+                TaskLine(task: task, isEditing: editing == task.id, onToggle: { toggle(task) },
+                         onEdit: { editing = $0 ? task.id : nil })
+            }
         case let .done(count): section("Done today", count, isShown: $isDoneShown)
         case let .waiting(count): section(TaskStatus.waiting.title, count, isShown: $isWaitingShown)
         case let .later(count): section(TaskStatus.later.title, count, isShown: $isLaterShown)

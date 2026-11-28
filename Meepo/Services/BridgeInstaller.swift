@@ -20,7 +20,7 @@ struct BridgeInstaller {
     static let events = [
         "SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
         "PermissionRequest", "PermissionDenied", "Notification", "Stop", "StopFailure", "PreCompact",
-        "UserPromptExpansion",
+        "UserPromptExpansion", "InstructionsLoaded",
     ]
     static let scriptName = "meepo-bridge.sh"
 

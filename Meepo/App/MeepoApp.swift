@@ -52,6 +52,7 @@ struct MeepoApp: App {
         Window("meepo", id: "main") {
             MainView()
                 .environment(store)
+                .background(FillScreenOnLaunch())
                 .onOpenURL { url in
                     store.openFromCommandLine(url)
                     NSApp.activate(ignoringOtherApps: true)
@@ -222,6 +223,7 @@ final class LiveServices {
             let server = EventServer(token: try MeepoHome.token()) { [weak self, weak store] sessionId, body in
                 guard let store else { return }
                 if let status = StatusLine(json: body) { store.applyStatusLine(status, sessionId: sessionId); return }
+                if store.applyContextReport(body, sessionId: sessionId) { return }
                 guard let payload = HookPayload(json: body) else { return }
                 let attention = store.handleHookEvent(payload, sessionId: sessionId)
                 BehaviorLog.hook(payload, sessionId: sessionId, store: store)
