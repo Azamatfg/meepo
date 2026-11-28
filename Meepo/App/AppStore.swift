@@ -43,6 +43,11 @@ final class AppStore {
             isHomeShown = false
             isTasksShown = false
             focusedUnit = nil
+            // Opened from elsewhere (a notification, Ctrl+Tab) in another workspace: show that one, or its tab is nowhere.
+            if workspace != nil, let id = selectedSessionId, let session = sessions.first(where: { $0.id == id }),
+               !workspaceProjects.contains(where: { $0.id == session.projectId }) {
+                workspace = projects.first { $0.id == session.projectId }?.workspace
+            }
             if let id = selectedSessionId, paneAnchor.map({ paneWindow(from: $0, count: shell.split).contains(id) }) != true {
                 paneAnchor = id
             }
@@ -3144,6 +3149,21 @@ final class AppStore {
         task.workspace ?? projects.first { $0.id == task.projectId }?.workspace
     }
 
+    /// History entries of the workspace shown (where claude ran, inside one of its projects); All: every entry.
+    func inWorkspace(_ entries: [Noticing.Entry]) -> [Noticing.Entry] {
+        guard workspace != nil else { return entries }
+        let paths = workspaceProjects.map(\.path)
+        return entries.filter { entry in entry.project.map { folder in paths.contains { folder == $0 || folder.hasPrefix($0 + "/") } } ?? false }
+    }
+
+    /// Sessions waiting for the user in the workspace shown, and in the others.
+    var waitingHere: (here: Int, elsewhere: Int) {
+        let ids = Set(workspaceProjects.compactMap(\.id))
+        let waiting = sessions.filter { $0.status == .waitingInput || $0.status == .waitingPermission }
+        let here = waiting.filter { ids.contains($0.projectId) }.count
+        return (here, waitingCount - here)
+    }
+
     /// The tasks of the workspace shown; All: every task.
     var workspaceTasks: [TaskItem] {
         guard let workspace else { return tasks }
@@ -3916,8 +3936,11 @@ final class AppStore {
         let ordered = orderedSessions
         let start = (ordered.firstIndex { $0.id == selectedSessionId } ?? -1) + 1
         let rotated = ordered[min(start, ordered.count)...] + ordered[..<min(start, ordered.count)]
-        if let waiting = rotated.first(where: { $0.status == .waitingInput || $0.status == .waitingPermission }) {
+        let isWaiting = { (s: Session) in s.status == .waitingInput || s.status == .waitingPermission }
+        if let waiting = rotated.first(where: isWaiting) {
             selectedSessionId = waiting.id
+        } else if let waiting = sessions.first(where: isWaiting) {
+            selectedSessionId = waiting.id // in another workspace: selecting it switches there
         } else if elsewhere.contains(where: \.needsYou) {
             isHomeShown = true // only an agent outside meepo waits: Home shows it
         }

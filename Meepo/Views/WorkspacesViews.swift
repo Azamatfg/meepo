@@ -9,8 +9,9 @@ struct WorkspaceChip: View {
             Button(store.workspace == nil ? "✓ All projects" : "All projects") { store.workspace = nil }
             if !store.workspaceNames.isEmpty { Divider() }
             ForEach(store.workspaceNames, id: \.self) { name in
-                let count = sessions(in: name)
-                Button((name == store.workspace ? "✓ " : "") + name + (count > 0 ? "  ·  \(count) session\(count == 1 ? "" : "s")" : "")) {
+                let count = sessions(in: name), waiting = waiting(in: name)
+                Button((name == store.workspace ? "✓ " : "") + name + (count > 0 ? "  ·  \(count) session\(count == 1 ? "" : "s")" : "")
+                       + (waiting > 0 ? "  ·  \(waiting) need\(waiting == 1 ? "s" : "") you" : "")) {
                     store.workspace = name
                 }
             }
@@ -31,6 +32,11 @@ struct WorkspaceChip: View {
         .buttonStyle(.plain)
         .fixedSize()
         .help("Workspace: which projects the tabs and lists show")
+    }
+
+    private func waiting(in workspace: String) -> Int {
+        let ids = Set(store.projects.filter { $0.workspace == workspace }.compactMap(\.id))
+        return store.sessions.filter { ids.contains($0.projectId) && ($0.status == .waitingInput || $0.status == .waitingPermission) }.count
     }
 
     private func sessions(in workspace: String) -> Int {

@@ -104,11 +104,12 @@ extension AppStore {
 
     /// Read off the main thread where it's files: history.jsonl, behavior.jsonl, settings, skills.
     func setupFacts(now: Date = .now) async -> SetupFacts {
-        let entries = await Self.weekOfHistory(now: now)
+        let entries = inWorkspace(await Self.weekOfHistory(now: now)) // the workspace shown, or every project
         let week = workWeek(now: now, entries: entries)
         let total = Double(max(week.reduce(0) { $0 + $1.promptsWeek }, 1))
         let mcp = Set(contextUsage.values.flatMap { $0.mcp.map(\.server) }).sorted()
-        let projectCount = projects.count, withCheck = projects.filter { !($0.checkCommand ?? "").isEmpty }.count
+        let shown = workspaceProjects
+        let projectCount = shown.count, withCheck = shown.filter { !($0.checkCommand ?? "").isEmpty }.count
         var facts = await Task.detached { () -> SetupFacts in
             let home = FileManager.default.homeDirectoryForCurrentUser
             let start = now.addingTimeInterval(-7 * 86400), dayStart = Calendar.current.startOfDay(for: now)

@@ -988,20 +988,26 @@ private struct StatusBar: View {
 
     var body: some View {
         HStack(spacing: 18) {
+            // The workspace shown; waiting elsewhere still shows, so no one is forgotten (Ctrl+Tab switches there).
+            let waiting = store.waitingHere
             if store.waitingCount > 0 {
                 Button { store.selectNextWaiting() } label: {
                     HStack(spacing: 6) {
                         SelectionRing(kind: .waiting, size: 7)
-                        Text("\(store.waitingCount) need\(store.waitingCount == 1 ? "s" : "") you").fontWeight(.bold)
+                        if waiting.here > 0 { Text("\(waiting.here) need\(waiting.here == 1 ? "s" : "") you").fontWeight(.bold) }
+                        if waiting.elsewhere > 0 {
+                            Text(waiting.here > 0 ? "+\(waiting.elsewhere) in other workspaces" : "\(waiting.elsewhere) waiting in other workspaces")
+                        }
                     }
                     .foregroundStyle(Tokens.need)
                 }
                 .buttonStyle(.plain)
-                .help("Open the next one — Ctrl+Tab")
+                .help("Open the next one — Ctrl+Tab; one in another workspace switches to it")
             } else {
                 Text("Nobody waiting")
             }
-            Text("\(TokenFormat.short(store.sessionUsage.values.reduce(0) { $0 + $1.tokensToday })) tokens today")
+            let here = Set(store.orderedSessions.compactMap(\.id))
+            Text("\(TokenFormat.short(store.sessionUsage.filter { here.contains($0.key) }.values.reduce(0) { $0 + $1.tokensToday })) tokens today")
             if let limits = store.usageLimits {
                 if let five = limits.fiveHour { LimitLabel(name: "5h", limit: five) }
                 if let seven = limits.sevenDay { LimitLabel(name: "7d", limit: seven) }

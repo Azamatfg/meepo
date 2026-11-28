@@ -161,3 +161,58 @@ final class WorkspaceTasksTests: XCTestCase {
         XCTAssertEqual(store.workspaceTasks.count, 3, "All shows every task")
     }
 }
+
+/// Everything on screen follows the workspace shown (2026-11-28: Home and the status bar didn't).
+@MainActor
+final class WorkspaceScopeTests: XCTestCase {
+    private func store() throws -> (AppStore, alva: Int64, taxi: Int64) {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        for _ in 0..<2 { try store.addProject(at: try makeTempRepo()) }
+        let (alva, taxi) = (store.projects[0].id!, store.projects[1].id!)
+        store.setWorkspace(alva, to: "alva")
+        store.setWorkspace(taxi, to: "taxi")
+        return (store, alva, taxi)
+    }
+
+    func testOpeningASessionOfAnotherWorkspaceShowsThatWorkspace() throws {
+        let (store, alva, taxi) = try store()
+        try store.createSession(projectId: alva, model: nil, prompt: nil)
+        try store.createSession(projectId: taxi, model: nil, prompt: nil)
+        let taxiSession = store.sessions.first { $0.projectId == taxi }!.id!
+        store.workspace = "alva"
+        store.selectedSessionId = taxiSession // a notification's click, Ctrl+Tab
+        XCTAssertEqual(store.workspace, "taxi", "its tab must be on screen")
+        XCTAssertEqual(store.selectedSessionId, taxiSession)
+    }
+
+    func testCtrlTabReachesTheOneWaitingInAnotherWorkspace() throws {
+        let (store, alva, taxi) = try store()
+        try store.createSession(projectId: alva, model: nil, prompt: nil)
+        try store.createSession(projectId: taxi, model: nil, prompt: nil)
+        var waiting = store.sessions.first { $0.projectId == taxi }!
+        waiting.status = .waitingInput
+        _ = store.handleHookEvent(HookPayload(event: "Notification", claudeSessionId: waiting.claudeSessionId,
+                                              notificationType: "idle_prompt"), sessionId: waiting.id!)
+        store.workspace = "alva"
+        XCTAssertEqual(store.waitingHere.here, 0)
+        XCTAssertEqual(store.waitingHere.elsewhere, 1)
+        store.selectNextWaiting()
+        XCTAssertEqual(store.selectedSessionId, waiting.id)
+        XCTAssertEqual(store.workspace, "taxi")
+    }
+
+    func testTheWeekOnHomeIsTheWorkspaces() throws {
+        let (store, alva, taxi) = try store()
+        let paths = Dictionary(uniqueKeysWithValues: store.projects.map { ($0.id!, $0.path) })
+        let entries = [Noticing.Entry(display: "a", date: .now, session: nil, project: paths[alva]),
+                       Noticing.Entry(display: "t", date: .now, session: nil, project: paths[taxi]),
+                       Noticing.Entry(display: "t2", date: .now, session: nil, project: paths[taxi])]
+        store.workspace = "taxi"
+        XCTAssertEqual(store.inWorkspace(entries).map(\.display), ["t", "t2"])
+        XCTAssertEqual(store.workWeek(entries: store.inWorkspace(entries)).map(\.project), [store.projects.first { $0.id == taxi }!.name])
+        store.workspace = nil
+        XCTAssertEqual(store.inWorkspace(entries).count, 3)
+    }
+}

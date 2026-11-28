@@ -21,9 +21,10 @@ struct WorkHome: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(t("This week", "Эта неделя")).font(Fonts.ui(36, weight: .bold))
+                    Text(t("This week", "Эта неделя") + (store.workspace.map { " · \($0)" } ?? "")).font(Fonts.ui(36, weight: .bold))
                     if let facts { Text(SetupMap.summary(facts)).font(Fonts.ui(16)).foregroundStyle(Tokens.textDim) }
-                    if let summary = review?.summary {
+                    // The review reads every project: its summary is the whole week's, shown with All.
+                    if store.workspace == nil, let summary = review?.summary {
                         Text(summary).font(Fonts.ui(15)).fixedSize(horizontal: false, vertical: true).padding(.top, 4)
                     }
                 }
@@ -34,7 +35,8 @@ struct WorkHome: View {
             .padding(36)
             .frame(maxWidth: 960, alignment: .leading)
         }
-        .task {
+        // Again whenever the title bar's workspace changes: the week is that workspace's.
+        .task(id: store.workspace) {
             facts = await store.setupFacts()
             let isStale = review.map { Date.now.timeIntervalSince($0.createdAt ?? .distantPast) > WeekReview.refreshEvery } ?? true
             if isStale, Date.now.timeIntervalSince1970 - triedAt > 86400 {
@@ -170,8 +172,8 @@ struct WorkHome: View {
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Tokens.line))
             }
-            if !(review?.tech ?? []).isEmpty { label(t("TOOLS AND PRACTICES FOR YOUR PROJECTS", "ИНСТРУМЕНТЫ И ПРАКТИКИ ДЛЯ ТВОИХ ПРОЕКТОВ")).padding(.top, 8) }
-            ForEach(review?.tech ?? [], id: \.title) { tech in
+            if !techHere.isEmpty { label(t("TOOLS AND PRACTICES FOR YOUR PROJECTS", "ИНСТРУМЕНТЫ И ПРАКТИКИ ДЛЯ ТВОИХ ПРОЕКТОВ")).padding(.top, 8) }
+            ForEach(techHere, id: \.title) { tech in
                 HStack(alignment: .top, spacing: 12) {
                     Text((facts?.isRussian == true ? ["now": "сейчас", "not yet": "рано", "drop it": "убрать"][tech.verdict] ?? tech.verdict : tech.verdict).uppercased())
                         .font(Fonts.ui(10, weight: .bold)).tracking(1)
@@ -190,6 +192,14 @@ struct WorkHome: View {
                 .padding(.vertical, 4)
             }
         }
+    }
+
+    /// The review's calls for the projects of the workspace shown (a call naming several counts if one is here).
+    private var techHere: [WeekReview.Tech] {
+        let tech = review?.tech ?? []
+        guard store.workspace != nil else { return tech }
+        let names = store.workspaceProjects.map(\.name)
+        return tech.filter { item in names.contains { item.project.localizedCaseInsensitiveContains($0) } }
     }
 
     private func label(_ text: String) -> some View {
