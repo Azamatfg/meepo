@@ -131,6 +131,8 @@ struct MeepoApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Session") { store.presentNewSession() }
                     .keyboardShortcut("n")
+                Button("New Tab") { store.newTab() }
+                    .keyboardShortcut("t")
                     .disabled(store.projects.isEmpty)
             }
             CommandGroup(replacing: .appSettings) { SettingsCommand(store: store) }

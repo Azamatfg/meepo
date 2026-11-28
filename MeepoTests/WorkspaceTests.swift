@@ -216,3 +216,26 @@ final class WorkspaceScopeTests: XCTestCase {
         XCTAssertEqual(store.inWorkspace(entries).count, 3)
     }
 }
+
+/// ⌘T, as in a browser: a new tab at once — a session in the project of the tab you're on.
+@MainActor
+final class NewTabTests: XCTestCase {
+    func testNewTabOpensASessionInTheCurrentTabsProject() throws {
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        for _ in 0..<2 { try store.addProject(at: try makeTempRepo()) }
+        let second = store.projects[1].id!
+        try store.createSession(projectId: second, model: nil, prompt: nil)
+        store.newTab()
+        XCTAssertEqual(store.sessions.filter { $0.projectId == second }.count, 2)
+        XCTAssertEqual(store.selectedSession?.projectId, second, "the new tab is the one shown")
+
+        store.isHomeShown = true
+        store.selectedSessionId = nil
+        store.setWorkspace(store.projects[0].id!, to: "w")
+        store.workspace = "w"
+        store.newTab()
+        XCTAssertEqual(store.selectedSession?.projectId, store.projects[0].id, "no tab open: the workspace's first project")
+    }
+}

@@ -3137,6 +3137,13 @@ final class AppStore {
         reloadTasks()
     }
 
+    /// ⌘T, as in a browser: a new tab at once, with no sheet — a session in the project of the tab shown, else the
+    /// first project of the workspace shown. ⌘N still opens New Session to pick.
+    func newTab() {
+        guard let projectId = selectedSession?.projectId ?? workspaceProjects.first?.id else { presentNewSession(); return }
+        do { try createSession(projectId: projectId, model: nil, prompt: nil) } catch { bridgeError = error.localizedDescription }
+    }
+
     /// A task's workspace: its own, else its project's.
     func workspace(of task: TaskItem) -> String? {
         task.workspace ?? projects.first { $0.id == task.projectId }?.workspace
