@@ -47,4 +47,5 @@ if [ -e "$APP" ]; then mv "$APP" "$APP.old"; fi
 mv "$APP.new" "$APP"
 rm -rf "$APP.old" || echo "couldn't remove $APP.old — delete it by hand"
 only_installed_registered
-open "$APP"
+# Without it: `open` hands meepo this shell's environment, and every session inside would install the old way.
+env -u MEEPO_INSTALL_NOW open "$APP"
