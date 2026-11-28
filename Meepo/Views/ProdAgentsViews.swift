@@ -17,16 +17,19 @@ struct ProdAgentsSection: View {
                 Spacer()
                 Button(t("+ ADD", "+ ДОБАВИТЬ")) { isAdding = true }.buttonStyle(PixelButtonStyle(compact: true))
                     .help(t("An agent of yours running in a container on a project's server", "Твой агент в контейнере на сервере проекта"))
+                    // Its own view: two sheets on one view and SwiftUI shows only one (2026-11-29: "+ ADD" did nothing).
+                    .sheet(isPresented: $isAdding) { AddProdAgentSheet(isRussian: isRussian) }
             }
             if store.workspaceProdAgents.isEmpty {
                 Text(t("None yet. Meepo only reads: is it up, restarts, the day's errors.",
                        "Пока нет. Meepo только читает: жив ли, рестарты, ошибки за день."))
                     .font(.caption).foregroundStyle(Tokens.textDim)
             }
-            ForEach(store.workspaceProdAgents) { agent in card(agent) }
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(store.workspaceProdAgents) { agent in card(agent) }
+            }
+            .sheet(item: $statsFor) { ProdAgentStatsSheet(agent: $0, isRussian: isRussian) { statsFor = nil } }
         }
-        .sheet(isPresented: $isAdding) { AddProdAgentSheet(isRussian: isRussian) }
-        .sheet(item: $statsFor) { ProdAgentStatsSheet(agent: $0, isRussian: isRussian) }
         // Fresh when Home opens; the 5-minute checks run in the background (MeepoApp).
         .task { await store.checkProdAgents() }
     }
@@ -59,11 +62,14 @@ struct ProdAgentsSection: View {
             } else {
                 Text(t("Checking…", "Проверяю…")).font(.caption).foregroundStyle(Tokens.textDim)
             }
+            // Each line about the day's numbers opens their form: right-click alone wasn't found (2026-11-29).
             if let id = agent.id, let stats = store.prodAgentStats[id] {
-                Text(day(stats)).font(Fonts.ui(12, weight: .semibold))
+                Button(day(stats)) { statsFor = agent }
+                    .buttonStyle(.plain).font(Fonts.ui(12, weight: .semibold))
                     .foregroundStyle(stats.unanswered > 0 || stats.failed > 0 ? Tokens.need : Tokens.text)
             } else if let id = agent.id, let problem = store.prodAgentStatsProblem[id] {
-                Text(t("Day's numbers: ", "Цифры дня: ") + problem).font(.caption).foregroundStyle(Tokens.need).lineLimit(2)
+                Button(t("Day's numbers: ", "Цифры дня: ") + problem) { statsFor = agent }
+                    .buttonStyle(.plain).font(.caption).foregroundStyle(Tokens.need).lineLimit(2).multilineTextAlignment(.leading)
             } else if agent.statsScript == nil, agent.biURL == nil {
                 Button(t("Add the day's numbers…", "Добавить цифры дня…")) { statsFor = agent }
                     .buttonStyle(.plain).font(.caption).foregroundStyle(Tokens.work)
@@ -185,6 +191,9 @@ struct ProdAgentStatsSheet: View {
     @Environment(\.dismiss) private var dismiss
     let agent: ProdAgent
     let isRussian: Bool
+    /// Closes it by clearing the card's selection — not `dismiss()`, which a sheet from a scrolled Home didn't obey
+    /// (2026-11-29: the form couldn't be closed without saving).
+    let close: () -> Void
     @State private var runner = ProdAgents.runners[0]
     @State private var script = ""
     @State private var isRunning = false
@@ -201,6 +210,7 @@ struct ProdAgentStatsSheet: View {
         .padding(22)
         .frame(width: 720)
         .paperSheet()
+        .onExitCommand(perform: close) // Esc even while a field has the keyboard
         .onAppear {
             runner = agent.statsRunner ?? ProdAgents.runners[0]
             script = agent.statsScript ?? ""
@@ -220,7 +230,7 @@ struct ProdAgentStatsSheet: View {
             result
             HStack {
                 Spacer()
-                Button(t("Close", "Закрыть")) { dismiss() }.keyboardShortcut(.cancelAction).buttonStyle(PixelButtonStyle())
+                Button(t("Cancel", "Отмена")) { close() }.keyboardShortcut(.cancelAction).buttonStyle(PixelButtonStyle())
                 Button(isRunning ? t("Checking…", "Проверяю…") : t("Save and check", "Сохранить и проверить")) {
                     guard let id = agent.id else { return }
                     isRunning = true
@@ -261,7 +271,7 @@ struct ProdAgentStatsSheet: View {
                     Text(t("Approved as written.", "Подтверждено в этом виде.")).font(.caption).foregroundStyle(Tokens.textDim)
                 }
                 Spacer()
-                Button(t("Close", "Закрыть")) { dismiss() }.keyboardShortcut(.cancelAction).buttonStyle(PixelButtonStyle())
+                Button(t("Cancel", "Отмена")) { close() }.keyboardShortcut(.cancelAction).buttonStyle(PixelButtonStyle())
                 Button(isRunning ? t("Running…", "Запускаю…") : t("Approve and run", "Подтвердить и запустить")) {
                     guard let id = agent.id else { return }
                     isRunning = true
