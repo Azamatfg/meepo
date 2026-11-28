@@ -283,6 +283,13 @@ private struct SessionTab: View {
             SelectionRing(kind: look.ring)
             Text(isGrouped ? store.groupedTabLabel(of: session) : store.tabLabel(of: session))
                 .lineLimit(1).truncationMode(.middle).frame(maxWidth: 200)
+            // Other live sessions in this folder: their edited files ask before Claude edits them here.
+            let neighbors = session.id.map(store.neighborSessions(of:)) ?? []
+            if !neighbors.isEmpty {
+                Image(systemName: "person.2.fill").font(.system(size: 9)).foregroundStyle(Tokens.work)
+                    .help("Also in this folder: \(neighbors.map(store.displayName(of:)).joined(separator: ", ")). "
+                        + "Claude is told which files they edited, and editing one of those asks first.")
+            }
             Color.clear.frame(width: 14, height: 14) // room for the ×, laid over the tab below
         }
         .overlay(alignment: .trailing) {

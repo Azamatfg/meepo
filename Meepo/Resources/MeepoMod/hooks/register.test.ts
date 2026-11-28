@@ -1,5 +1,5 @@
 import { test, expect, mock } from 'claude-code/testing'
-import { askReason, checkFailure, guidedReason, importantProject, projectCheck } from './guard'
+import { askReason, checkFailure, guidedReason, importantProject, neighborReason, projectCheck } from './guard'
 
 const HOME = '/Users/me'
 // As AppStore.writeGuard writes it from serverAndDatabaseAsks.
@@ -142,4 +142,17 @@ test('a failed check tells Claude the command and the end of its output, where t
   expect(reason).toContain('npm test')
   expect(reason).toContain('error: x is undefined')
   expect(reason).not.toContain('line 50')
+})
+
+test('a file another session in this folder edited asks first; without that answer the edit goes on', async ($, on) => {
+  const reason = 'Another session in this folder, "fix login", edited a.swift in the last 2 hours.'
+  const asked = world(on, '/work/other', JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: reason } }))
+  await $.tool.call({ tool: 'Edit', file_path: '/work/other/a.swift', old_string: 'a', new_string: 'b' })
+  expect(asked.reached).toEqual([])
+  expect(neighborReason(JSON.stringify({ hookSpecificOutput: { permissionDecision: 'ask', permissionDecisionReason: reason } }))).toBe(reason)
+})
+
+test('a reply that is not an ask lets the edit through', () => {
+  expect(neighborReason('')).toBeUndefined()
+  expect(neighborReason('[Meepo] Teammates pushed 1 new commit')).toBeUndefined()
 })

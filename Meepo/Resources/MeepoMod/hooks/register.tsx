@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 import type { Waiting } from '../types'
 import { contextReport } from './context'
-import { askReason, checkFailure, FILE_TOOLS, findCommand, guidedReason, importantProject, projectCheck, SHIP_COMMANDS, type Guard } from './guard'
+import { askReason, checkFailure, FILE_TOOLS, findCommand, guidedReason, importantProject, neighborReason, projectCheck, SHIP_COMMANDS, type Guard } from './guard'
 
 /** What waits for the person's click in this session's project (a deploy), as of Meepo's last answer. */
 const waiting = atom({ plugin: 'meepo', key: 'waiting' } as const, [])
@@ -195,13 +195,14 @@ export const register: Register = on => {
   // classic.PreToolUse carries only the tool call: Meepo gets the hook's stdin shape rebuilt.
   on('classic.PreToolUse', async ($, e, next) => {
     const { tool, tool_use_id, mcp_server, ...input } = e as any
-    await post($, '/event', { hook_event_name: 'PreToolUse', session_id: await $.session.id(), cwd: await $.session.cwd(),
+    // Meepo's answer: another session in this folder edited the file lately.
+    const reply = await post($, '/event', { hook_event_name: 'PreToolUse', session_id: await $.session.id(), cwd: await $.session.cwd(),
       tool_name: tool, tool_use_id, tool_input: input })
     if (tool !== 'Bash' && !tool.startsWith('mcp__') && !FILE_TOOLS.includes(tool)) return next(e)
     const guard = await readGuard($)
     const mcp = importantProject(guard.projects, await $.session.root())
     const reason = (mcp && askReason(tool, input, mcp, guard.commands)) || (guard.guided && guidedReason(tool, input, guard.guided))
-      || await shipReason($, tool, input, guard)
+      || await shipReason($, tool, input, guard) || neighborReason(reply)
     return reason ? { ask: reason } : next(e)
   }).catch(($, e, next) => next.called ? next(e) : { ask: 'Meepo couldn’t check this call, so it asks.' })
 }

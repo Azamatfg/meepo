@@ -35,7 +35,8 @@ final class AppStore {
 
     private(set) var projects: [Project] = []
     private(set) var sessions: [Session] = []
-    private(set) var runningSessionIds: Set<Int64> = []
+    /// Settable outside only by tests: sessions marked running without a terminal.
+    var runningSessionIds: Set<Int64> = []
     private(set) var exitedSessionIds: Set<Int64> = []
     var selectedSessionId: Int64? {
         didSet {
@@ -2335,10 +2336,62 @@ final class AppStore {
         for id in ids { inbox[id, default: []].append(note) }
     }
 
-    /// The bridge's reply to a hook: the teammates note, handed over once, on the session's next prompt.
+    /// The bridge's reply to a hook. A prompt: the teammates note, handed over once, and the neighbors when they
+    /// changed. A file edit: ask first when a neighbor edited that file lately.
     func hookReply(sessionId: Int64, body: Data) -> String? {
-        guard HookPayload(json: body)?.event == "UserPromptSubmit" else { return nil }
-        return teammateNotes.removeValue(forKey: sessionId)
+        guard let payload = HookPayload(json: body) else { return nil }
+        switch payload.event {
+        case "UserPromptSubmit":
+            let notes = [teammateNotes.removeValue(forKey: sessionId), neighborNote(sessionId)].compactMap { $0 }
+            return notes.isEmpty ? nil : notes.joined(separator: "\n\n")
+        case "PreToolUse":
+            guard let tool = payload.toolName, ["Edit", "Write", "MultiEdit"].contains(tool), let file = payload.toolTarget,
+                  let reason = Neighbors.claimReason(file: file, neighbors: neighbors(of: sessionId)) else { return nil }
+            return Neighbors.askOutput(reason)
+        default:
+            return nil
+        }
+    }
+
+    // MARK: Neighbors — parallel sessions without chaos (2026-11-29)
+
+    /// The other live sessions in this session's folder (a worktree is a folder of its own).
+    func neighborSessions(of sessionId: Int64) -> [Session] {
+        guard let me = sessions.first(where: { $0.id == sessionId }), me.sshHost == nil, let folder = workdir(of: me) else { return [] }
+        return sessions.filter { other in
+            guard let id = other.id, id != sessionId, other.sshHost == nil else { return false }
+            return runningSessionIds.contains(id) && workdir(of: other) == folder
+        }
+    }
+
+    /// The neighbors with the files each edited within `Neighbors.claimWindow`.
+    func neighbors(of sessionId: Int64) -> [Neighbors.Neighbor] {
+        let others = neighborSessions(of: sessionId)
+        guard !others.isEmpty else { return [] }
+        let ids = others.compactMap(\.id)
+        let since = Date.now.addingTimeInterval(-Neighbors.claimWindow)
+        let edits = (try? db.read { db in
+            try HookEvent.filter(ids.contains(Column("sessionId")) && Column("name") == "PostToolUse" && Column("createdAt") > since)
+                .order(Column("createdAt").desc).fetchAll(db)
+        }) ?? []
+        return others.map { other in
+            var files: [String] = []
+            for edit in edits where edit.sessionId == other.id {
+                if let file = edit.summary.flatMap(Runs.editedFile), !files.contains(file) { files.append(file) }
+            }
+            return Neighbors.Neighbor(sessionId: other.id!, name: displayName(of: other), files: files)
+        }
+    }
+
+    /// Per session: the neighbors Claude was last told about, so the same note isn't repeated every prompt.
+    @ObservationIgnored private var toldNeighbors: [Int64: [Neighbors.Neighbor]] = [:]
+
+    private func neighborNote(_ sessionId: Int64) -> String? {
+        let now = neighbors(of: sessionId)
+        guard now != toldNeighbors[sessionId] ?? [],
+              let session = sessions.first(where: { $0.id == sessionId }), let folder = workdir(of: session) else { return nil }
+        toldNeighbors[sessionId] = now
+        return Neighbors.note(now, folder: folder)
     }
 
     /// A question or notice shown over the main window (pixel style, not a system dialog).
@@ -3171,7 +3224,21 @@ final class AppStore {
     /// first project of the workspace shown. ⌘N still opens New Session to pick.
     func newTab() {
         guard let projectId = selectedSession?.projectId ?? workspaceProjects.first?.id else { presentNewSession(); return }
-        do { try createSession(projectId: projectId, model: nil, prompt: nil) } catch { bridgeError = error.localizedDescription }
+        let create = { [weak self] (worktree: String?) in
+            guard let self else { return }
+            do { try createSession(projectId: projectId, model: nil, prompt: nil, worktree: worktree) } catch { bridgeError = error.localizedDescription }
+        }
+        // Another live session in the project's folder: two in one folder edit each other's files, so a worktree is offered.
+        guard let path = projects.first(where: { $0.id == projectId })?.path, GitService.isRepository(path),
+              sessions.contains(where: { $0.projectId == projectId && $0.sshHost == nil && $0.worktreeName == nil && runningSessionIds.contains($0.id ?? -1) })
+        else { return create(nil) }
+        let taken = Set(sessions.compactMap(\.worktreeName))
+        let name = (2...).lazy.map { "tab-\($0)" }.first { !taken.contains($0) }!
+        confirmation = PixelConfirmation(
+            title: "Another session works in this folder",
+            message: "Two sessions in one folder edit each other's files. A worktree (\(name)) is a copy of the repository on its own branch.",
+            action: "Worktree", alternative: ("Same folder", { create(nil) }), isDestructive: false
+        ) { create(name) }
     }
 
     /// A task's workspace: its own, else its project's.

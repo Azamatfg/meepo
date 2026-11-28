@@ -58,3 +58,14 @@ export function checkFailure(command: string, output: string): string {
   const tail = output.trimEnd().split('\n').slice(-40).join('\n')
   return `The project's check failed: ${command}\nFix it, then finish.\n\n${tail}`
 }
+
+/** Meepo's answer to a file edit's PreToolUse, Claude Code's hook JSON: another session in this folder edited the
+ *  file lately, so it asks. undefined for any other answer. */
+export function neighborReason(reply: string): string | undefined {
+  try {
+    const output = JSON.parse(reply)?.hookSpecificOutput
+    return output?.permissionDecision === 'ask' ? output.permissionDecisionReason : undefined
+  } catch {
+    return undefined
+  }
+}
