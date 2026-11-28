@@ -129,6 +129,7 @@ struct TasksPanel: View {
     /// SELECT: a click ticks a task instead of opening it; the bar below moves the ticked ones all at once.
     @State private var isSelecting = false
     @State private var selected: Set<Int64> = []
+    @State private var isDeleteAsked = false
 
     private enum Item: Identifiable {
         case project(String)
@@ -184,13 +185,30 @@ struct TasksPanel: View {
             .animation(.snappy(duration: 0.3), value: items.map(\.id))
     }
 
-    /// What the ticked tasks can do at once.
+    /// What the ticked tasks can do at once: what a task's own right-click menu does.
     private var bulkBar: some View {
         let ids = Array(selected)
-        // Two rows: the count can't be squeezed into a column of letters beside the buttons.
+        let picked = store.tasks.filter { selected.contains($0.id ?? -1) }
+        // Rows: the count can't be squeezed into a column of letters beside the buttons, nor six buttons into one row.
         return VStack(alignment: .leading, spacing: 6) {
           Text(ids.isEmpty ? "Tick tasks below" : "\(ids.count) selected")
               .font(Fonts.ui(12, weight: .semibold)).foregroundStyle(Tokens.textDim).lineLimit(1)
+          HStack(spacing: 6) {
+            Button("Start") {
+                // One session per task; a task with no project has nowhere to start.
+                do { try store.launchMorning(picked.filter { $0.projectId != nil }.compactMap(\.id)) }
+                catch { store.bridgeError = error.localizedDescription }
+                selected = []
+            }
+            .disabled(!picked.contains { $0.projectId != nil })
+            .help("A session per task, the task as its first prompt (tasks without a project are skipped)")
+            Button("Done") {
+                for task in picked { var t = task; t.isDone = true; store.updateTask(t) }
+                selected = []
+            }
+            Button("Delete") { isDeleteAsked = true }
+            Spacer(minLength: 0)
+          }
           HStack(spacing: 6) {
             Menu("Workspace") {
                 ForEach(store.workspaceNames, id: \.self) { name in
@@ -207,18 +225,28 @@ struct TasksPanel: View {
                 Divider()
                 Button("No project") { store.moveTasks(ids, toProject: nil); selected = [] }
             }
-            Button("Later") {
-                for task in store.tasks where ids.contains(task.id ?? -1) { var t = task; t.status = .later; store.updateTask(t) }
-                selected = []
+            Menu("Move to") {
+                ForEach(TaskStatus.allCases, id: \.self) { status in
+                    Button(status.title) {
+                        for task in picked { store.setStatus(task, status) }
+                        selected = []
+                    }
+                }
             }
             Spacer(minLength: 0)
           }
-          .menuStyle(.button)
-          .buttonStyle(PixelButtonStyle(compact: true))
-          .disabled(ids.isEmpty)
-          .fixedSize(horizontal: true, vertical: false)
         }
+        .menuStyle(.button)
+        .buttonStyle(PixelButtonStyle(compact: true))
+        .disabled(ids.isEmpty)
+        .fixedSize(horizontal: true, vertical: false)
         .padding(.vertical, 6)
+        .confirmationDialog("Delete \(ids.count) \(ids.count == 1 ? "task" : "tasks")?", isPresented: $isDeleteAsked) {
+            Button("Delete", role: .destructive) {
+                for id in ids { store.deleteTask(id) }
+                selected = []
+            }
+        }
     }
 
     private func tabs(inbox: Int) -> some View {
