@@ -61,6 +61,18 @@ final class UsageScannerTests: XCTestCase {
         XCTAssertEqual(try db.read { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM usageRecord") }, 1)
     }
 
+    /// 2026-11-28: a subagent transcript left as a link to a deleted file made every scan throw from the first such
+    /// file on — no tokens counted for whole projects since 2026-10-15. A file that can't be read is skipped alone.
+    func testAFileThatCantBeReadDoesntStopTheRest() throws {
+        for name in ["a", "m", "z"] {
+            try FileManager.default.createSymbolicLink(at: root.appending(path: "-p-app/\(name)-gone.jsonl"),
+                                                       withDestinationURL: root.appending(path: "nowhere/\(name).jsonl"))
+        }
+        try append([assistant("m1", session: "s")], to: "s.jsonl")
+        try UsageScanner.scan(root: root, into: db)
+        XCTAssertEqual(try total(), 2 + 100 + 300 + 50_000)
+    }
+
     func testCostStateIsNotCounted() throws {
         try append(noise, to: "s.jsonl")
         try UsageScanner.scan(root: root, into: db)

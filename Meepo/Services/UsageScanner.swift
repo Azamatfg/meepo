@@ -25,7 +25,12 @@ enum UsageScanner {
             var offset = offsets[url.path] ?? 0
             if offset > size { offset = 0 } // file was rewritten; message ids keep this from double counting
             guard size > offset else { continue }
-            added += try scanFile(url, from: offset, into: db, launched: launched)
+            // One unreadable file (a link to a deleted subagent transcript) stopped every scan from it on (2026-11-28).
+            do {
+                added += try scanFile(url, from: offset, into: db, launched: launched)
+            } catch {
+                log.notice("\(url.lastPathComponent, privacy: .public): skipped, \(error.localizedDescription, privacy: .public)")
+            }
         }
         return added
     }
