@@ -61,8 +61,9 @@ struct WorkHome: View {
     // MARK: Next steps
 
     private func nextSteps(_ facts: SetupFacts) -> some View {
-        let steps = SetupMap.steps(facts)
-        let tips = review?.claudeCode ?? []
+        // A step already in Tasks (open or done) isn't offered again.
+        let steps = SetupMap.steps(facts).filter { !isInTasks($0.task) }
+        let tips = (review?.claudeCode ?? []).filter { !isInTasks($0.tryThis) }
         return VStack(alignment: .leading, spacing: 10) {
             label(t("NEXT STEPS", "СЛЕДУЮЩИЕ ШАГИ"))
             if let noticed = store.visibleSuggestions.first { NoticedRow(suggestion: noticed, isCard: true) }
@@ -159,7 +160,7 @@ struct WorkHome: View {
             Text(t("Claude Opus, once a week: first researches how strong engineers and researchers work and why (their own writing, with sources), then reads your busiest projects (read-only) and recommends from those principles. A second opinion, not a verdict.",
                    "Claude Opus раз в неделю: сначала изучает, как работают сильные инженеры и исследователи и почему (их собственные тексты, со ссылками), потом читает твои самые активные проекты (только чтение) и советует из этих принципов. Это второе мнение, а не приговор."))
                 .font(.caption).foregroundStyle(Tokens.textDim).fixedSize(horizontal: false, vertical: true)
-            ForEach(review?.principles ?? [], id: \.name) { principle in
+            ForEach((review?.principles ?? []).filter { !isInTasks($0.step) }, id: \.name) { principle in
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(alignment: .firstTextBaseline) {
                         Text(principle.name).font(Fonts.ui(16, weight: .semibold))
@@ -218,6 +219,12 @@ struct WorkHome: View {
         guard store.workspace != nil else { return tech }
         let names = store.workspaceProjects.map(\.name)
         return tech.filter { item in names.contains { item.project.localizedCaseInsensitiveContains($0) } }
+    }
+
+    /// A step already in Tasks, in any state: its card is gone from Home, not offered twice.
+    private func isInTasks(_ text: String) -> Bool {
+        let wanted = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return store.tasks.contains { $0.text == wanted }
     }
 
     private func label(_ text: String) -> some View {
