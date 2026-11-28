@@ -95,9 +95,7 @@ struct MainView: View {
     @ViewBuilder
     private var center: some View {
         VStack(spacing: 10) {
-            if store.isTasksShown {
-                ScrollView { TasksPanel().padding(28).frame(maxWidth: 760) }.frame(maxWidth: .infinity)
-            } else if store.isHomeShown {
+            if store.isHomeShown {
                 if store.showsEverything { HomeView() } else { WorkHome() }
             } else if store.selectedSession != nil {
                 if store.editor.files.isEmpty {
@@ -180,7 +178,7 @@ private struct TitleBar: View {
                     Button("Replay — your past tasks on other setups") { isReplayShown = true }
                     Divider()
                 }
-                Toggle("Guided mode — Claude explains, asks first", isOn: Binding(get: { store.guidedMode }, set: { store.setGuidedMode($0) }))
+                // Guided mode is in Settings (2026-11-28): one place for what changes how sessions run.
                 if store.showsEverything {
                     Button("How meepo works…") { isGuideShown = true }
                     Button("Welcome…") { isWelcomeShown = true }
@@ -208,11 +206,6 @@ private struct TitleBar: View {
                         Text("Home")
                     }
                     .help("All sessions at a glance")
-                    TabButton(isOn: store.isTasksShown, action: { store.isTasksShown = true }) {
-                        Image(systemName: "checklist").font(.system(size: 12, weight: .semibold))
-                        Text("Tasks")
-                    }
-                    .help("Your tasks, in the workspace shown")
                     ForEach(store.tabGroups) { group in
                         if group.sessions.count == 1, case .project = group.kind {
                             SessionTab(session: group.sessions[0])

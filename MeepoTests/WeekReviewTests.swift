@@ -107,9 +107,9 @@ final class WeekReviewTests: XCTestCase {
         let db = try DatabaseQueue()
         try AppDatabase.migrator.migrate(db)
         let store = makeIsolatedStore(db: db)
-        let window = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 1280, height: 900), styleMask: [.titled], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 1500, height: 900), styleMask: [.titled], backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: .darkAqua)
-        window.contentView = NSHostingView(rootView: WorkHome().frame(width: 1280, height: 900).background(Tokens.ground).environment(store))
+        window.contentView = NSHostingView(rootView: WorkHome().frame(width: 1500, height: 900).background(Tokens.ground).environment(store))
         window.makeKeyAndOrderFront(nil)
         defer { window.orderOut(nil) }
         try await Task.sleep(for: .seconds(2))

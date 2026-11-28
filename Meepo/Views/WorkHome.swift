@@ -26,14 +26,25 @@ struct WorkHome: View {
                     // The review reads every project: its summary is the whole week's, shown with All.
                     if store.workspace == nil, let summary = review?.summary {
                         Text(summary).font(Fonts.ui(15)).fixedSize(horizontal: false, vertical: true).padding(.top, 4)
+                            .frame(maxWidth: 1000, alignment: .leading) // a line longer than this is hard to read
                     }
                 }
-                if let facts { nextSteps(facts) }
-                if let facts { setup(facts) }
-                reviewSection
+                // Full width in two columns: what to act on on the left, where you stand on the right.
+                HStack(alignment: .top, spacing: 28) {
+                    VStack(alignment: .leading, spacing: 28) {
+                        if let facts { nextSteps(facts) }
+                        principlesSection
+                    }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    VStack(alignment: .leading, spacing: 28) {
+                        if let facts { setup(facts) }
+                        stackSection
+                    }
+                    .frame(width: 400, alignment: .topLeading)
+                }
             }
             .padding(36)
-            .frame(maxWidth: 960, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         // Again whenever the title bar's workspace changes: the week is that workspace's.
         .task(id: store.workspace) {
@@ -91,10 +102,10 @@ struct WorkHome: View {
     private func setup(_ facts: SetupFacts) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             label(t("YOUR CLAUDE CODE SETUP", "ТВОЙ СЕТАП CLAUDE CODE"))
-            HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 ForEach(SetupMap.levels(facts), id: \.name) { level in
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(level.name).font(Fonts.ui(15, weight: .bold))
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(level.name).font(Fonts.ui(14, weight: .bold))
                         ForEach(level.items, id: \.name) { item in
                             HStack(alignment: .top, spacing: 6) {
                                 Image(systemName: Self.symbol(item.state)).foregroundStyle(Self.color(item.state))
@@ -104,10 +115,9 @@ struct WorkHome: View {
                                 }
                             }
                         }
-                        Spacer(minLength: 0)
                     }
-                    .padding(14)
-                    .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                     .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Tokens.line))
                 }
@@ -133,7 +143,7 @@ struct WorkHome: View {
 
     // MARK: Review
 
-    private var reviewSection: some View {
+    private var principlesSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 label(t("HOW THE BEST WORK — AND YOU", "КАК РАБОТАЮТ ЛУЧШИЕ — И ТЫ"))
@@ -172,7 +182,13 @@ struct WorkHome: View {
                 .background(Tokens.surface, in: RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Tokens.line))
             }
-            if !techHere.isEmpty { label(t("TOOLS AND PRACTICES FOR YOUR PROJECTS", "ИНСТРУМЕНТЫ И ПРАКТИКИ ДЛЯ ТВОИХ ПРОЕКТОВ")).padding(.top, 8) }
+        }
+    }
+
+    /// The review's calls on tools and practices for the projects shown, beside the setup map.
+    private var stackSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if !techHere.isEmpty { label(t("TOOLS AND PRACTICES FOR YOUR PROJECTS", "ИНСТРУМЕНТЫ И ПРАКТИКИ ДЛЯ ТВОИХ ПРОЕКТОВ")) }
             ForEach(techHere, id: \.title) { tech in
                 HStack(alignment: .top, spacing: 12) {
                     Text((facts?.isRussian == true ? ["now": "сейчас", "not yet": "рано", "drop it": "убрать"][tech.verdict] ?? tech.verdict : tech.verdict).uppercased())
@@ -182,6 +198,7 @@ struct WorkHome: View {
                         .padding(.top, 3)
                     VStack(alignment: .leading, spacing: 3) {
                         Text("\(tech.project) · \(tech.title)").font(Fonts.ui(15, weight: .semibold))
+                            .fixedSize(horizontal: false, vertical: true)
                         if let principle = tech.principle, !principle.isEmpty {
                             Text("← \(principle)").font(.caption).foregroundStyle(Tokens.textDim)
                         }

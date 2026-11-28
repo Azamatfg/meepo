@@ -253,7 +253,7 @@ struct SettingsView: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    FieldRow("Relay at context") {
+                    FieldRow("Context warning at") {
                         PixelMenu(selection: "\(Int(store.relayThreshold * 100))%") {
                             ForEach([0.6, 0.7, 0.8, 0.9], id: \.self) { value in
                                 Button("\(Int(value * 100))%") { store.relayThreshold = value }
@@ -261,15 +261,16 @@ struct SettingsView: View {
                         }
                     }
                     Text("""
-                        Context is how much of the conversation Claude holds in mind. When a session's context is this \
-                        full, a RELAY button appears under its terminal. Nothing happens until you click it. Then Claude \
-                        sums up the work, a fresh session carries on from that summary, and the old one closes. Why: \
-                        longer sessions are more expensive even when cached. Claude Code's own alternative: /autocompact.
+                        Context is how much of the conversation Claude holds in mind. From this fill on, "Context NN%" in \
+                        the status bar turns orange. Click it: HAND OFF has Claude sum up the work for a fresh session that \
+                        carries on, COMPACT shortens this one. Nothing happens by itself. Why: longer sessions cost more \
+                        even when cached, and answer worse near the limit. Claude Code also compacts by itself near the end.
                         """)
                         .font(.caption)
                         .foregroundStyle(Tokens.textDim)
                         .fixedSize(horizontal: false, vertical: true)
-                    FieldRow("Updates") {
+                    // A build from source (scripts/install.sh) has no releases to follow: RESTART comes from the build.
+                    if Updater.currentVersion != nil { FieldRow("Updates") {
                         HStack(spacing: 6) {
                             Button(store.autoUpdate ? "AUTO" : "OFF") { store.autoUpdate.toggle() }
                                 .help("Download new versions in the background and install them when meepo quits")
@@ -284,7 +285,7 @@ struct SettingsView: View {
                                 .help("Same as `meepo update` in a terminal")
                         }
                         .buttonStyle(PixelButtonStyle())
-                    }
+                    } }
                     FieldRow("Model for explanations") {
                         let choices = store.modelChoices()
                         PixelMenu(selection: choices.first { $0.value == store.headlessModel }?.title ?? store.headlessModel) {
@@ -293,6 +294,11 @@ struct SettingsView: View {
                             }
                         }
                         .help("EXPLAIN, Explain for users, DRAW, skill drafts and release notes. Haiku is about 5× cheaper than Opus for the same explanation.")
+                    }
+                    FieldRow("Guided mode") {
+                        Button(store.guidedMode ? "ON" : "OFF") { store.setGuidedMode(!store.guidedMode) }
+                            .buttonStyle(PixelButtonStyle())
+                            .help("Claude explains as it works and asks before what's hard to undo (git push, rm -rf, .env)")
                     }
                     FieldRow("Everything else") {
                         Button(store.showsEverything ? "SHOWN" : "HIDDEN") { store.showsEverything.toggle() }
@@ -320,13 +326,13 @@ struct SettingsView: View {
                         .buttonStyle(PixelButtonStyle())
                         .help("Counts which panels and buttons you use, on this Mac only — no text, nothing sent. Automations then suggests hiding what you never touch.")
                     }
-                    FieldRow("Server shells open") {
+                    if store.showsEverything { FieldRow("Server shells open") {
                         PixelMenu(selection: store.shellsBeside ? "BESIDE THE SESSION" : "IN A NEW TAB") {
                             Button("Beside the session — two terminals side by side") { store.shellsBeside = true }
                             Button("In a new tab") { store.shellsBeside = false }
                         }
                         .help("Where Servers → Open shell and + → Server Shell put ssh")
-                    }
+                    } }
                     FieldRow("Screenshot to a session") {
                         PixelMenu(selection: store.screenshotHotKey.isEmpty ? "OFF" : store.screenshotHotKey) {
                             ForEach(GlobalHotKey.combos) { combo in Button(combo.title) { store.screenshotHotKey = combo.title } }
@@ -334,7 +340,8 @@ struct SettingsView: View {
                         }
                         .help("Global hotkey: select an area, pick a session with ↑↓, Enter pastes the image into it")
                     }
-                    StagesEditor()
+                    // The stage bar under the terminal is in Everything else; so is its editor.
+                    if store.showsEverything { StagesEditor() }
                 }
             }
         }

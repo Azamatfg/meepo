@@ -41,7 +41,6 @@ final class AppStore {
         didSet {
             reloadEvents()
             isHomeShown = false
-            isTasksShown = false
             focusedUnit = nil
             // Opened from elsewhere (a notification, Ctrl+Tab) in another workspace: show that one, or its tab is nowhere.
             if workspace != nil, let id = selectedSessionId, let session = sessions.first(where: { $0.id == id }),
@@ -1639,13 +1638,7 @@ final class AppStore {
     }
 
     /// The Home tab (Deck/Timeline) instead of a session; picking a session leaves it.
-    var isHomeShown = false {
-        didSet { if isHomeShown { isTasksShown = false } }
-    }
-    /// The Tasks tab in the center: in Solo no panel is around to hold them (2026-11-28).
-    var isTasksShown = false {
-        didSet { if isTasksShown { isHomeShown = false } }
-    }
+    var isHomeShown = false
 
     func applyPreset(_ preset: ShellLayout.Preset) {
         shellPreset = preset
