@@ -187,8 +187,11 @@ struct TasksPanel: View {
     /// What the ticked tasks can do at once.
     private var bulkBar: some View {
         let ids = Array(selected)
-        return HStack(spacing: 6) {
-            Text("\(ids.count) selected").font(Fonts.ui(12, weight: .semibold)).foregroundStyle(Tokens.textDim)
+        // Two rows: the count can't be squeezed into a column of letters beside the buttons.
+        return VStack(alignment: .leading, spacing: 6) {
+          Text(ids.isEmpty ? "Tick tasks below" : "\(ids.count) selected")
+              .font(Fonts.ui(12, weight: .semibold)).foregroundStyle(Tokens.textDim).lineLimit(1)
+          HStack(spacing: 6) {
             Menu("Workspace") {
                 ForEach(store.workspaceNames, id: \.self) { name in
                     Button(name) { store.moveTasks(ids, toWorkspace: name); selected = [] }
@@ -208,11 +211,13 @@ struct TasksPanel: View {
                 for task in store.tasks where ids.contains(task.id ?? -1) { var t = task; t.status = .later; store.updateTask(t) }
                 selected = []
             }
-            Spacer()
+            Spacer(minLength: 0)
+          }
+          .menuStyle(.button)
+          .buttonStyle(PixelButtonStyle(compact: true))
+          .disabled(ids.isEmpty)
+          .fixedSize(horizontal: true, vertical: false)
         }
-        .menuStyle(.button)
-        .buttonStyle(PixelButtonStyle(compact: true))
-        .disabled(ids.isEmpty)
         .padding(.vertical, 6)
     }
 
@@ -239,9 +244,16 @@ struct TasksPanel: View {
             }
             Spacer(minLength: 0)
             if tab == .tasks {
-                Button(isSelecting ? "DONE" : "SELECT") { isSelecting.toggle(); selected = [] }
-                    .buttonStyle(PixelButtonStyle(compact: true))
-                    .help("Tick several tasks, then move them to a workspace or a project at once")
+                // An icon, not a word: the panel is narrow, and a word squeezed the tabs to "TAS…".
+                Button { isSelecting.toggle(); selected = [] } label: {
+                    Image(systemName: isSelecting ? "checkmark.circle.fill" : "checkmark.circle")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(isSelecting ? Tokens.work : Tokens.textDim)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(isSelecting ? "Done selecting" : "Select several tasks, then move them to a workspace or a project at once")
             }
         }
         .padding(.bottom, 6)
@@ -256,7 +268,7 @@ struct TasksPanel: View {
             counter(stats.week, "7 days", help: "Tasks closed today and the 6 days before — click to see them") {
                 ClosedList(title: "Closed in 7 days", closed: stats.closed(since: stats.days.first!.date, until: stats.end), showsDay: true)
             }
-            counter(stats.streak, stats.streak == 1 ? "day streak" : "days streak",
+            counter(stats.streak, "streak",
                     help: "Days in a row with at least one task closed — click to see them") {
                 ClosedList(title: "The streak, \(stats.streak) \(stats.streak == 1 ? "day" : "days")",
                            closed: stats.streakStart.map { stats.closed(since: $0, until: stats.end) } ?? [], showsDay: true)

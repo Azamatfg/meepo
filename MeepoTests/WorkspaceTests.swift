@@ -261,3 +261,29 @@ final class WholeWorkspaceTaskTests: XCTestCase {
         XCTAssertEqual(Set(store.workspaceTasks.map(\.text)), ["taxi deploy", "alva deploy"])
     }
 }
+
+/// The Tasks panel at the rail's width, as a picture (MEEPO_SNAPSHOT_DIR, as ShellSnapshotTests).
+@MainActor
+final class NarrowTasksPictureTests: XCTestCase {
+    func testNarrowTasksPanelPicture() async throws {
+        let path = ProcessInfo.processInfo.environment["MEEPO_SNAPSHOT_DIR"]
+        try XCTSkipIf(path == nil, "pictures only on request")
+        let db = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(db)
+        let store = makeIsolatedStore(db: db)
+        for text in ["ALVA - 08.12 убрать JWT_OLD_SIGNING_KEY", "career - запустить поиск работы", "smart bridge taxi kolesa"] {
+            store.addTask(text, projectId: nil)
+        }
+        let window = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 272, height: 520), styleMask: [.titled], backing: .buffered, defer: false)
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = NSHostingView(rootView: TasksPanel().padding(10).frame(width: 272, height: 520, alignment: .top)
+            .background(Tokens.surface).environment(store))
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+        try await Task.sleep(for: .seconds(1))
+        let view = try XCTUnwrap(window.contentView)
+        let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: rep)
+        try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path!).appending(path: "tasks-narrow.png"))
+    }
+}
