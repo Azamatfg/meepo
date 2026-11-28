@@ -504,8 +504,9 @@ private struct Rail: View {
                     store.editShell { $0.toggle(panel) }
                 }
             }
-            Rectangle().fill(Tokens.line).frame(width: 24, height: 1).padding(.vertical, 6)
-            ForEach(ShellLayout.splits, id: \.self) { split in
+            // How many terminals side by side: in Everything else (2026-11-28: the user works one window at a time).
+            if store.showsEverything { Rectangle().fill(Tokens.line).frame(width: 24, height: 1).padding(.vertical, 6) }
+            ForEach(store.showsEverything ? ShellLayout.splits : [], id: \.self) { split in
                 RailButton(symbol: split == 1 ? "rectangle" : split == 2 ? "rectangle.split.2x1" : "square.grid.2x2",
                            isOn: store.shell.split == split,
                            name: split == 1 ? "1 terminal" : split == 2 ? "2 terminals" : "4 terminals",

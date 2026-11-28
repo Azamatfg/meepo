@@ -297,7 +297,7 @@ struct SettingsView: View {
                     FieldRow("Everything else") {
                         Button(store.showsEverything ? "SHOWN" : "HIDDEN") { store.showsEverything.toggle() }
                             .buttonStyle(PixelButtonStyle())
-                            .help("Source Control, CI, Events, Needs you, What changed, the stage bar under the terminal, layouts and the menu's extras. Hidden: CI isn't watched either; your layout stays as you arranged it")
+                            .help("Source Control, CI, Events, Needs you, What changed, the stage bar under the terminal, layouts, 1/2/4 terminals and the menu's extras. Hidden: CI isn't watched either; your layout stays as you arranged it")
                     }
                     FieldRow("Remote Control for new sessions") {
                         Button(store.remoteControlForNewSessions ? "ON" : "OFF") { store.remoteControlForNewSessions.toggle() }
